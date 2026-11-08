@@ -92,7 +92,7 @@ class ObservationAugmenter:
             profile_variation_included=False)
         self.sha256 = hashlib.sha256(json.dumps(self.metadata, sort_keys=True).encode()).hexdigest()
 
-    def observations(self, q, native_total, native_background, *, clean_identity):
+    def _context(self, q, native_total, native_background, clean_identity):
         q = np.asarray(q, float); total = np.asarray(native_total, float)
         background = np.asarray(native_background, float)
         if background.shape != q.shape or total.shape != q.shape or not np.isfinite(background).all():
@@ -100,28 +100,48 @@ class ObservationAugmenter:
         q, major = _signal(q, total-background)
         if not _checksum(clean_identity):
             raise ValueError('Simulated siblings require their clean-pattern identity')
+        return q, major
+
+    def observation(self, q, native_total, native_background, *, clean_identity, variant):
+        """Replay one declared sibling without drawing or storing its neighbors.
+
+        The same draw implementation serves sequential cohort assembly and
+        bounded training reads. Variant order never changes a sibling's seed,
+        arrays, or provenance. This is synthetic observation generation, not
+        a replacement native diffraction calculation.
+        """
+        if type(variant) is not int or not 0 <= variant < self.controls.variants:
+            raise ValueError('Select an existing declared observation variant')
+        q, major = self._context(q, native_total, native_background, clean_identity)
+        return self._draw(q, major, clean_identity, variant)
+
+    def observations(self, q, native_total, native_background, *, clean_identity):
+        q, major = self._context(q, native_total, native_background, clean_identity)
         for index in range(self.controls.variants):
-            seed = int.from_bytes(hashlib.sha256(
-                f'{self.sha256}:{clean_identity}:{index}'.encode()).digest()[:8], 'little')
-            rng = np.random.default_rng(seed); c = self.controls
-            count = float(np.exp(rng.uniform(*np.log(c.peak_counts))))
-            fraction = float(rng.uniform(*c.impurity_fraction))
-            signal = major.copy(); minor_source = None
-            if fraction > 0:
-                minor_q, minor, minor_source = self.impurities[int(rng.integers(len(self.impurities)))]
-                if not np.array_equal(minor_q, q):
-                    raise ValueError('Native impurity and main-phase templates need the exact same Q grid')
-                signal += minor*(_area(q, major)/_area(q, minor))*fraction/(1-fraction)
-            peak = float(signal.max()); u = 2*(q-q[0])/(q[-1]-q[0])-1
-            level = float(rng.uniform(*c.background_fraction))
-            slope = float(rng.uniform(-.2, .2))
-            true_background = peak*level*(1.+slope*u+.25*u*u)
-            error = float(rng.uniform(*c.background_error))*float(rng.choice([-1, 1]))
-            estimated = true_background+peak*level*error*(1.-.5*u*u)
-            scale = count/peak; expectation = (signal+true_background)*scale
-            observed = rng.poisson(expectation).astype(np.float64)/scale
-            sigma = np.sqrt(expectation)/scale
-            yield dict(intensity=observed, background=estimated, sigma=sigma,
-                provenance=dict(variant=index, seed=seed, effective_peak_counts=count,
-                    background_fraction=level, background_slope=slope, background_error=error,
-                    impurity_fraction=fraction, impurity_source_sha256=minor_source))
+            yield self._draw(q, major, clean_identity, index)
+
+    def _draw(self, q, major, clean_identity, index):
+        seed = int.from_bytes(hashlib.sha256(
+            f'{self.sha256}:{clean_identity}:{index}'.encode()).digest()[:8], 'little')
+        rng = np.random.default_rng(seed); c = self.controls
+        count = float(np.exp(rng.uniform(*np.log(c.peak_counts))))
+        fraction = float(rng.uniform(*c.impurity_fraction))
+        signal = major.copy(); minor_source = None
+        if fraction > 0:
+            minor_q, minor, minor_source = self.impurities[int(rng.integers(len(self.impurities)))]
+            if not np.array_equal(minor_q, q):
+                raise ValueError('Native impurity and main-phase templates need the exact same Q grid')
+            signal += minor*(_area(q, major)/_area(q, minor))*fraction/(1-fraction)
+        peak = float(signal.max()); u = 2*(q-q[0])/(q[-1]-q[0])-1
+        level = float(rng.uniform(*c.background_fraction))
+        slope = float(rng.uniform(-.2, .2))
+        true_background = peak*level*(1.+slope*u+.25*u*u)
+        error = float(rng.uniform(*c.background_error))*float(rng.choice([-1, 1]))
+        estimated = true_background+peak*level*error*(1.-.5*u*u)
+        scale = count/peak; expectation = (signal+true_background)*scale
+        observed = rng.poisson(expectation).astype(np.float64)/scale
+        sigma = np.sqrt(expectation)/scale
+        return dict(intensity=observed, background=estimated, sigma=sigma,
+            provenance=dict(variant=index, seed=seed, effective_peak_counts=count,
+                background_fraction=level, background_slope=slope, background_error=error,
+                impurity_fraction=fraction, impurity_source_sha256=minor_source))

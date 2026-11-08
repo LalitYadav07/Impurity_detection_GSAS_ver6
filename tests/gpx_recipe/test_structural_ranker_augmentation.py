@@ -1,5 +1,7 @@
 import numpy as np
 import pytest
+import hashlib
+import json
 
 from gpx_recipe.preparation.structural_augmentation import Controls, ObservationAugmenter
 from gpx_recipe.preparation.structural_cohort import assemble, read_block
@@ -41,6 +43,35 @@ def test_poisson_draws_recover_declared_mean_and_variance():
     z = (draw['intensity']-draw['background']-y)/draw['sigma']
     assert abs(z.mean()) < .03
     assert abs(z.var()-1.) < .04
+
+
+def test_individual_siblings_retain_pre_replay_numeric_bytes_and_provenance():
+    # Captured from eb86a04 before the single-sibling API was introduced.
+    expected = [
+        '84e53a5ea275d4883c0055bcc2a99c25e32c9862831b3d44f291e2531620421d',
+        'da4b1c4fba24bb94bba2ea70d7626eb118dd7bbf7c4ed5eca42d0583f9d8eca4',
+        'd6bee642f0af441d46bb3c6d234dd5b2b9468852e981c4cfd6b6bdceeb3cc35f',
+    ]
+    q, y = signal(); background = np.full(len(q), 100.)
+    augmenter = ObservationAugmenter(Controls(), instrument_sha256='b'*64)
+    sequential = list(augmenter.observations(q, y+background, background, clean_identity='a'*64))
+    for index in (2, 0, 1, 2):
+        row = augmenter.observation(q, y+background, background,
+                                    clean_identity='a'*64, variant=index)
+        digest = hashlib.sha256()
+        for key in ('intensity', 'background', 'sigma'):
+            np.testing.assert_array_equal(row[key], sequential[index][key])
+            digest.update(row[key].astype('<f8').tobytes())
+        digest.update(json.dumps(row['provenance'], sort_keys=True).encode())
+        assert digest.hexdigest() == expected[index]
+
+
+@pytest.mark.parametrize('variant', [-1, 3, True, 1., '1', None])
+def test_single_observation_cannot_invent_an_undeclared_variant(variant):
+    q, y = signal()
+    with pytest.raises(ValueError, match='existing declared'):
+        ObservationAugmenter(Controls(), instrument_sha256='b'*64).observation(
+            q, y, np.zeros_like(y), clean_identity='a'*64, variant=variant)
 
 
 def test_native_impurity_fraction_uses_integrated_intensity_and_exact_grid():

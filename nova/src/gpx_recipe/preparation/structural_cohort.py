@@ -15,7 +15,7 @@ import numpy as np
 from ..live.array_limits import validate_npz_bytes
 from ..symmetry.contracts import validate_candidate
 from .tof_kernel_arrays import read_bounded
-from .structural_features import pattern_features, with_parent_reference, three_curve_features
+from .structural_features import pattern_features, with_parent_reference, three_curve_features, ThreeCurveProjector
 from .structural_paired_blocks import PairedBlock
 from .structural_sampling import partition_trajectories
 from .structural_training_data import MAX_ROWS
@@ -207,11 +207,12 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
             from .structural_domain import parent_reference_norms
             metric_norms=parent_reference_norms(a['parent_a'])
         else:metric_norms=a['relative_metric_norm']
+        projector = ThreeCurveProjector(a['q'], edges) if paired else None
         for index, curve in enumerate(a['theory_intensity']):
             group = d['groups'][index]; parents.setdefault(group, group)
             def feature_for(values,background):
                 if paired:
-                    return three_curve_features(a['q'],values,a['parent_intensity'][index],edges,
+                    return projector.features(values,a['parent_intensity'][index],
                         background=background,reference_background=a['parent_background'][index])['features']
                 return with_parent_reference(pattern_features(a['q'],values,edges,background=background),reference)
             feature = feature_for(curve,a['background'])
