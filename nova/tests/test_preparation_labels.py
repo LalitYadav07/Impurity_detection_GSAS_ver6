@@ -100,6 +100,22 @@ def test_completed_training_shows_clean_splits_without_calling_simulated_rows_in
     with pytest.raises(ValueError):training_description(library,entry)
 
 
+def test_completed_training_exposes_thin_family_coverage_alongside_total_pairs(tmp_path):
+    from gpx_recipe.preparation.structural_training_counts import describe
+    dataset=describe(['a','a','a','b','c'],[0,0,0,1,2],[True,True,False,True,True],
+        generated_pairs=4,simulated_observations=1,classes=[6,8],
+        compatible_labels=[[True,True],[True,False],[False,True],[True,True],[True,True]])
+    name='entries/train/entry.json';path=tmp_path/name;path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(dict(schema='radar-experiment-preparation-entry/v1',
+        kind='structural-training',settings={},grid={},detail=dict(dataset=dataset))))
+    library=SimpleNamespace(root=tmp_path,verify_assets=lambda names:{name:path})
+    entry=dict(state='prepared',model=dict(kind='structural-training',settings={},grid={}),files=[dict(path=name)])
+    text=training_description(library,entry)
+    assert '4 unique clean pairs' in text
+    assert '2 symmetry families; least-covered SG 8: 1 clean training pair across 1 trajectory' in text
+    assert 'independent experiments' not in text
+
+
 def test_scope_labels_verify_the_captured_metadata_and_only_include_selected_models(tmp_path):
     path=tmp_path/'scope.json';document=dict(schema='radar-preparation-declared-scope/v1',searches=[
         dict(kind='structural',k=['0','0','0'],selected_candidates=['chosen'],coverage=dict(candidates=[

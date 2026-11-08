@@ -147,3 +147,21 @@ def test_optional_dataset_counts_must_match_the_published_model_totals(tmp_path,
     d[changed]=[2,1,1] if changed=='partition_rows' else 4
     path.write_text(json.dumps(d))
     with pytest.raises(ValueError,match='training-count receipt'):Ranker(tmp_path/'model')
+
+
+@pytest.mark.parametrize('changed',[None,'class','membership','missing','bool'])
+def test_optional_family_counts_are_bound_to_exact_native_class_memberships(tmp_path,changed):
+    from gpx_recipe.preparation.structural_training_counts import describe
+    _,_,_,_,_,d=artifact(tmp_path/'model')
+    dataset=describe(['a','b','c'],[0,1,2],[True]*3,generated_pairs=3,
+        simulated_observations=0,classes=[12,166],compatible_labels=[[True,True]]*3)
+    d.update(dataset=dataset,examples=3,original_examples=3,independent_groups=3,
+        partition_rows=[1,1,1],counts={p:[1,1] for p in ('train','validation','test')})
+    if changed=='class':dataset['family_coverage']['classes']=[12,167]
+    elif changed=='membership':d['counts']['train']=[1,0]
+    elif changed=='missing':del d['counts']
+    elif changed=='bool':d['counts']['train']=[True,1]
+    path=tmp_path/'model/model.json';path.write_text(json.dumps(d))
+    if changed is None:assert Ranker(tmp_path/'model').metadata['dataset']==dataset
+    else:
+        with pytest.raises(ValueError):Ranker(tmp_path/'model')

@@ -44,6 +44,15 @@ class Ranker:
                     or counts['trajectory_groups']!=d.get('independent_groups')
                     or [counts['partitions'][p]['rows'] for p in ('train','validation','test')]!=d.get('partition_rows')):
                 raise ValueError('Attention training-count receipt differs from its model')
+            if 'family_coverage' in counts:
+                coverage=counts['family_coverage'];model_counts=d.get('counts')
+                if (coverage['classes']!=classes or not isinstance(model_counts,dict)
+                        or set(model_counts)!={'train','validation','test'} or any(
+                        not isinstance(v,list) or len(v)!=len(classes)
+                        or any(type(n)is not int or n<0 for n in v) for v in model_counts.values()) or any(
+                        [coverage['partitions'][p][str(c)]['rows'] for c in classes]!=model_counts.get(p)
+                        for p in ('train','validation','test'))):
+                    raise ValueError('Attention family coverage differs from its native class counts')
         candidates=d.get('candidates');groups=d.get('candidate_groups')
         if (not isinstance(candidates,list) or not 1<=len(candidates)<=5000
                 or not isinstance(groups,dict)

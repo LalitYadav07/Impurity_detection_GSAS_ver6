@@ -31,6 +31,8 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
     assert progress['selected_epoch']==result['selected_epoch']
     dataset=result['dataset']
     assert progress['dataset']==dataset
+    coverage=dataset['family_coverage']
+    assert coverage['classes']==cohort['classes'].tolist()
     assert dataset['generated_pairs']==cohort['original_examples']
     clean=np.array([any(p.get('kind')=='clean_native' for p in values) for values in cohort['example_simulations']])
     assert dataset['unique_clean_pairs']==int(clean.sum())
@@ -38,6 +40,13 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
         part=dataset['partitions'][name]
         assert part['rows']==int(np.count_nonzero(cohort['split']==code))
         assert part['clean_pairs']==int(np.count_nonzero((cohort['split']==code)&clean))
+        for column,group in enumerate(cohort['classes']):
+            selected=(cohort['split']==code)&cohort['compatible_labels'][:,column]
+            cell=coverage['partitions'][name][str(group)]
+            assert cell['rows']==int(selected.sum())
+            assert cell['clean_pairs']==int(np.count_nonzero(selected&clean))
+            assert cell['trajectory_groups']==len({g for g,keep in zip(cohort['groups'],selected) if keep})
+            assert cell['clean_trajectory_groups']==len({g for g,keep in zip(cohort['groups'],selected&clean) if keep})
     assert all(cohort['split'][i]==0 for i in result['curriculum']['clean_training_representatives'])
     assert result['curriculum']['clean_replay']['maximum_rows_per_update']==16
     assert result['curriculum']['clean_replay']['additional_independent_pairs']==0

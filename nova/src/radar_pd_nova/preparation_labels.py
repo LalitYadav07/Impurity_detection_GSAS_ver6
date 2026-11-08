@@ -78,10 +78,19 @@ def training_description(library,entry):
     from gpx_recipe.preparation.structural_training_counts import validate
     counts=validate(detail['dataset']);parts=counts['partitions']
     split=' / '.join(f"{parts[name]['clean_pairs']:,}" for name in ('train','validation','test'))
-    return (f"{counts['unique_clean_pairs']:,} unique clean pairs · "
+    text=(f"{counts['unique_clean_pairs']:,} unique clean pairs · "
         f"train / validation / test: {split} · "
         f"{counts['unique_simulated_only_rows']:,} additional simulated rows · "
         f"{counts['trajectory_groups']:,} separate trajectory groups")
+    if 'family_coverage' in counts:
+        coverage=counts['family_coverage'];training=coverage['partitions']['train']
+        group=min(coverage['classes'],key=lambda c:(training[str(c)]['clean_pairs'],
+            training[str(c)]['clean_trajectory_groups'],c))
+        cell=training[str(group)];pairs=cell['clean_pairs'];trajectories=cell['clean_trajectory_groups']
+        text+=(f" · {len(coverage['classes'])} symmetry families; least-covered SG {group}: "
+            f"{pairs:,} clean training {'pair' if pairs==1 else 'pairs'} across "
+            f"{trajectories:,} {'trajectory' if trajectories==1 else 'trajectories'}")
+    return text
 
 
 def entry_label(model, labels, *, dimensions=None):

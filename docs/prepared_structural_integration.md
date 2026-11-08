@@ -1417,6 +1417,17 @@ native training truth.
 
 ## Explicit training-set counts
 
+New three-curve model and progress receipts also report clean pairs, simulated
+rows and physical trajectory coverage for each native symmetry family in each
+partition. A pattern with compatible labels for several families contributes
+to each family's descriptive count; those counts must not be summed as new
+independent examples. The existing preparation table shows the least-covered
+training family alongside the total, including its clean trajectory count.
+Model readers check these memberships against the original per-class totals.
+Earlier saved receipts without family coverage remain readable and are not
+assigned invented clean-family counts. These are coverage diagnostics, not
+accuracy estimates or permission to discard candidate structures.
+
 Three-curve model metadata and completed preparation entries separately record
 generated native pairs, deduplicated clean pairs, generated simulated
 observations and distinct simulated-only feature rows. Each train, validation

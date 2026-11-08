@@ -88,7 +88,8 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
     rows,targets,classes,split,clean,routes=_inputs(cohort)
     dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
         generated_pairs=cohort['original_examples'],
-        simulated_observations=cohort.get('augmented_examples',0))
+        simulated_observations=cohort.get('augmented_examples',0),
+        compatible_labels=(row.tolist() for row in targets),classes=classes.tolist())
     train_rows,validation_rows,test_rows=(np.flatnonzero(split==code) for code in range(3))
     clean_rows=train_rows[clean[train_rows]]
     representatives=_representatives(rows,clean_rows,targets,classes)
