@@ -1852,3 +1852,16 @@ device and skipped those checks; that skipped run is not counted as hardware
 verification. Numerical controls do not establish classifier accuracy. Complete
 corpus retraining, independently grouped adaptive-set calibration, mode evidence
 and deployed NDIP handoffs remain open.
+
+The exact committed v3 package also passed 109 Linux worker tests with no
+failures, errors or skips, plus the three actual Galaxy wrapper entry-point
+checks (overlapping suites, 111.761 seconds total). No NDIP image pin changed.
+
+Named-mode rays in the completed corpus preserve their native labels and
+signed-ray identities. The packed mixed-mode points retain physical coordinates
+but do not yet transport the complete physical-to-native amplitude map. Those
+mixed points must not acquire guessed per-mode absence labels. Recover that
+map through the same native preparation and occupied-site normalization used
+by `FullModeSlice`, bind it to the exact child/embedding and runtime, and verify
+the saved point interpretation before training a mode-family output. This is
+separate from the already verified three-curve feature and partition contracts.
