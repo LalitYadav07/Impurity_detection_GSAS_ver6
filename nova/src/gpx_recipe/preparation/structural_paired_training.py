@@ -21,6 +21,7 @@ from .structural_training_data import feature_rows,batches,channel_statistics
 from .structural_training_counts import describe as describe_counts
 from . import structural_training_checkpoint as checkpoint
 from .structural_readout_health import training_health
+from .structural_training_curriculum import replay_batches,REPLAY_ROWS
 from .tof_kernel_arrays import checksum
 
 
@@ -157,26 +158,37 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                 order=np.concatenate([np.concatenate([rng.choice(bucket,4,replace=True) for bucket in buckets])
                     for _ in range(int(np.ceil(len(pool)/(4*len(classes)))))])
                 batch_size=min(64,4*len(classes))
-                for chosen,values in batches(rows,order,size=batch_size):update(chosen,values)
+                for chosen,values in replay_batches(rows,order,representatives,split=split,size=batch_size):
+                    update(chosen,values)
                 if epoch in (clean_epochs,epochs-1):
                     # Make checkpoints eligible after the first noisy epoch,
                     # rather than discovering unseen rows only at the very end
                     # and forcing validation to choose the final checkpoint.
                     missing=train_rows[~visited[train_rows]]
-                    for chosen,values in batches(rows,rng.permutation(missing),size=64):update(chosen,values)
+                    for chosen,values in replay_batches(rows,rng.permutation(missing),representatives,split=split):
+                        update(chosen,values)
                 health=require_readout()
-                model.eval();metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes)
+                model.eval()
+                # Retention is a small training diagnostic. Keep full per-class
+                # detail for independent validation, without doubling the
+                # portable history size for a 230-family catalog.
+                strong_recall={key:value for key,value in
+                    evaluate(model,rows,targets,representatives,mean,scale,classes).items()
+                    if key!='per_class'}
+                strong_recall['representatives']=len(representatives)
+                metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes)
                 eligible=epoch>=clean_epochs and visited[train_rows].all()
                 key=(-metrics['macro_top5'],-metrics['top5'],metrics['loss'])
                 if eligible and (best_key is None or key<best_key):
                     best_key=key;selected_epoch=epoch+1;best=copy.deepcopy(model.state_dict())
                 history.append(dict(epoch=epoch+1,validation=metrics,checkpoint_eligible=bool(eligible),
-                    training_rows_seen=int(visited[train_rows].sum()),readout_health=health))
+                    training_rows_seen=int(visited[train_rows].sum()),readout_health=health,
+                    strong_training_recall=strong_recall))
                 scheduler.step()
                 save_checkpoint(warmup_steps,epoch+1)
                 progress('training',epoch=epoch+1,epochs=epochs,
                     selected_epoch=selected_epoch,validation=metrics,training_rows_seen=int(visited[train_rows].sum()),
-                    readout_health=health)
+                    readout_health=health,strong_training_recall=strong_recall)
             if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
             model.load_state_dict(best);model.eval()
             health=require_readout()
@@ -206,7 +218,10 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
             readout_health=health,
             curriculum=dict(warmup_steps=warmup_steps,clean_epochs=clean_epochs,gradient_norm_limit=1.,
                 initialization='shared-convolution-and-readout/independent-attention-parameters/v1',
-                sampling='four draws per compatible family; bounded balanced minibatches; first-noisy-epoch coverage pass',
+                sampling='four draws per compatible family; bounded clean replay; first-noisy-epoch coverage pass',
+                clean_replay=dict(maximum_rows_per_update=REPLAY_ROWS,
+                    selection='strong training-only representatives; cyclic family coverage per pass',
+                    additional_independent_pairs=0),
                 training_rows_seen=int(visited[train_rows].sum()),clean_training_representatives=representatives.tolist()),
             feature_storage=rows.storage,support_training_pool_rows=support['training_pool_rows'],
             support_method=support['method'],support_validation_rows=support['validation_rows'],support_coverage_qualified=False,

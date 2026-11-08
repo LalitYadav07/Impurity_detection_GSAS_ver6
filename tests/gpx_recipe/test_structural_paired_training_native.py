@@ -39,6 +39,11 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
         assert part['rows']==int(np.count_nonzero(cohort['split']==code))
         assert part['clean_pairs']==int(np.count_nonzero((cohort['split']==code)&clean))
     assert all(cohort['split'][i]==0 for i in result['curriculum']['clean_training_representatives'])
+    assert result['curriculum']['clean_replay']['maximum_rows_per_update']==16
+    assert result['curriculum']['clean_replay']['additional_independent_pairs']==0
+    retention=result['history'][-1]['strong_training_recall']
+    assert retention['representatives']==len(cohort['classes']) and 0<=retention['top1']<=retention['top5']<=1
+    assert 'per_class' not in retention
     for key in ('test','prior_only_test'):
         metric=result[key]
         assert 0<=metric['top1']<=metric['top5']<=1

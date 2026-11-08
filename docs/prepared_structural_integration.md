@@ -1241,8 +1241,18 @@ three physical channels nor the candidate definitions, physical bounds,
 generated examples, labels or independent holdouts.
 
 Training-only channel scales preserve the signed difference.
-Strong clean training prototypes precede a clean-to-noisy curriculum. A
-published checkpoint must have seen every declared training row. Validation
+Strong clean training prototypes precede a clean-to-noisy curriculum and are
+replayed alongside subsequent data batches. Each update adds at most sixteen
+training-only representatives to at most sixty-four data rows; larger family
+catalogs rotate through all representatives. The balanced pass and its
+complete-pool coverage pass both retain clean replay. Repeated representatives
+do not increase the unique training-pair count, and no validation/test curve
+enters replay. One complete-pool training-only comparison retained all sixteen
+strong representatives with replay; the matched normalized model without
+replay retained only six in its top five. That result establishes retention
+on those training examples, not held-out accuracy. Epoch receipts therefore
+separate strong training recall from independent validation scores. A
+published checkpoint must still have seen every declared training row. Validation
 selects among eligible checkpoints using macro family top-five recall, overall
 top-five recall and loss; the test fold is scored afterward. Per-family and
 worst-family recall accompany overall recall and a training-prior baseline.
