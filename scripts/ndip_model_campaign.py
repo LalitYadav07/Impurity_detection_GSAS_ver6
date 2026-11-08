@@ -75,13 +75,15 @@ def native(request,inputs,root,cancel):
     return json.loads(output.read_text()),root
 
 
-def _work(action,source,assets,request_file,directory,archive):
+def _work(action,source,assets,request_file,directory,archive,*,asset_parts=()):
     entered=time.monotonic()
     entry_utc=datetime.now(timezone.utc).isoformat()
     initial_usage=process_usage()
     directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
-    inputs=unpack(assets,directory/'inputs-packet')
     request=json.loads(Path(request_file).read_text())
+    if asset_parts and action!='native':raise ValueError('Multipart inputs only support structural training')
+    from gpx_recipe.preparation.structural_input_parts import stage
+    inputs=stage(assets,asset_parts,request,directory/'inputs-packet')
     started=time.monotonic()
     expected=(request.get('protocol') or {}).get('source',{}).get('sha256') if action=='chunk' else request.get('expected_source_sha256')
     if not expected or file_sha(source)!=expected:raise ValueError('Galaxy scientific source differs from its captured input')
@@ -91,7 +93,9 @@ def _work(action,source,assets,request_file,directory,archive):
         protocol=validate_protocol(request.get('protocol'))
         hashes={asset['path']:asset['sha256'] for asset in protocol_assets(protocol)}
     else:hashes=request.get('input_hashes')
-    hydrate_source(inputs,source,hashes,expected)
+    # Multipart structural training contains its required nuclear CIF already;
+    # its closed per-part and whole-cohort inventory was verified by stage().
+    if not asset_parts:hydrate_source(inputs,source,hashes,expected)
     before={str(p.relative_to(inputs)):file_sha(p) for p in inputs.rglob('*') if p.is_file()}
     staged=time.monotonic()
     cancel=threading.Event()
@@ -164,12 +168,12 @@ def _work(action,source,assets,request_file,directory,archive):
         raise
 
 
-def work(action,source,assets,request_file,directory,archive,*,preparation_evidence=None,preparation_certificate=None):
+def work(action,source,assets,request_file,directory,archive,*,preparation_evidence=None,preparation_certificate=None,asset_parts=()):
     from gpx_recipe.preparation.authority import server_scope
     from gpx_recipe.preparation.certificates import produce
     parent=Path(directory).resolve().parent;parent.mkdir(parents=True,exist_ok=True)
     with server_scope(preparation_evidence,parent):
-        result=_work(action,source,assets,request_file,directory,archive)
+        result=_work(action,source,assets,request_file,directory,archive,asset_parts=asset_parts)
         if preparation_certificate is not None:
             produce(result,directory,archive,preparation_certificate)
         return result
@@ -178,8 +182,9 @@ def work(action,source,assets,request_file,directory,archive,*,preparation_evide
 def main():
     p=argparse.ArgumentParser();p.add_argument('action',choices=['native','chunk']);p.add_argument('source');p.add_argument('assets');p.add_argument('request');p.add_argument('directory');p.add_argument('archive')
     p.add_argument('--preparation-evidence');p.add_argument('--preparation-certificate')
+    p.add_argument('--asset-part',action='append',default=[])
     a=p.parse_args();work(a.action,a.source,a.assets,a.request,a.directory,a.archive,
-        preparation_evidence=a.preparation_evidence,preparation_certificate=a.preparation_certificate)
+        preparation_evidence=a.preparation_evidence,preparation_certificate=a.preparation_certificate,asset_parts=a.asset_part)
 
 
 if __name__=='__main__':main()

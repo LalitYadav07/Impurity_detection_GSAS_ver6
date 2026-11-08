@@ -21,7 +21,7 @@ ENV_PATH='RADAR_NATIVE_PREPARATION_AUTHORITY'
 ENV_HASH='RADAR_NATIVE_PREPARATION_AUTHORITY_SHA256'
 MAX_BYTES=4*1024*1024
 TOOLS={'neutrons_radar_pd_model_campaign_prototype','neutrons_radar_pd_model_campaign'}
-VERSIONS={'0.2.17'}
+VERSIONS={'0.2.17','0.2.18'}
 _lock=threading.Lock()
 _owned=None
 

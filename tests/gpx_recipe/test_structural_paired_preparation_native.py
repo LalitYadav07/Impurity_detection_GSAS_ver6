@@ -58,7 +58,8 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
     assert read(restored,names='examples').manifest==paired.manifest
 
 
-def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path):
+@pytest.mark.parametrize('multipart',[False,True])
+def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart):
     root=tmp_path/'capture';example,directory=inputs(root)
     create_plan(example['source'],[directory],root/'plan.json')
     request=dict(source=example['source'],instrument=example['instrument'],plan=str(root/'plan.json'),
@@ -71,11 +72,24 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path):
         implementation_sha256=package_signature(),expected_source_sha256=file_sha(root/'parent.cif'),
         dispatch_key='a'*24,timeout=7200,input_hashes={name:file_sha(root/name) for name in names})
     write_json(tmp_path/'request.json',message)
+    more=[]
+    if multipart:
+        from gpx_recipe.preparation import structural_input_parts as parts
+        monkeypatch.setattr(parts,'MAX_PART_BYTES',6000)
+        monkeypatch.setattr(parts,'MAX_METADATA',3000)
+        captured={}
+        def publish(signature,path):
+            key='input'+str(len(captured));target=tmp_path/(key+'.zip')
+            __import__('shutil').copyfile(path,target);captured[key]=target;return key
+        refs=parts.prepare(root,message,tmp_path/'input-work',publish)
+        input_archive=captured[refs['primary']];more=[captured[key] for key in refs['parts']]
+        assert len(more)==2
+    else:input_archive=tmp_path/'inputs.zip'
     script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     spec=importlib.util.spec_from_file_location('paired_preparation_galaxy_control',script)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    result=module._work('native',root/'parent.cif',tmp_path/'inputs.zip',tmp_path/'request.json',
-        tmp_path/'job',tmp_path/'result.zip')
+    result=module._work('native',root/'parent.cif',input_archive,tmp_path/'request.json',
+        tmp_path/'job',tmp_path/'result.zip',asset_parts=more)
     assert result['result']['status']=='prepared'
     collected=unpack(tmp_path/'result.zip',tmp_path/'collected');model=Ranker(collected/'native/trained/model')
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3

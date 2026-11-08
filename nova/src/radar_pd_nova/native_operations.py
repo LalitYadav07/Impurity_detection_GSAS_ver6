@@ -57,9 +57,11 @@ def validate_handle(runtime, value):
     identity = digest(dict(history_id=value['history_id'], source=source, request=request))
     if identity != value['identity'] or len(json.dumps(value, allow_nan=False)) > 8*1024*1024:
         raise ValueError('Native operation handle changed or exceeds its metadata budget')
-    if value['asset_id'] is not None and (not isinstance(value['asset_id'], str)
-            or not re.fullmatch('[A-Za-z0-9_-]{1,128}', value['asset_id'])):
-        raise ValueError('Invalid native scientific input packet identity')
+    if value['asset_id'] is not None:
+        from gpx_recipe.preparation.structural_input_parts import references,OPERATION
+        _,parts=references(value['asset_id'])
+        if parts and request['operation']!=OPERATION:
+            raise ValueError('Multipart inputs only support structural training')
     if value['job'] is not None:
         job = UtilityActionRecord.model_validate(value['job'])
         if (set(value['job']) != set(job_record(job))
@@ -110,7 +112,7 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         if (file_sha(confined(root,payload['instrument']))!=plan['instrument_sha256']
                 or payload['settings'].get('representation')!=plan.get('representation')):
             raise ValueError('Structural training profile or representation differs from its declared plan')
-        checked_blocks(plan_path,plan,validate_arrays=False)
+        checked_blocks(plan_path,plan,validate_arrays=False,grid=payload['grid'])
         for name in plan_inputs(plan_path):
             path=confined(plan_path.parent,name)
             files.append(str(path.relative_to(root)))
@@ -203,7 +205,9 @@ def submit(runtime, operation, payload, root, *, source, timeout=120, cancel=Non
         else:
             write_json(path,handle)
         if event.is_set():raise RuntimeUnavailable('Model preparation paused before dispatch')
-        handle['asset_id']=runtime.packet(root,files,source_sha256=handle['source']['source_sha256'])
+        handle['asset_id']=(runtime.training_packet(root,files,handle['request'])
+            if operation=='preparation-structural-training' else
+            runtime.packet(root,files,source_sha256=handle['source']['source_sha256']))
         handle['submission_started']=True
         write_json(path,handle)
         try:
@@ -259,7 +263,8 @@ def poll(runtime, handle):
 
 def restore_inputs(runtime, handle, root):
     """Restore the exact captured packet, independent of current plan builders."""
-    from gpx_recipe.symmetry.bundle import unpack, hydrate_source, MAX_BYTES
+    from gpx_recipe.symmetry.bundle import hydrate_source, MAX_BYTES
+    from gpx_recipe.preparation.structural_input_parts import references,stage,inspect_parts
     handle=copy.deepcopy(validate_handle(runtime,handle))
     job=recover_job(runtime,handle)
     if job is None:raise RuntimeUnavailable('Recover the native job before restoring its captured inputs')
@@ -269,8 +274,15 @@ def restore_inputs(runtime, handle, root):
     owned.mkdir(parents=True)
     archive=owned/'inputs.zip'
     try:
-        runtime.service._download_dataset(handle['asset_id'],archive,maximum_bytes=MAX_BYTES)
-        received=unpack(archive,owned/'unpacked')
+        primary,parts=references(handle['asset_id'])
+        runtime.service._download_dataset(primary,archive,maximum_bytes=MAX_BYTES)
+        index=inspect_parts(archive,handle['request'],len(parts),owned) if parts else None
+        part_paths=[]
+        for i,key in enumerate(parts):
+            target=owned/f'part-{i:03d}.zip'
+            runtime.service._download_dataset(key,target,maximum_bytes=index['parts'][i]['bytes'])
+            part_paths.append(target)
+        received=stage(archive,part_paths,handle['request'],owned/'unpacked')
         hashes=handle['request']['input_hashes']
         missing=[name for name in hashes if not (received/name).is_file()]
         if missing:

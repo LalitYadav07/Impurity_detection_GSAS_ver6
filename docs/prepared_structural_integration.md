@@ -1564,8 +1564,88 @@ replay can reuse its captured digest after checking its source and owned native
 bank for mutations. This avoids regenerating the whole cohort just to bind a
 checkpoint. Training reads still verify each reconstructed row and its declared
 observation provenance. This digest is integrity evidence, not model accuracy or
-native scientific qualification. Multi-packet Galaxy staging and complete cold
-continuation timing remain required before automatic large-cohort deployment.
+native scientific qualification. Actual Galaxy multipart staging and complete
+cold continuation timing remain required before large-cohort deployment.
+
+### Bounded multipart inputs for complete paired cohorts
+
+Three-curve training plans may capture up to 8 GiB of original example and
+numerical-continuation files. The ordinary 512 MiB model-archive extraction
+bound, legacy training limits, file-count bounds and numerical cohort checks
+remain in place. NOVA automatically uses separate parts when the input census
+exceeds its 480 MiB single-packet threshold. Each part has at most 480 MiB of
+expanded data and stays below the existing 512 MiB ZIP transport bound; a
+single larger file requires the producer's existing smaller native shards.
+No trajectories, weak examples or candidate families are removed to fit a ZIP.
+
+The small control packet contains the parent CIF, instrument profile, exact
+training plan and a closed index of all paths, hashes, byte sizes and ordered
+archive identities. The worker validates the entire census and all part headers
+before merging any part. Only disjoint JSON/NPZ training members are accepted.
+Missing, modified, reordered, duplicated or foreign inputs fail before training.
+The final directory is published only after every requested file is verified;
+transport metadata is kept out of scientific input hashes. ZIP metadata is
+canonical so restoring identical inputs with new filesystem timestamps reuses
+the same acknowledged parts. An uncertain upload is recovered through the same
+content-addressed History lookup, rather than by duplicating a scientific job.
+
+Durable native handles retain the primary and every additional dataset identity.
+Recovery can restore the complete exact input after loss of the original viewer
+and its local files, including the two numerical continuation files. A cached
+part's archive checksum is included in its upload identity. This transport adds
+no executable upload, API key, remote worker fetch or scientific qualification.
+Ordinary model jobs and small/legacy requests retain their original single-HDA
+path. An installed wrapper without multipart support reports the missing
+capability before uploading or submitting the oversized cohort.
+
+The future Model Campaign template is version 0.2.18 and accepts the optional
+multiple-data parameter `model_asset_parts`. Its worker passes those staged
+paths through repeatable `--asset-part` arguments. The 0.2.17 receipt producer
+remains recognized alongside the reviewed 0.2.18 producer, with the same
+creating-job, complete package and artifact checks. The active Galaxy XML and
+immutable image pin are unchanged until a compatible image has passed release
+validation. Container entry-point tests do not establish successful NDIP site
+dispatch or cross-session handoff on the deployed service.
+
+### Adaptive focus and mode-family evidence: agreed next design
+
+The fixed top-five statistic remains a benchmark diagnostic, not a rule for
+discarding every other candidate. The intended focus set adapts to ambiguity:
+keep close-scoring families together and use independently calibrated prediction
+sets to choose its size. A visible score gap alone is not a calibrated exclusion
+criterion, and softmax scores are not physical posterior probabilities. A
+separate calibration partition must contain whole physical trajectories; noisy
+siblings of a training or calibration example cannot enter another partition.
+The existing validation set used to choose the network cannot also establish
+new held-out coverage. Rare families, weak modes, null controls and profiles
+outside the prepared domain must remain in coverage and failure accounting.
+Synthetic calibration coverage does not establish coverage under experimental
+distribution shift. Track both inclusion of any compatible true label and
+survival of all known indistinguishable alternatives; the former alone cannot
+justify ruling out the latter. Thousands of augmented rows do not substitute
+for enough independent calibration groups at the requested error rate.
+
+A second, parent-specific multilabel output can propose active irreducible-
+representation or mode families from the same three curves and attention
+backbone. Space-group type alone does not identify an embedding, propagation
+vector, order-parameter direction or complete mode content. Keep the original
+ISODISTORT basis, origin, normalization and candidate identities. The same
+symmetry can support several primary/secondary mode combinations. Simulations
+must include sparse, mixed, zero-amplitude and hard-to-detect controls rather
+than only combinations in which every allowed mode is active.
+
+Neither head may call a weakly scored mode absent. Distinguish supported modes,
+conditionally constrained amplitudes and unresolved modes. Proposed exclusions
+need a measurement-specific upper bound after matching the other mode, cell,
+background/profile and impurity freedoms. Injection/recovery checks must test
+the claimed amplitude limit under the actual noise, resolution and available
+banks; correlated or indistinguishable mode combinations remain unresolved.
+Symmetry can forbid a mode under a specified candidate model, which is a
+conditional algebraic statement, not evidence that the experiment lacks it.
+Evaluate compatible-family survival, per-family coverage, selected-set sizes
+and false exclusions on untouched grouped test data before authorizing pruning.
+This section records the design; it does not claim either prediction head or
+an adaptive exclusion policy is trained, calibrated or deployed.
 
 ## Structural size and pattern detectability are different diagnostics
 

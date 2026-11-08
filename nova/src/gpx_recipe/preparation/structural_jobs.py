@@ -33,6 +33,9 @@ PAIRED_PLAN_SCHEMA = 'radar-structural-training-plan/v2'
 CONTINUED_PLAN_SCHEMA = 'radar-structural-training-plan/v3'
 MAX_PLAN_BYTES = 8*1024**2
 MAX_INPUT_BYTES = 480*1024**2
+# Only typed three-curve training may span several separately bounded packets.
+# Ordinary model archives and legacy feature plans keep their original limits.
+MAX_PAIRED_INPUT_BYTES = 8*1024**3
 # The shared packet admits parent, profile, plan, and two files per block.
 MAX_BLOCKS = (10000-3)//2
 
@@ -185,12 +188,14 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         name = str(directory.relative_to(destination.parent))
         relative(name)
         total += sum((directory/name).stat().st_size for name in ('examples.json','examples.npz'))
-        if total > MAX_INPUT_BYTES:
-            raise ValueError('Training input arrays exceed one bounded worker packet')
-        block = read_training_block(directory)
-        formats.add(block_representation(block.manifest));contexts.add(block_context(block.manifest))
+        metadata=block_metadata(directory)
+        formats.add(block_representation(metadata));contexts.add(block_context(metadata))
         if len(formats)!=1 or len(contexts)!=1:
             raise ValueError('Training blocks must share one representation and parent trajectory context')
+        limit=MAX_PAIRED_INPUT_BYTES if formats=={REPRESENTATION} else MAX_INPUT_BYTES
+        if total > limit:
+            raise ValueError('Training input arrays exceed their typed byte budget')
+        block = read_training_block(directory)
         if block.manifest['source_sha256'] != parent:
             raise ValueError('A training block belongs to another parent CIF')
         current = block.manifest['instrument_sha256']
@@ -207,6 +212,9 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         if formats!={REPRESENTATION} or len(directories)>MAX_BLOCKS-1:
             raise ValueError('Only a bounded three-curve training plan can continue numerical state')
         resume=Path(resume);receipt,raw=read(resume);target=destination.parent/'resume'
+        total+=len(raw)+len(read_bounded(resume/RECEIPT,8192))
+        if total>MAX_PAIRED_INPUT_BYTES:
+            raise ValueError('Training continuation exceeds its typed byte budget')
         if target.is_symlink():raise ValueError('Training resume directory must be owned')
         target.mkdir(parents=True,exist_ok=True)
         for name,data in ((STATE,raw),(RECEIPT,read_bounded(resume/RECEIPT,8192))):
@@ -229,15 +237,16 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
     return value
 
 
-def checked_blocks(plan_path, plan, *, validate_arrays=True):
+def checked_blocks(plan_path, plan, *, validate_arrays=True,grid=None):
     from ..symmetry.compiler import confined
     total = 0; directories = [];contexts=set()
     for row in plan['blocks']:
         paths = [confined(Path(plan_path).parent, str(Path(row['directory'])/name))
                  for name in ('examples.json', 'examples.npz')]
         total += sum(path.stat().st_size for path in paths)
-        if total > MAX_INPUT_BYTES:
-            raise ValueError('Training input arrays exceed one bounded worker packet')
+        limit=MAX_PAIRED_INPUT_BYTES if plan.get('representation')==REPRESENTATION else MAX_INPUT_BYTES
+        if total > limit:
+            raise ValueError('Training input arrays exceed their typed byte budget')
         if [file_sha(path) for path in paths] != [row['manifest_sha256'], row['examples_sha256']]:
             raise ValueError('A captured structural training block changed')
         metadata = (read_training_block(paths[0].parent).manifest if validate_arrays else
@@ -248,8 +257,15 @@ def checked_blocks(plan_path, plan, *, validate_arrays=True):
         contexts.add(block_context(metadata))
         if block_representation(metadata)!=plan.get('representation') or len(contexts)!=1:
             raise ValueError('Training block representation or parent trajectory context differs from its plan')
+        if grid is not None and metadata.get('grid')!=grid:
+            raise ValueError('Training examples differ from the captured physical bank grid')
         directories.append(paths[0].parent)
-    resume_directory(plan_path,plan)
+    resumed=resume_directory(plan_path,plan)
+    if resumed is not None:
+        from .structural_training_transfer import STATE,RECEIPT
+        total+=sum((resumed/name).stat().st_size for name in (STATE,RECEIPT))
+        if total>MAX_PAIRED_INPUT_BYTES:
+            raise ValueError('Training continuation exceeds its typed byte budget')
     return directories
 
 
@@ -339,10 +355,7 @@ def execute_training(request):
     if request['settings']['dependencies'] and [row['directory'] for row in plan['blocks']]!=[
             'blocks/'+key for key in request['settings']['dependencies']]:
         raise ValueError('Training plan does not cover the exact declared library dependencies')
-    directories = checked_blocks(plan_path, plan)
-    if any(json.loads(read_bounded(p/'examples.json',MAX_PLAN_BYTES)).get('grid')!=request['grid']
-           for p in directories):
-        raise ValueError('Training examples differ from the captured physical bank grid')
+    directories = checked_blocks(plan_path, plan,grid=request['grid'])
     out = Path(request['destination'])
     if out.is_symlink():raise ValueError('Training recovery needs an owned regular directory')
     out=out.resolve()

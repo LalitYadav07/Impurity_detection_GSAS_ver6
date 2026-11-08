@@ -55,7 +55,7 @@ def test_structural_training_capture_includes_all_declared_blocks_without_loadin
     # never a full-array load on the interactive application's capture path.
     (directory/'examples.npz').write_bytes(b'opaque transport control')
     (directory/'examples.json').write_text(json.dumps(dict(schema='radar-structural-ranking-examples/v3',source_sha256=file_sha(source),
-        instrument_sha256=file_sha(instrument))))
+        instrument_sha256=file_sha(instrument),grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1))))
     plan=dict(schema=PLAN_SCHEMA,parent_sha256=file_sha(source),instrument_sha256=file_sha(instrument),
         blocks=[dict(directory='blocks/one',manifest_sha256=file_sha(directory/'examples.json'),
             examples_sha256=file_sha(directory/'examples.npz'))])
@@ -72,6 +72,9 @@ def test_structural_training_capture_includes_all_declared_blocks_without_loadin
     long_handle,_=capture(runtime,'preparation-structural-training',payload,root,descriptor,7200)
     assert long_handle['request']['timeout']==7200
     validate_handle(runtime,long_handle)
+    changed=copy.deepcopy(payload);changed['grid']['bank']=2
+    with pytest.raises(ValueError,match='physical bank grid'):
+        capture(runtime,'preparation-structural-training',changed,root,descriptor,7200)
     changed=copy.deepcopy(payload);changed['settings']['representation']='reference-current-signed-difference/shared-Q-asinh/v1'
     with pytest.raises(ValueError,match='representation differs'):
         capture(runtime,'preparation-structural-training',changed,root,descriptor,7200)

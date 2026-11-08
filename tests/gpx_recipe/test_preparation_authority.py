@@ -61,6 +61,16 @@ def envelope(tmp_path, certificate):
     return path,row
 
 
+@pytest.mark.parametrize('version',['0.2.17','0.2.18','0.2.15','unknown'])
+def test_only_reviewed_receipt_producer_versions_are_recognized(tmp_path,version):
+    *_,certificate,_=certified(tmp_path)
+    path,row=envelope(tmp_path,certificate);row['tool_version']=version
+    path.write_text(json.dumps(dict(schema=authority.SCHEMA,records=[row])))
+    accepted,rejected=authority.verify_envelope(path)
+    if version in {'0.2.17','0.2.18'}:assert len(accepted)==1 and not rejected
+    else:assert not accepted and rejected
+
+
 def test_magnetic_authority_applies_only_to_exact_native_amplitude_bytes(tmp_path):
     *_,certificate,document=certified(tmp_path,kind='magnetic');path,_=envelope(tmp_path,certificate)
     entry=document['entries'][0];factor_sha=entry['artifacts']['scattering.npz']

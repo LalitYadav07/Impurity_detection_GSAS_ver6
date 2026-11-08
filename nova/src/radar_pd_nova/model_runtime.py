@@ -182,6 +182,16 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             # inspection still needs a valid packet, without duplicating GPX.
             hashes={EMPTY_PACKET_NAME:EMPTY_PACKET_SHA256}
         signature=digest(hashes)
+        def produce(archive):
+            pack(root,archive,paths)
+            if not paths:
+                import zipfile
+                with zipfile.ZipFile(archive,'a',compression=zipfile.ZIP_DEFLATED) as packet:
+                    packet.writestr(EMPTY_PACKET_NAME,EMPTY_PACKET_BYTES)
+        return self._packet_dataset(signature,produce)
+
+    def _packet_dataset(self,signature,produce):
+        """One content-addressed upload/recovery path for every model ZIP."""
         with self._lock:
             cached=self.state['assets'].get(signature)
             if cached and self._packet_available(cached):return cached
@@ -191,17 +201,37 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                    if document_label(r.get('name'))==label and self._packet_available(r['id'])]
             if found:
                 self.state['assets'][signature]=found[0]['id'];self._save();return found[0]['id']
-            archive=self.root/(signature+'.zip');pack(root,archive,paths)
-            if not paths:
-                import zipfile
-                with zipfile.ZipFile(archive,'a',compression=zipfile.ZIP_DEFLATED) as packet:
-                    packet.writestr(EMPTY_PACKET_NAME,EMPTY_PACKET_BYTES)
-            try:identifier=self.service.upload_document(archive,label='RADAR-PD Model inputs '+signature,wait_ready=False)
+            archive=self.root/(signature+'.zip')
+            try:
+                produce(archive)
+                identifier=self.service.upload_document(archive,label='RADAR-PD Model inputs '+signature,wait_ready=False)
             finally:archive.unlink(missing_ok=True)
             self.state['assets'][signature]=identifier;self._save()
             return identifier
 
+    def training_packet(self,root,files,request):
+        from gpx_recipe.preparation.structural_jobs import MAX_INPUT_BYTES
+        if sum(confined(root,name).stat().st_size for name in set(files))<=MAX_INPUT_BYTES:
+            return self.packet(root,files,source_sha256=request['expected_source_sha256'])
+        from gpx_recipe.preparation.structural_input_parts import prepare
+        capability=getattr(self.service,'tool_has_input',None)
+        if not capability or not capability(self.tool_id,'model_asset_parts'):
+            raise RuntimeUnavailable('The installed Model Campaign wrapper needs multipart training inputs before this complete cohort can run. No examples were dropped or job submitted.')
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='training-inputs-',dir=self.root) as workspace:
+            def publish(signature,path):
+                return self._packet_dataset(signature,lambda target:shutil.copyfile(path,target))
+            return prepare(root,request,workspace,publish)
+
     def _submit(self,action,source,request,asset_id,key,*,cancel=None):
+        from gpx_recipe.preparation.structural_input_parts import references,OPERATION
+        primary,parts=references(asset_id)
+        if parts:
+            if action!='native' or request.get('operation')!=OPERATION:
+                raise ValueError('Multipart inputs only support structural training')
+            capability=getattr(self.service,'tool_has_input',None)
+            if not capability or not capability(self.tool_id,'model_asset_parts'):
+                raise RuntimeUnavailable('The installed Model Campaign wrapper does not support captured training input parts')
         began=time.monotonic()
         with self._lock:
             entry=self.state['dispatches'].setdefault(key,{'pending':False})
@@ -233,7 +263,8 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             # ambiguous acknowledgement requiring remote job recovery.
             source_dataset=self.dataset_id(source)
             inputs={'action':action,'dispatch_key':key,'source_gpx':{'dataset_id':source_dataset},
-                    'model_assets':{'dataset_id':asset_id}}
+                    'model_assets':{'dataset_id':primary}}
+            if parts:inputs['model_asset_parts']=[{'dataset_id':part} for part in parts]
             from .preparation_evidence import input_ids
             evidence_ids=input_ids(self,request)
             if evidence_ids:inputs['preparation_evidence']=[{'dataset_id':v} for v in evidence_ids]
