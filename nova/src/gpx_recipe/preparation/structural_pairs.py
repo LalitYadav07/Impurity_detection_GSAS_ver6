@@ -23,7 +23,7 @@ from .worker import validate_request, verify_structural_child
 
 
 def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
-             parent_relative_range=(.0001, .001), trajectory_slice=None):
+             parent_relative_range=(.0001, .001), trajectory_slice=None, report_size=None):
     """Generate complete physical child/parent pairs, with null controls.
 
     The parent seed is shared across every child of the same parent/bank.
@@ -90,6 +90,10 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         +points.nbytes+parent_a.nbytes+trajectory.nbytes+role.nbytes+len(points)*(8+1+8+8))
     if numeric_bytes>MAX_BYTES:
         raise ValueError('Shard complete paired trajectories to fit the bounded numerical block; retain every coordinate')
+    if report_size is not None:
+        if not callable(report_size):raise TypeError('Native output sizing requires an internal callback')
+        report_size(rows=len(points),bins=len(source.fast.x),mode_dimensions=source.mode_dimensions,
+                    cell_dimensions=source.cell_dimensions,numeric_bytes=numeric_bytes)
     mark('conditioning_and_selecting_whole_trajectories')
     checks = set(np.flatnonzero(role != 2)) | set(np.flatnonzero(np.r_[trajectory[:-1] != trajectory[1:], True]))
     rendered = render_native(source, points, kind=request['grid']['kind'], check_indices=checks, progress=progress)

@@ -172,6 +172,7 @@ jobs:
             /validation/tests/gpx_recipe/test_tof_profile_arrays.py \
             /validation/tests/gpx_recipe/test_structural_candidate_routing.py \
             /validation/tests/gpx_recipe/test_structural_training_counts.py \
+            /validation/tests/gpx_recipe/test_structural_observation_metrics.py \
             /validation/tests/gpx_recipe/test_structural_training_curriculum.py \
             /validation/tests/gpx_recipe/test_structural_training_checkpoint.py \
             /validation/tests/gpx_recipe/test_structural_training_checkpoint_native.py \
@@ -183,6 +184,9 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_background_context.py \
             /validation/tests/gpx_recipe/test_quadratic_qualification.py \
             /validation/tests/gpx_recipe/test_preparation_authority.py \
+            /validation/tests/gpx_recipe/test_preparation_batch.py \
+            /validation/tests/gpx_recipe/test_preparation_batch_cancellation.py \
+            /validation/tests/gpx_recipe/test_preparation_native_size.py \
             /validation/tests/gpx_recipe/test_preparation_magnetic_arrays.py \
             /validation/tests/gpx_recipe/test_native_forward.py \
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
@@ -294,6 +298,7 @@ jobs:
             /validation/tests/gpx_recipe/test_tof_kernel_storage.py \
             /validation/tests/gpx_recipe/test_native_cell_proposals.py \
             /validation/tests/gpx_recipe/test_preparation_worker_native.py \
+            /validation/tests/gpx_recipe/test_preparation_batch_native.py \
             /validation/tests/gpx_recipe/test_preparation_adaptation_native.py \
             /validation/tests/gpx_recipe/test_preparation_authority_native.py \
             /validation/tests/gpx_recipe/test_preparation_magnetic_authority_native.py \

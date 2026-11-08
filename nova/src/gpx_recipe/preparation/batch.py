@@ -18,7 +18,7 @@ import time
 
 from ..execution import write_json
 from ..process import run_scientific, ScientificCancelled
-from ..symmetry.compiler import confined, file_sha, native_environment
+from ..symmetry.compiler import confined, file_sha, native_environment, package_signature
 from ..symmetry.contracts import digest, fields
 from ..symmetry.resources import allocation
 from .worker import input_roles
@@ -138,7 +138,7 @@ def run_task(task, request, scratch, *, cancel, timeout):
     return dict(state='prepared',result=json.loads(output.read_text()),reason='',seconds=time.monotonic()-began)
 
 
-def verify_result(task, request, row):
+def verify_result(task, request, row, *, maximum_bytes=None):
     from .operations import portable_artifacts, portable_entry_artifacts
     result=row.get('result');root=Path(request['destination']).resolve()
     if (not isinstance(result,dict) or not isinstance(result.get('artifacts'),list)
@@ -153,7 +153,10 @@ def verify_result(task, request, row):
             or len(result['artifacts'])!=len(names) or set(result['artifacts'])!=names):
         raise ValueError('Preparation task returned an unrelated or incomplete receipt')
     paths=[confined(root,name) for name in sorted(names)]
-    if sum(p.stat().st_size for p in paths)>RESERVES[task['kind']]-65536:
+    maximum_bytes=RESERVES[task['kind']] if maximum_bytes is None else maximum_bytes
+    if type(maximum_bytes) is not int or not 65536<maximum_bytes<=RESERVES[task['kind']]:
+        raise ValueError('Invalid preparation task artifact reservation')
+    if sum(p.stat().st_size for p in paths)>maximum_bytes-65536:
         raise ValueError('Preparation task exceeded its declared artifact budget')
     manifest_path=root/'entry.json'
     if manifest_path.stat().st_size>MAX_METADATA or file_sha(manifest_path)!=result.get('entry_sha256'):
@@ -177,21 +180,47 @@ def verify_result(task, request, row):
 
 
 def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, environ=None):
+    from .native_size import read as read_native_size
+    from .structural_training_blocks import REPRESENTATION
     request=validate_request(value);plan_path=Path(request['plan']).resolve();plan=read_plan(plan_path)
     parent=Path(request['source']).resolve();source_sha=file_sha(parent)
     captured={name:file_sha(confined(plan_path.parent,name)) for name in inputs(plan)}
     output=Path(request['destination']).resolve();output.mkdir(parents=True,exist_ok=False)
     budget=allocation(request['workers'],environ=environ);cancel=cancel or threading.Event()
     began=clock();deadline=began+request['seconds'];remaining=list(plan['tasks']);active={};finished={}
-    paths=[];used=0;peak=0;stop_reason=''
+    paths=[];used=0;peak=0;peak_reserved=0;stop_reason='';sized=set();invalid_size=set()
+    implementation=package_signature()
+
+    def refresh_reservations():
+        for task in active.values():
+            if (task['kind']!='structural-examples' or '_native_size' in task
+                    or task['payload']['settings'].get('representation')!=REPRESENTATION):
+                continue
+            try:
+                record=read_native_size(task['payload'],implementation)
+                if record['reservation_bytes']>RESERVES[task['kind']]:
+                    raise ValueError('Native size exceeds its original task bound')
+            except FileNotFoundError:
+                continue
+            except (OSError,ValueError,TypeError):
+                # An absent/foreign/invalid report cannot grant more work.
+                # Keep the original conservative reserve and final checks.
+                invalid_size.add(task['entry']);continue
+            task['_reserve']=record['reservation_bytes'];task['_native_size']=record
+            sized.add(task['entry'])
+
     def progress():
         write_json(output/'progress.json',dict(total=len(plan['tasks']),terminal=sum(v['state']!='pending' for v in finished.values()),
             prepared=sum(v['state']=='prepared' for v in finished.values()),active=len(active),
-            pending=len(remaining),allocation=budget,peak_admitted_tasks=peak))
+            pending=len(remaining),allocation=budget,peak_admitted_tasks=peak,
+            native_sized_tasks=len(sized),native_size_reports_rejected=len(invalid_size),
+            reserved_result_bytes=sum(t['_reserve'] for t in active.values()),
+            used_result_bytes=used,peak_reserved_result_bytes=peak_reserved))
     with ThreadPoolExecutor(max_workers=budget['workers']) as pool:
         while remaining or active:
+            refresh_reservations()
             while remaining and len(active)<budget['workers'] and clock()<deadline and not cancel.is_set():
-                reserved=sum(RESERVES[t['kind']] for t in active.values())
+                reserved=sum(t['_reserve'] for t in active.values())
                 index=next((i for i,t in enumerate(remaining) if used+reserved+RESERVES[t['kind']]<=RESULT_BUDGET),None)
                 if index is None:
                     stop_reason='batch_artifact_budget';break
@@ -202,7 +231,8 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                 payload['destination']=str(confined(output,payload['destination'],exists=False))
                 scratch=output/'.work'/task['entry']/('attempt-'+str(task['attempt']))
                 future=pool.submit(runner,task,payload,scratch,cancel=cancel,timeout=max(1.,deadline-clock()))
-                active[future]=dict(task,payload=payload,scratch=scratch);peak=max(peak,len(active))
+                active[future]=dict(task,payload=payload,scratch=scratch,_reserve=RESERVES[task['kind']])
+                peak=max(peak,len(active));peak_reserved=max(peak_reserved,used+sum(t['_reserve'] for t in active.values()))
             progress()
             if not active:break
             ready,_=wait(active,timeout=.1,return_when=FIRST_COMPLETED)
@@ -213,7 +243,10 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                     if not isinstance(row,dict) or row.get('state') not in {'prepared','failed','cancelled'}:
                         raise ValueError('Invalid native preparation task status')
                     if row['state']=='prepared':
-                        assets=verify_result(task,task['payload'],row)
+                        if ('_native_size' in task
+                                and read_native_size(task['payload'],implementation)!=task['_native_size']):
+                            raise ValueError('Owned native size record changed before publication')
+                        assets=verify_result(task,task['payload'],row,maximum_bytes=task['_reserve'])
                         paths.extend(assets);used+=sum(p.stat().st_size for p in assets)
                 except Exception as exc:
                     row=dict(state='failed',reason='Preparation task failed verification ('+type(exc).__name__+')')
@@ -236,7 +269,9 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
     result=dict(schema=RESULT_SCHEMA,plan_sha256=digest(plan),status='partial' if remaining else 'complete',
         counts=counts,all_prepared=counts['prepared']==len(plan['tasks']),
         entries=[finished[t['entry']] for t in plan['tasks']],allocation=dict(budget,peak_admitted_tasks=peak,
-            result_byte_budget=RESULT_BUDGET),output=str(output),observations_included=False,scientific_result=False,
+            result_byte_budget=RESULT_BUDGET,native_sized_tasks=len(sized),
+            native_size_reports_rejected=len(invalid_size),peak_reserved_result_bytes=peak_reserved),
+        output=str(output),observations_included=False,scientific_result=False,
         artifacts=sorted(str(p.relative_to(output)) for p in paths),seconds=clock()-began)
     write_json(output/'batch.json',result);result['artifacts']+=['batch.json','progress.json']
     progress()

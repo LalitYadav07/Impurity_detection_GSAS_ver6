@@ -217,9 +217,11 @@ def execute_examples(request):
     if settings.get('representation')==REPRESENTATION:
         from .structural_pairs import generate
         from .structural_paired_blocks import pack_block
+        from .native_size import publish as publish_size
         out=Path(request['destination']).resolve();out.mkdir(parents=True,exist_ok=False)
         detail=generate(dict(base,destination=str(out/'working-native')),
-            parent_seed=settings['parent_seed'],parent_relative_range=settings['parent_relative_metric_range'],**options)
+            parent_seed=settings['parent_seed'],parent_relative_range=settings['parent_relative_metric_range'],
+            report_size=lambda **dimensions:publish_size(request,**dimensions),**options)
         packed=pack_block(out/'working-native',out/'portable',names='examples')
         for name in ('examples.json','examples.npz'):(out/'portable'/name).replace(out/name)
         examples_sha256=packed.manifest['pairs_sha256']

@@ -39,6 +39,13 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
             trajectories=3,steps=2,trajectory_slice=[1,3]),destination=str(tmp_path/'output'))
     result=execute('structural-examples',request);root=Path(result['output'])
     original=read(root/'working-native');paired=read(root,names='examples')
+    from gpx_recipe.preparation.native_size import read as read_size
+    size=read_size(request,package_signature())
+    assert size['rows']==7 and size['bins']==paired.manifest['bins']
+    assert size['mode_dimensions']==paired.manifest['mode_dimensions']
+    assert size['cell_dimensions']==paired.manifest['cell_dimensions']
+    assert size['numeric_bytes']==sum(a.nbytes for a in paired.arrays.values())
+    assert sum((root/name).stat().st_size for name in result['artifacts'])+65536<size['reservation_bytes']
     entry=json.loads((root/'entry.json').read_text())
     assert entry['detail']['timing']==original.manifest['timing']
     assert paired.manifest['examples']==7 and paired.manifest['trajectory_slice']==[1,3]
