@@ -93,6 +93,32 @@ def test_refinable_profile_uses_original_native_rendering_by_default(tmp_path):
         'variable-cell/profile workload uses original native rendering':1}
 
 
+def test_dense_tof_automatic_policy_keeps_changed_cells_and_profiles_exact(tmp_path,monkeypatch):
+    from gpx_recipe.live import native_profile as module
+    # The real large-inventory full-block control covers the measured scale.
+    # Lower only the selector threshold here to exercise the automatic path
+    # with the compact native regression fixture and unchanged peak functions.
+    monkeypatch.setattr(module,'DENSE_TOF_REFLECTIONS',1)
+    _,source=native_source(tmp_path/'inputs','PNT')
+    native=source.fast.native;memo=native.peak_memo
+    assert native.cell_indices and memo.maximum_bytes>0
+    assert native.peak_memo_workload=='dense native TOF inventory'
+    assert not memo.shared_across_contexts
+    raw=NativePeakMemo(0);hfx=f":{source.fast.slow.hist.id}:"
+    for factor,profile in [(0.,0.),(.04,.1),(-.03,.05)]:
+        point=np.linspace(-1.,1.,len(source.radii))*source.radii*factor
+        native.parms[hfx+'X']=profile
+        native.peak_memo=raw;expected=source.native(point)
+        native.peak_memo=memo;actual=source.native(point)
+        np.testing.assert_array_equal(actual,expected)
+        # Changed cells/profile terms must miss. Repeat the same native state
+        # to test a genuine exact reuse opportunity, rather than requiring a
+        # hit across three deliberately different peak shapes.
+        np.testing.assert_array_equal(source.native(point),expected)
+    assert memo.hits>0 and memo.misses>0,memo.diagnostics()
+    assert memo.diagnostics()['accounted_cache_bytes']<=memo.maximum_bytes
+
+
 @pytest.mark.parametrize('kind',['PNC','PNT'])
 def test_fresh_native_contexts_share_exact_shapes_and_invalidate_changed_geometry(tmp_path,kind,monkeypatch):
     from GSASII import GSASIIscriptable as G, GSASIIlattice as lattice

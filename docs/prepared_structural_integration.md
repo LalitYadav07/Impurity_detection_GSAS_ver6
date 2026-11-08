@@ -287,9 +287,32 @@ Sticky exception-status flags are excluded from this identity. Inherited
 adapters detach from a parent process's store before reuse; this does not make
 forked GSAS-II state a supported concurrent execution mode. Spawned workers own
 independent stores. No file transport or cross-worker cache is introduced.
-Variable-cell/profile workloads keep original native rendering: a
+Ordinary variable-cell/profile workloads keep original native rendering: a
 complete 185-start control exposed a regression hidden by a shorter rendering
-test. This selection does not alter the scientific parameter set.
+test. Dense TOF workloads use a private bounded memo when one actual native
+powder histogram has at least 16,384 reflections and all powder histograms use
+PNT profiles. The selection inspects complete native reflection lists, not
+the compound, mode count, requested workers or an uploaded permission flag.
+Mixed and unsupported profiles keep the original changing-geometry policy;
+the existing per-driver cost probe can still bypass unprofitable memo work.
+Cell and profile parameters remain free, and every reused shape must retain
+the same exact native arguments and arithmetic controls. Explicit zero-byte
+reference controls still use the untouched native calculation.
+
+A complete matched 41-pattern dense TOF control retained all 17 independent
+native checks per variant. Every curve, label, axis and background was
+bit-identical; measured time decreased from 976.7 to 800.4 seconds. This is a
+child-rendering measurement including cold context construction, not a full
+preparation or NDIP latency claim. The private dense-workload memo and shared
+fixed-geometry memo each retain the original 64 MiB/16,384-entry bound. This
+selection does not alter the scientific parameter set or authorize screening.
+The exact structural forward renderer also uses the complete compact native
+record arrays already used by proposal rendering. Legacy dictionary readers,
+original per-peak rendering and native-anchor fallback remain available. The
+same full 41-pattern control then took 740.0 seconds with all four output
+arrays identical to its matched original control and all 17 independent
+checks retained. The current complete native acceptance suite passed 316
+tests; this does not establish whole-preparation or deployment latency.
 The memo supports the reviewed native PNC/PNT peak routines.
 For the reviewed unmasked, single-phase TOF starting-curve path, an installed
 worker helper can batch calls to the original Fortran peak routine. The helper

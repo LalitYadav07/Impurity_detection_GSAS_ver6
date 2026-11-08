@@ -6,7 +6,38 @@ import io
 import hashlib
 import pickle
 import numpy as np
+from .native_peak_memo import MAXIMUM_ENTRIES as DENSE_TOF_REFLECTIONS
 _active=None
+
+
+def dense_tof_inventory(histograms, controls):
+    """Select an observed computational workload, never a scientific model.
+
+    Large TOF inventories can reuse many exact compiled peak arguments within
+    a single changing-cell profile. Smaller changing-geometry portfolios were
+    slower with memo bookkeeping. Inspect the actual native reflection lists,
+    rather than a compound name, mode count, visible host CPUs or uploaded flag.
+    Mixed/unsupported contexts keep the original changing-geometry policy.
+    The memo's existing per-driver cost probe remains active after selection.
+    """
+    if not isinstance(histograms,dict) or not isinstance(controls,dict):
+        return False
+    dense=False;found=False
+    for name,histogram in histograms.items():
+        if not isinstance(name,str) or not name.startswith('PWDR'):continue
+        found=True
+        if (not isinstance(histogram,dict) or 'hId' not in histogram
+                or controls.get(f":{histogram['hId']}:histType")!='PNT'):
+            return False
+        reflections=histogram.get('Reflection Lists')
+        if not isinstance(reflections,dict):return False
+        count=0
+        for row in reflections.values():
+            values=row.get('RefList') if isinstance(row,dict) else None
+            if not isinstance(values,np.ndarray) or values.ndim!=2:return False
+            count+=len(values)
+        dense |= count>=DENSE_TOF_REFLECTIONS
+    return found and dense
 
 
 def constraint_state_signature(maps):
@@ -83,21 +114,26 @@ class NativeReducedProfile:
                 self.cell_indices.append(j)
         self.parms.update(zip(self.vary, self.x0)); maps.Dict2Map(self.parms)
         from .native_peak_memo import NativePeakMemo, MAXIMUM_BYTES, shared_native_peak_memo
-        # A complete changing-cell portfolio measured slower with peak memo
-        # bookkeeping despite a gain in short repeated-profile controls.
-        # Select the measured fixed-geometry use case, not fewer cell freedoms.
+        # A complete ordinary changing-cell portfolio measured slower with
+        # memo bookkeeping, while a dense TOF portfolio measured faster with
+        # all native controls retained. Select by actual native work, without
+        # freezing any cell/profile freedom or changing the peak calculation.
         changing_profile=any(len(parts)==3 and parts[1]
             and parts[2]!='Scale' and not parts[2].startswith('Back;')
             for parts in (name.split(':',2) for name in self.vary))
         changing_geometry=bool(self.cell_indices or changing_profile)
-        memo_bytes=(0 if changing_geometry else MAXIMUM_BYTES) if peak_memo_bytes is None else peak_memo_bytes
+        dense_tof=changing_geometry and peak_memo_bytes is None and dense_tof_inventory(histograms,self.controls)
+        memo_bytes=(MAXIMUM_BYTES if not changing_geometry or dense_tof else 0) if peak_memo_bytes is None else peak_memo_bytes
+        self.peak_memo_workload=('explicit native control' if peak_memo_bytes is not None else
+            'fixed geometry' if not changing_geometry else
+            'dense native TOF inventory' if dense_tof else 'ordinary variable cell/profile')
         self.peak_memo=(shared_native_peak_memo() if not changing_geometry and peak_memo_bytes is None
             else NativePeakMemo(memo_bytes,disabled_reason=(
             'variable-cell/profile workload uses original native rendering'
             if changing_geometry and peak_memo_bytes is None else 'disabled native reference')))
         from .native_axis_view import NativeUnmaskedAxisView
-        # Changing cells do not benefit from peak-cache bookkeeping, but an
-        # unmasked axis can still avoid the native loop's masked temporaries.
+        # An unmasked axis can avoid the native loop's masked temporaries.
+        # The peak memo supplies that view itself when it owns the driver.
         # Explicit zero-byte controls keep the untouched reference path.
         self.axis_view=NativeUnmaskedAxisView(changing_geometry and peak_memo_bytes is None)
         from .native_reflection_memo import NativeReflectionMemo

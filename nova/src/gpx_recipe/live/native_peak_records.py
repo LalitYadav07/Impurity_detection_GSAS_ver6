@@ -31,3 +31,21 @@ class PackedPeakRecords:
         object.__setattr__(self,'numeric_bytes',sum(a.nbytes for a in arrays))
 
     def __len__(self):return len(self.heights)
+
+
+def record_items(records):
+    """Read packed or legacy rows in their original reflection order.
+
+    Packed arrays remain owned and read-only; iteration does not materialize
+    another per-reflection dictionary. Native per-peak fallbacks and prepared
+    kernel lookups need the same complete logical rows as the batch helper.
+    """
+    if isinstance(records,PackedPeakRecords):
+        for index,hkl in enumerate(records.hkls):
+            low,high=records.bounds[index]
+            yield tuple(map(int,hkl)),(records.parameters[index],
+                records.heights[index],int(low),int(high))
+    elif isinstance(records,dict):
+        yield from records.items()
+    else:
+        raise TypeError('Complete packed or legacy native peak records required')

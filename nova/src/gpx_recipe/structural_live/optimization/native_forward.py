@@ -12,6 +12,7 @@ from .native_cell_proposals import NativeCellProposals,ProposalUnavailable,_hash
 from .native_tof_scalars import for_source as scalar_for_source,ScalarBatchUnavailable
 from .native_tof_scalars import record_bytes
 from ...preparation.kernel_runtime import floating_state
+from ...live.native_peak_records import record_items
 
 
 BACKGROUND_SOURCE='ba21fb1e4304debbf4cb43065524b728fa39695087102ffdb50371f4dca274b7'
@@ -80,7 +81,7 @@ class NativeTOFForward:
             try:
                 n,driver,powder,_,peak,_,axis,histogram,_,_=self._context()
                 physical=s.check(np.asarray(point,float))
-                records=self.collector.collect_physical(physical,
+                records=self.collector.collect_packed_physical(physical,
                     maximum_bytes=self.maximum_bytes-self.fixed_workspace)
             except (ProposalUnavailable,ScalarBatchUnavailable) as exc:
                 self.bypasses[str(exc)]+=1;self.fallback_calls+=1
@@ -108,7 +109,7 @@ class NativeTOFForward:
                     return s.native(physical)
             else:
                 signal=np.zeros_like(background)
-                for hkl,(parameters,height,low,high) in records.items():
+                for hkl,(parameters,height,low,high) in record_items(records):
                     value=None if kernel is None else kernel.lookup(hkl,parameters,axis,low,high,function=peak)
                     if value is None:
                         value=peak(*parameters,axis[low:high])[0];self.peak_calls+=1

@@ -3,7 +3,7 @@ import dataclasses
 import numpy as np
 import pytest
 
-from gpx_recipe.live.native_peak_records import PackedPeakRecords
+from gpx_recipe.live.native_peak_records import PackedPeakRecords,record_items
 from gpx_recipe.live.native_peak_batch import pack_records,BatchUnavailable,MAXIMUM_BYTES
 
 
@@ -41,3 +41,18 @@ def test_packed_windows_still_need_the_actual_native_axis_and_scratch_budget():
     records=PackedPeakRecords(*columns())
     with pytest.raises(BatchUnavailable):pack_records(records,np.arange(4.),MAXIMUM_BYTES)
     with pytest.raises(BatchUnavailable):pack_records(records,np.arange(6.),1)
+
+
+def test_per_peak_fallback_reads_every_packed_row_without_copying_a_dictionary():
+    records=PackedPeakRecords(*columns());rows=list(record_items(records))
+    assert [key for key,_ in rows]==[(1,0,0),(0,1,0)]
+    assert [row[1][1] for row in rows]==[2.,-1.]
+    for index,(_, (parameters,height,low,high)) in enumerate(rows):
+        np.testing.assert_array_equal(parameters,records.parameters[index])
+        assert np.shares_memory(parameters,records.parameters)
+        assert not parameters.flags.writeable
+        assert (low,high)==tuple(records.bounds[index])
+    legacy={key:value for key,value in rows}
+    assert [key for key,_ in record_items(legacy)]==list(legacy)
+    assert next(record_items(legacy))[1] is rows[0][1]
+    with pytest.raises(TypeError):list(record_items([]))

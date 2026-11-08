@@ -6,6 +6,7 @@ import json
 pytest.importorskip('GSASII.GSASIIscriptable')
 from test_native_profile_capture import native_source
 from gpx_recipe.structural_live.optimization.native_forward import for_source,NativeTOFForward
+from gpx_recipe.live.native_peak_records import PackedPeakRecords
 
 
 @pytest.mark.parametrize('change',['parent','mixed','profile','absorption','lookup','cell_edge','zero_counts'])
@@ -50,19 +51,37 @@ def test_unsupported_context_keeps_original_native_forward(tmp_path,monkeypatch,
 
 def test_anchor_disagreement_disables_acceleration_and_keeps_original_curve(tmp_path,monkeypatch):
     _,s=native_source(tmp_path/'inputs','PNT');engine=for_source(s);assert engine is not None
-    point=np.zeros(len(s.radii));expected=s.native(point).copy();original=engine.collector.collect_physical
+    point=np.zeros(len(s.radii));expected=s.native(point).copy();original=engine.collector.collect_packed_physical
     def changed(*args,**kwargs):
-        records=original(*args,**kwargs);key=next(iter(records));par,height,lo,hi=records[key]
-        records[key]=(par,height+1.,lo,hi);return records
-    monkeypatch.setattr(engine.collector,'collect_physical',changed)
+        records=original(*args,**kwargs);heights=records.heights.copy();heights[0]+=1.
+        return PackedPeakRecords(records.parameters.copy(),heights,records.bounds.copy(),
+            records.spacings.copy(),records.hkls.copy())
+    monkeypatch.setattr(engine.collector,'collect_packed_physical',changed)
     np.testing.assert_array_equal(engine.evaluate(point),expected)
     assert engine.disabled and not engine.qualified
     assert not engine.anchor_comparison['array_identical']
     assert engine.anchor_comparison['differing_bins']>0
     assert engine.anchor_comparison['maximum_absolute_error']>0
-    monkeypatch.setattr(engine.collector,'collect_physical',lambda *a,**k:pytest.fail('A disabled renderer cannot run again'))
+    monkeypatch.setattr(engine.collector,'collect_packed_physical',lambda *a,**k:pytest.fail('A disabled renderer cannot run again'))
     np.testing.assert_array_equal(engine.evaluate(point),expected)
     assert engine.diagnostics()['bypasses']['native anchor is not array-identical']==1
+
+
+@pytest.mark.parametrize('helper',[False,True])
+def test_exact_forward_uses_compact_rows_with_original_per_peak_fallback(tmp_path,monkeypatch,helper):
+    _,s=native_source(tmp_path/'inputs','PNT');engine=for_source(s);assert engine is not None
+    if not helper:engine.native_batch=None
+    original=engine.collector.collect_packed_physical;seen=[]
+    def packed(*args,**kwargs):
+        rows=original(*args,**kwargs);assert isinstance(rows,PackedPeakRecords)
+        seen.append(rows);return rows
+    monkeypatch.setattr(engine.collector,'collect_packed_physical',packed)
+    monkeypatch.setattr(engine.collector,'collect_physical',lambda *a,**k:pytest.fail('Exact forward must not rebuild legacy per-reflection dictionaries'))
+    for factor in [0.,.04]:
+        point=np.linspace(-1.,1.,len(s.radii))*s.radii*factor
+        expected=s.native(point).copy()
+        np.testing.assert_array_equal(engine.evaluate(point),expected)
+    assert len(seen)==2 and engine.qualified and not engine.disabled
 
 
 def test_actual_native_owner_cannot_be_bypassed(tmp_path,monkeypatch):
