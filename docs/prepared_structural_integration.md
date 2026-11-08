@@ -1377,6 +1377,25 @@ retain their existing scheduling and cleanup limits. The longer ceiling is
 not a wall-time guarantee. Real NDIP queue,
 allocation, full-data training and experimental acceptance remain to be tested.
 
+Local, unsegmented preparation on an MPS-capable Mac now uses the same trainer
+on that device automatically. The three physical channels, architecture,
+loss, sampling, candidate labels and holdouts are unchanged. CPU execution
+and the CPU worker-continuation format remain the path for Linux/NDIP jobs,
+segmented workers and imported optimizer continuations. An existing CPU
+checkpoint stays CPU-owned; an existing MPS checkpoint requires its exact
+device/runtime and cannot silently restart with a different optimizer.
+
+MPS working checkpoints commit device random state and the ordinary audited
+CPU optimizer representation together in one bounded atomic numerical file.
+They are not portable library assets. Interruption preserves the previous
+complete checkpoint. Adaptive pooling uses the same native floor/ceiling
+windows when MPS does not support a particular length; maximum-pool ties retain
+the native first-maximum derivative. CPU pooling and portable tensor names
+and shapes are unchanged. Before export, GPU logits are checked against a
+CPU copy on training representatives, and final holdout scores are calculated
+with that actual portable CPU model. These execution and transport checks
+do not qualify structural ranking or candidate pruning.
+
 Large native paired blocks also support lossless byte-plane storage. The
 curve arrays remain exact float64 values; byte shuffling before ZIP compression
 changes no coordinates, modes, counts, amplitudes, masks or precision. Fixed

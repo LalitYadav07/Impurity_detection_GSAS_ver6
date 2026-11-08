@@ -2,6 +2,7 @@
 import numpy as np
 
 from .structural_training_data import batches
+from .structural_training_backend import forward
 
 
 def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None):
@@ -14,7 +15,7 @@ def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=No
         allowed=targets[selected]
         if prior is None:
             with torch.no_grad():
-                logits=model(torch.from_numpy((values-mean)/scale))
+                logits=forward(model,torch.from_numpy((values-mean)/scale))
                 permitted=torch.from_numpy(allowed)
                 loss=torch.logsumexp(logits,1)-torch.logsumexp(logits.masked_fill(~permitted,-torch.inf),1)
             if not torch.isfinite(logits).all() or not torch.isfinite(loss).all():

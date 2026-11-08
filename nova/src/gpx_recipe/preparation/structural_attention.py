@@ -9,6 +9,7 @@ Candidate pruning requires separate scientific qualification.
 def network(class_count, *, attention=True, tokens=128, architecture=None):
     import torch
     from torch import nn
+    from .structural_attention_pool import adaptive
     from .structural_attention_weights import ARCHITECTURE,ARCHITECTURES
     architecture=ARCHITECTURE if architecture is None else architecture
     if (type(class_count) is not int or not 2 <= class_count <= 230
@@ -16,13 +17,16 @@ def network(class_count, *, attention=True, tokens=128, architecture=None):
             or not isinstance(architecture,str) or architecture not in ARCHITECTURES):
         raise ValueError('Explicit bounded three-curve attention architecture required')
 
+    class AveragePool(nn.Module):
+        def forward(self,values):return adaptive(values,tokens)
+
     class ThreeCurveModel(nn.Module):
         def __init__(self):
             super().__init__()
             self.local = nn.Sequential(nn.Conv1d(3, 24, 9, padding=4), nn.GELU(),
                 nn.Conv1d(24, 32, 7, stride=2, padding=3), nn.GELU(),
                 nn.Conv1d(32, 32, 5, stride=2, padding=2), nn.GELU())
-            self.pool = nn.AdaptiveAvgPool1d(tokens)
+            self.pool = AveragePool()
             self.use_attention = attention
             if attention:
                 # All examples share declared physical Q edges. Positions
@@ -54,7 +58,7 @@ def network(class_count, *, attention=True, tokens=128, architecture=None):
                 if not (coverage > 0).any(dim=1).all():
                     raise ValueError('An entirely masked pattern cannot be ranked')
                 values = values.masked_fill((coverage == 0).unsqueeze(1), 0.)
-                mask = nn.functional.adaptive_max_pool1d(coverage.unsqueeze(1), tokens).squeeze(1) == 0
+                mask = adaptive(coverage.unsqueeze(1),tokens,maximum=True).squeeze(1) == 0
             encoded = self.pool(self.local(values))
             if self.use_attention:
                 encoded = self.attention(encoded.transpose(1, 2)+self.position,

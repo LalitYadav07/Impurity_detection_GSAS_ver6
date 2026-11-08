@@ -2,6 +2,7 @@
 import numpy as np
 
 from .structural_training_data import batches
+from .structural_training_backend import forward as training_forward
 
 
 def forward(model,values):
@@ -10,7 +11,7 @@ def forward(model,values):
     captured=[]
     def inspect(module,args):captured.append(args[0])
     handle=model.head[-1].register_forward_pre_hook(inspect)
-    try:logits=model(values)
+    try:logits=training_forward(model,values)
     finally:handle.remove()
     if (len(captured)!=1 or captured[0].ndim!=2 or captured[0].shape[0]!=len(values)
             or not torch.isfinite(captured[0]).all() or not torch.isfinite(logits).all()):

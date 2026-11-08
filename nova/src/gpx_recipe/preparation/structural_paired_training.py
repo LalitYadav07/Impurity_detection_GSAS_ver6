@@ -20,6 +20,7 @@ from .structural_support import fit_batches as fit_support
 from .structural_training_data import feature_rows,batches,channel_statistics
 from .structural_training_counts import describe as describe_counts
 from . import structural_training_checkpoint as checkpoint
+from . import structural_training_backend as backend
 from .structural_readout_health import training_health
 from .structural_training_curriculum import replay_batches,REPLAY_ROWS
 from .tof_kernel_arrays import checksum
@@ -96,20 +97,22 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
     budget=allocation(threads);torch.set_num_threads(budget['workers'])
     mean,scale=channel_statistics(rows,train_rows,minimum_scale=.01,center=False)
     out=Path(destination);began=time.monotonic()
-    run_identity=checkpoint.identity(cohort,rows,targets,split,clean,mean,scale,
+    engine=backend.select(out,segmented=_segment_seconds is not None,transferred=_resume is not None)
+    recovery=engine.checkpoint
+    run_identity=recovery.identity(cohort,rows,targets,split,clean,mean,scale,
         epochs=epochs,seed=seed,workers=budget['workers'])
     if _resume is not None:
         from .structural_training_transfer import restore
         restore(_resume,out,identity=run_identity,epochs=epochs)
 
-    with checkpoint.owned_run(out,run_identity):
+    with recovery.owned_run(out,run_identity):
         def progress(state,**values):
             write_json(out/'progress.json',dict(state=state,dataset=dataset,**values))
 
         rng=np.random.default_rng(seed);visited=np.zeros(len(rows),bool);history=[]
         clean_epochs=min(10,epochs//4);best=None;best_key=None;selected_epoch=None
         warmup_steps=200
-        with torch.random.fork_rng(devices=[]):
+        with torch.random.fork_rng(devices=[]),engine.random_state(seed):
             torch.manual_seed(seed);model=network(len(classes))
             # Keep convolution/readout initialization independent of how many
             # attention parameters consume the random stream. This is the same
@@ -117,9 +120,10 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             torch.manual_seed(seed);control=network(len(classes),attention=False)
             model.local.load_state_dict(control.local.state_dict())
             model.head.load_state_dict(control.head.state_dict());del control
+            model=engine.place(model)
             optimizer=torch.optim.AdamW(model.parameters(),lr=.0003,weight_decay=.0001)
             scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=epochs,eta_min=.00001)
-            recovered=checkpoint.restore(out,run_identity,model,optimizer,scheduler,rng,visited,
+            recovered=recovery.restore(out,run_identity,model,optimizer,scheduler,rng,visited,
                 epochs=epochs,warmup_steps=warmup_steps)
             warmup_done=completed_epochs=0;previous_seconds=0.
             if recovered is not None:
@@ -129,7 +133,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
                 progress('recovering_training',warmup_completed=warmup_done,epochs_completed=completed_epochs)
 
             def save_checkpoint(warmup,completed):
-                checkpoint.save(out,run_identity,model,optimizer,scheduler,rng,visited,
+                recovery.save(out,run_identity,model,optimizer,scheduler,rng,visited,
                     warmup=warmup,epochs=completed,history=history,best=best,selected_epoch=selected_epoch,
                     best_key=best_key,elapsed_seconds=previous_seconds+time.monotonic()-began)
 
@@ -159,7 +163,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             if recovered is None:save_checkpoint(0,0)
 
             def update(selected,values):
-                model.train();logits=model(torch.from_numpy((values-mean)/scale))
+                model.train();logits=backend.forward(model,torch.from_numpy((values-mean)/scale))
                 allowed=torch.from_numpy(targets[selected])
                 objective=(torch.logsumexp(logits,1)-torch.logsumexp(logits.masked_fill(~allowed,-torch.inf),1)).mean()
                 if not torch.isfinite(objective):raise ValueError('Nonfinite attention training objective; no model was published')
@@ -225,15 +229,16 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
             model.load_state_dict(best);model.eval()
             health=require_readout()
+            portable,transport=engine.portable_model(model,rows,representatives,mean,scale)
             progress('calibrating_training_support',selected_epoch=selected_epoch)
             support=fit_support(rows,train_rows,validation_rows,targets,mean,scale,seed=seed)
             # Test labels have no influence on initialization, normalization,
             # sampling, prototypes, stopping or checkpoint selection.
             progress('scoring_holdout',selected_epoch=selected_epoch)
-            test=evaluate(model,rows,targets,test_rows,mean,scale,classes,clean=clean)
-            prior=evaluate(model,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0),clean=clean)
+            test=evaluate(portable,rows,targets,test_rows,mean,scale,classes,clean=clean)
+            prior=evaluate(portable,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0),clean=clean)
         progress('packing_model',selected_epoch=selected_epoch)
-        plane,layout=weights.pack(model)
+        plane,layout=weights.pack(portable)
         arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
             normalization=np.r_[mean.ravel().astype(np.float64),scale.ravel().astype(np.float64),support['limit']],
             classes=classes,reference_features=cohort['reference_features'],support_prototypes=support['prototypes'])
@@ -266,7 +271,9 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             seconds=previous_seconds+time.monotonic()-began,history=history,
             training_recovery=dict(identity=run_identity,warmup_completed_on_resume=warmup_done,
                 epochs_completed_on_resume=completed_epochs,
-                scope='Owned CPU optimizer state, retained locally or restored from a bound worker continuation; checkpoints are not model-library artifacts'))
+                scope=('Owned CPU optimizer state, retained locally or restored from a bound worker continuation; checkpoints are not model-library artifacts'
+                    if engine.kind=='cpu' else 'Owned MPS and CPU optimizer/random state; local exact-device recovery; checkpoints are not model-library artifacts')))
+        if transport is not None:metadata['training_device_transport']=transport
         encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
         if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
         (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)
