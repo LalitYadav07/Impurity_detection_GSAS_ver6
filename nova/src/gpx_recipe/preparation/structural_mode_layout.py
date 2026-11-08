@@ -7,7 +7,7 @@ import copy
 
 import numpy as np
 
-from .structural_mode_coverage import SCHEMA,CONTEXTS_PER_MODE
+from .structural_mode_coverage import SCHEMA,TARGETED_SCHEMA,SCHEMAS as COVERAGE_SCHEMAS,CONTEXTS_PER_MODE
 
 RAW_SCHEMA='radar-structural-ranking-paired-pilot/v2'
 PACKED_SCHEMA='radar-structural-ranking-pairs/v2'
@@ -15,10 +15,11 @@ SCHEMAS={RAW_SCHEMA,PACKED_SCHEMA}
 
 
 def describe(coverage,*,contexts=CONTEXTS_PER_MODE):
-    return dict(schema=SCHEMA,contexts=contexts,labels=list(coverage.labels),
+    extra={} if coverage.strong_targets is None else dict(strong_targets=copy.deepcopy(coverage.strong_targets))
+    return dict(schema=SCHEMA if not extra else TARGETED_SCHEMA,contexts=contexts,labels=list(coverage.labels),
         gauge_axes=list(coverage.gauge_axes),base_examples=coverage.base_examples,
         rays=copy.deepcopy(list(coverage.rays)),rejected_amplitudes=coverage.rejected_amplitudes,
-        maximum_reconstruction_error=coverage.maximum_reconstruction_error)
+        maximum_reconstruction_error=coverage.maximum_reconstruction_error,**extra)
 
 
 def rows(document,count,steps,interval):
@@ -31,8 +32,12 @@ def rows(document,count,steps,interval):
     d=document.get('mode_coverage')
     keys={'schema','contexts','labels','gauge_axes','base_examples','rays',
           'rejected_amplitudes','maximum_reconstruction_error'}
-    if not isinstance(d,dict) or set(d)!=keys or d['schema']!=SCHEMA:
+    targeted=isinstance(d,dict) and d.get('schema')==TARGETED_SCHEMA
+    if targeted:keys.add('strong_targets')
+    if (not isinstance(d,dict) or set(d)!=keys or not isinstance(d['schema'],str)
+            or d['schema'] not in COVERAGE_SCHEMAS):
         raise ValueError('Named-mode pairs require their complete versioned coverage record')
+    ray_steps=steps+int(targeted)
     contexts=d['contexts'];labels=d['labels'];gauges=d['gauge_axes'];rays=d['rays']
     error=d['maximum_reconstruction_error'];rejected=d['rejected_amplitudes']
     if (type(contexts)is not int or not 1<=contexts<=min(32,count)
@@ -46,8 +51,11 @@ def rows(document,count,steps,interval):
             or not isinstance(rays,list)):
         raise ValueError('Invalid complete named-mode inventory or physical reconstruction')
     physical=[i for i in range(len(labels)) if i not in set(gauges)]
-    if len(rays)!=len(physical)*contexts*2 or count*steps+len(rays)*steps>32768:
+    if len(rays)!=len(physical)*contexts*2 or count*steps+len(rays)*ray_steps>32768:
         raise ValueError('Every non-gauge native mode needs all signed complete context rays')
+    if targeted:
+        from .structural_mode_targets import validate_record
+        validate_record(d['strong_targets'],rays)
     cursor=count*steps;attempts=0;parents=[]
     ray_keys={'native_mode','parent','sign','rows','maximum_amplitude','rejected_amplitudes'}
     for axis in physical:
@@ -64,7 +72,7 @@ def rows(document,count,steps,interval):
                         or type(p)is not int or not 0<=p<count
                         or not isinstance(ray['rows'],list)
                         or any(type(i)is not int for i in ray['rows'])
-                        or ray['rows']!=[cursor,cursor+steps]
+                        or ray['rows']!=[cursor,cursor+ray_steps]
                         or type(a)not in (int,float) or not np.isfinite(a) or a<=0
                         or type(tries)is not int or not 0<=tries<100000):
                     raise ValueError('Named-mode ray lost its axis, sign, context or complete amplitude steps')
@@ -73,7 +81,7 @@ def rows(document,count,steps,interval):
                     parent=p;used.add(p)
                 elif p!=parent:
                     raise ValueError('Both signs of a named mode must share the same reviewed parent context')
-                parents.append(p);cursor+=steps;attempts+=tries
+                parents.append(p);cursor+=ray_steps;attempts+=tries
     if attempts!=rejected:
         raise ValueError('Named-mode amplitude rejections must retain their complete accounting')
     identities=[-1];roles=[0];raw_rows=[-1];ends=[]
@@ -81,12 +89,15 @@ def rows(document,count,steps,interval):
     for parent in range(*interval):
         identities.append(parent);roles.append(1);raw_rows.append(-1)
         indices=list(range(parent*steps,(parent+1)*steps))
+        endpoint_offsets=[steps-1]
         for ray_id,p in enumerate(parents):
             if p==parent:
-                first=count*steps+ray_id*steps
-                indices.extend(range(first,first+steps))
+                first=count*steps+ray_id*ray_steps
+                endpoint_offsets.append(len(indices)+steps-1)
+                if targeted:endpoint_offsets.append(len(indices)+ray_steps-1)
+                indices.extend(range(first,first+ray_steps))
         identities.extend([parent]*len(indices));roles.extend([2]*len(indices));raw_rows.extend(indices)
-        # Every retained ray's endpoint gets the original independent check.
-        ends.extend(range(len(identities)-len(indices)+steps-1,len(identities),steps))
+        # Both the old and appended endpoints keep independent native checks.
+        ends.extend(len(identities)-len(indices)+offset for offset in endpoint_offsets)
     return (np.asarray(identities,np.int64),np.asarray(roles,np.int8),
             np.asarray(raw_rows,np.int64),np.asarray(ends,np.int64))

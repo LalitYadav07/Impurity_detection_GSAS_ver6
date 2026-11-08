@@ -52,10 +52,11 @@ def _dimensions(request, rows, bins, mode_dimensions, cell_dimensions,mode_cover
     size = paired_array_bytes(rows, bins, mode_dimensions, cell_dimensions)
     expected=1+(last-first)*(settings['steps']+1)
     if 'mode_coverage' in settings:
-        from .structural_mode_coverage import SCHEMA as COVERAGE,CONTEXTS_PER_MODE
+        from .structural_mode_coverage import SCHEMAS as COVERAGE,TARGETED_SCHEMA,CONTEXTS_PER_MODE
         c=mode_coverage_rows
         fields={'schema','native_modes','gauge_modes','contexts','rays','selected_rays'}
-        if (not isinstance(c,dict) or set(c)!=fields or c['schema']!=COVERAGE
+        if (not isinstance(c,dict) or set(c)!=fields or c['schema']!=settings['mode_coverage']
+                or c['schema'] not in COVERAGE
                 or any(type(c[k])is not int for k in fields-{'schema'})
                 or not 0<=c['gauge_modes']<=c['native_modes']<=2048
                 or c['native_modes']-c['gauge_modes']<mode_dimensions
@@ -64,7 +65,7 @@ def _dimensions(request, rows, bins, mode_dimensions, cell_dimensions,mode_cover
                 or not 0<=c['selected_rays']<=min(c['rays'],2*(last-first)*(c['native_modes']-c['gauge_modes']))
                 or c['selected_rays']%2):
             raise ValueError('Native sizing requires complete signed mode-ray counts')
-        expected+=c['selected_rays']*settings['steps']
+        expected+=c['selected_rays']*(settings['steps']+int(c['schema']==TARGETED_SCHEMA))
     elif mode_coverage_rows is not None:
         raise ValueError('Legacy paired sizing cannot claim additional mode rays')
     if (type(rows)is not int or rows != expected

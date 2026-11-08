@@ -7,6 +7,8 @@ from .structural_mode_directions import from_source as mode_directions
 from .structural_sampling import TrajectorySamples,_interval,physical_grams
 
 SCHEMA='radar-additive-native-mode-coverage/v1'
+TARGETED_SCHEMA='radar-additive-native-mode-coverage/v2'
+SCHEMAS=frozenset({SCHEMA,TARGETED_SCHEMA})
 CONTEXTS_PER_MODE=3
 
 
@@ -19,6 +21,7 @@ class ModeCoverage:
     rays: tuple
     rejected_amplitudes: int
     maximum_reconstruction_error: float
+    strong_targets: dict | None = None
 
 
 def supplement(source,base,*,seed,steps=4,contexts=CONTEXTS_PER_MODE,

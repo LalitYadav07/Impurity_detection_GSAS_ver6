@@ -7,7 +7,7 @@ G=pytest.importorskip('GSASII.GSASIIscriptable')
 from GSASII import GSASIIlattice as L
 from gpx_recipe.preparation.structural_sampling import from_source
 from gpx_recipe.preparation.structural_mode_directions import from_source as native_directions
-from gpx_recipe.preparation.structural_mode_coverage import supplement
+from gpx_recipe.preparation.structural_mode_coverage import supplement,SCHEMA,TARGETED_SCHEMA
 from gpx_recipe.preparation.structural_parent_reference import ParentMetricSpace,rotations
 from gpx_recipe.preparation.structural_conditioning import ParentConditioner,condition
 from gpx_recipe.structural_live.optimization.physical_prior_geometry import native_reciprocal_matrix
@@ -16,7 +16,8 @@ from test_native_profile_capture import native_source
 
 
 @pytest.mark.parametrize('kind',['PNC','PNT'])
-def test_named_native_points_keep_original_conditioned_rays_and_exact_tof_profiles(tmp_path,kind):
+@pytest.mark.parametrize('targeted',[False,True])
+def test_named_native_points_keep_original_conditioned_rays_and_exact_tof_profiles(tmp_path,kind,targeted):
     original,source=native_source(tmp_path/'input',kind)
     parent=G.G2Project(gpxfile=str(original)).phase(0)
     space=ParentMetricSpace(native_reciprocal_matrix(L.cell2A(parent.data['General']['Cell'][1:7])),
@@ -29,6 +30,10 @@ def test_named_native_points_keep_original_conditioned_rays_and_exact_tof_profil
         trajectory_feasible=context.feasible)
     coverage=supplement(source,base,seed=19,steps=4,contexts=3,
         displacement_range=(.001,.004),trajectory_feasible=context.feasible)
+    if targeted:
+        from gpx_recipe.preparation.structural_mode_targets import append
+        coverage=append(source,coverage,context)
+        assert len(coverage.strong_targets['rays'])==len(coverage.rays)
     directions=native_directions(source)
     assert len(coverage.rays)==6*np.count_nonzero(~directions.gauge_only)
     assert directions.maximum_reconstruction_error<=1e-10
@@ -59,7 +64,8 @@ def test_named_native_points_keep_original_conditioned_rays_and_exact_tof_profil
 
 
 @pytest.mark.parametrize('kind',['PNC','PNT'])
-def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_original_points(tmp_path,kind):
+@pytest.mark.parametrize('policy',[SCHEMA,TARGETED_SCHEMA])
+def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_original_points(tmp_path,kind,policy):
     from gpx_recipe.preparation.structural_pairs import generate
     from gpx_recipe.preparation.structural_mode_coverage import SCHEMA
     from gpx_recipe.preparation.structural_paired_blocks import read,pack_block
@@ -76,7 +82,7 @@ def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_or
     options=dict(seed=1947,parent_seed=8341,trajectories=4,steps=2,parent_relative_range=(.0001,.0005))
     generate(dict(request,destination=str(tmp_path/'old')),**options)
     old=read(tmp_path/'old')
-    detail=generate(dict(request,destination=str(tmp_path/'new')),mode_coverage=SCHEMA,**options)
+    detail=generate(dict(request,destination=str(tmp_path/'new')),mode_coverage=policy,**options)
     new=read(tmp_path/'new');packed=pack_block(tmp_path/'new',tmp_path/'packed')
     assert detail['schema']==layout.RAW_SCHEMA and packed.manifest['schema']==layout.PACKED_SCHEMA
     assert detail['mode_coverage']['rays'] and detail['parent_controls_shape_qualified']
@@ -89,12 +95,12 @@ def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_or
             np.testing.assert_array_equal(actual,expected)
     for name in new.arrays:np.testing.assert_array_equal(packed.arrays[name],new.arrays[name])
     shard=tmp_path/'shard'
-    part=generate(dict(request,destination=str(shard)),mode_coverage=SCHEMA,trajectory_slice=[1,3],**options)
+    part=generate(dict(request,destination=str(shard)),mode_coverage=policy,trajectory_slice=[1,3],**options)
     fragment=read(shard);t=new.arrays['trajectory'];selected=(t==-1)|((t>=1)&(t<3))
     for name,a in new.arrays.items():
         np.testing.assert_array_equal(fragment.arrays[name],a[selected] if name not in {'q','background'} else a)
     extra=sum(1<=r['parent']<3 for r in part['mode_coverage']['rays'])
-    assert part['independent_native_checks']==(1+2*2+extra if kind=='PNT' else 0)
+    assert part['independent_native_checks']==(1+2*2+extra*(1+int(policy==TARGETED_SCHEMA)) if kind=='PNT' else 0)
     # The same producer runs through the ordinary scientific-worker contract,
     # with exact row accounting before the scheduler releases result space.
     from gpx_recipe.preparation.worker import execute
@@ -103,7 +109,7 @@ def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_or
     from gpx_recipe.symmetry.compiler import package_signature
     settings=dict(request['settings'],seed=options['seed'],parent_seed=options['parent_seed'],
         parent_relative_metric_range=list(options['parent_relative_range']),representation=REPRESENTATION,
-        trajectories=4,steps=2,trajectory_slice=[1,3],mode_coverage=SCHEMA)
+        trajectories=4,steps=2,trajectory_slice=[1,3],mode_coverage=policy)
     worker=dict(request,settings=settings,destination=str(tmp_path/'worker'))
     result=execute('structural-examples',worker)
     published=read(Path(result['output']),names='examples');size=read_size(worker,package_signature())

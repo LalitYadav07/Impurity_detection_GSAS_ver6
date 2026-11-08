@@ -125,10 +125,17 @@ def test_only_valid_owned_small_sizes_unlock_granted_workers(tmp_path,monkeypatc
                 # Even a byte-valid, matching input hint is not a measurement
                 # from the newly created native output namespace.
                 write_json(Path(request['plan']).parent/'uploaded-hints'/task['entry']/native_size.NAME,record)
+            elif report=='foreign':
+                # Publish a foreign measurement atomically. Publishing a
+                # valid one first and rewriting it races the scheduler: it
+                # can correctly admit that first record and then reject its
+                # later mutation. That distinct case has its own test below.
+                dimensions=measured(payload)
+                write_json(root/native_size.NAME,dict(schema=native_size.SCHEMA,
+                    request_sha256='f'*64,implementation_sha256=package_signature(),
+                    **dimensions,reservation_bytes=dimensions['numeric_bytes']+native_size.OVERHEAD))
             elif report!='absent':
                 native_size.publish(payload,**measured(payload,modes=1100000 if report=='large' else None))
-                if report=='foreign':
-                    path=root/native_size.NAME;record=json.loads(path.read_text());record['request_sha256']='f'*64;write_json(path,record)
             if report=='valid':barrier.wait(timeout=5)
             else:time.sleep(.25)
             for name in ('examples.json','examples.npz'):shutil.copy2(template/name,root/name)

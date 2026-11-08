@@ -1550,9 +1550,9 @@ A 0.02 relative-distance change is a descriptive strong-distortion threshold.
 It is not a universal diffraction detection limit. Bond-angle changes can
 occur without a large nearest-distance change, and scattering contrast,
 resolution and noise affect the observed signature. This report neither
-removes weak examples nor changes their symmetry labels. It does not yet
-enforce a two-percent sampling target or provide a diffraction-detectability
-qualification. Those require separate coverage and observation diagnostics.
+removes weak examples nor changes their symmetry labels. The distance report
+does not itself provide a diffraction-detectability qualification. That needs
+separate coverage and observation diagnostics.
 
 For fixed-cell displacement rays, the report helper also solves the exact
 quadratic distance equations for a first 0.021 relative-distance target,
@@ -1561,3 +1561,33 @@ geometry again without rendering diffraction. The proposal remains subject
 to the caller's original coordinate box and chemistry checks. Failure to find
 an admissible proposal cannot remove that mode or imply that its diffraction
 signature is undetectable. This proposal helper is not yet the default sampler.
+
+The paired producer also supports the internal
+`radar-additive-native-mode-coverage/v2` contract. It retains every original
+mixed and named-mode point and appends one endpoint to each signed mode/context
+ray. An admissible contact target is checked against the matching parent cell,
+the original coordinate box and the same native chemistry. If the original
+endpoint is already strong, or a stronger admissible point cannot be found,
+the extra row repeats that endpoint with an explicit reason. Repeated rows
+are not independent examples; ordinary cohort deduplication retains their
+shared physical lineage. Neither the old endpoint nor a rare or weak mode is
+removed. Both original and appended endpoints retain independent native
+profile checks, and resource reservations count the complete enlarged shard.
+The library default still awaits full generation, capacity and accuracy
+qualification; saved version-1 requests keep their original layouts.
+
+## Exact unit-peak reuse across preparation points
+
+The shared native TOF forward path may retain one previous unit-peak plane
+inside its existing memory budget. Reuse requires bit-identical original
+grids, parameters, windows and pointers, together with unchanged native binary,
+wrapper, process and arithmetic controls. Every structure factor, reflection
+intensity and background is recomputed. Reflections keep their original
+summation order, including zero and cancelling intensities. Cell or profile
+changes that do not match exactly use fresh native peaks.
+
+The plane is disposable: it is evicted before it can reduce scalar collection
+capacity or turn a previously viable batch into a workspace fallback. This
+is one automatic optimization of the existing engine, not a separate fitting
+method, an interpolation table or a user-selected accuracy setting. Independent
+native verification remains in the generation workflow.

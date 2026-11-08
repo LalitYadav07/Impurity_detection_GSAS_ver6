@@ -53,10 +53,10 @@ def validate_examples(request):
             or not 0 <= interval[0] < interval[1] <= settings['trajectories']):
         raise ValueError('Select a nonempty slice of the complete structural trajectory portfolio')
     settings['trajectory_slice'] = list(interval)
-    from .structural_mode_coverage import SCHEMA as MODE_COVERAGE
+    from .structural_mode_coverage import SCHEMAS as MODE_COVERAGE
     coverage=settings['mode_coverage']
     if coverage is None:settings.pop('mode_coverage')
-    elif coverage!=MODE_COVERAGE or settings['representation']!=REPRESENTATION:
+    elif not isinstance(coverage,str) or coverage not in MODE_COVERAGE or settings['representation']!=REPRESENTATION:
         raise ValueError('Named-mode coverage requires its declared paired sampling version')
     if settings['representation'] is None:
         if any(settings[k] is not None for k in PAIRED_FIELDS[1:]):

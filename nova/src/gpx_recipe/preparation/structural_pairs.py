@@ -41,8 +41,8 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     if trajectories*steps>32768:
         raise ValueError('Generate the paired trajectories in a smaller complete portfolio')
     from . import structural_mode_layout as named
-    from .structural_mode_coverage import supplement,SCHEMA as COVERAGE_SCHEMA,CONTEXTS_PER_MODE
-    if mode_coverage not in (None,COVERAGE_SCHEMA):
+    from .structural_mode_coverage import supplement,TARGETED_SCHEMA,SCHEMAS,CONTEXTS_PER_MODE
+    if mode_coverage is not None and (not isinstance(mode_coverage,str) or mode_coverage not in SCHEMAS):
         raise ValueError('Use the complete declared native-mode coverage version')
     interval = (0, trajectories) if trajectory_slice is None else trajectory_slice
     if (not isinstance(interval, (tuple, list)) or len(interval) != 2
@@ -89,6 +89,9 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         contexts=min(CONTEXTS_PER_MODE,trajectories)
         coverage=supplement(source,original,seed=seed,steps=steps,contexts=contexts,
             trajectory_feasible=conditioning.feasible)
+        if mode_coverage==TARGETED_SCHEMA:
+            from .structural_mode_targets import append
+            coverage=append(source,coverage,conditioning)
         sampling=coverage.samples
         coverage_record=named.describe(coverage,contexts=contexts)
     else:sampling=original
@@ -113,7 +116,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         if not callable(report_size):raise TypeError('Native output sizing requires an internal callback')
         extra={}
         if coverage is not None:
-            extra['mode_coverage_rows']=dict(schema=COVERAGE_SCHEMA,
+            extra['mode_coverage_rows']=dict(schema=mode_coverage,
                 native_modes=len(coverage.labels),gauge_modes=len(coverage.gauge_axes),
                 contexts=contexts,rays=len(coverage.rays),
                 selected_rays=sum(interval[0]<=ray['parent']<interval[1] for ray in coverage.rays))
