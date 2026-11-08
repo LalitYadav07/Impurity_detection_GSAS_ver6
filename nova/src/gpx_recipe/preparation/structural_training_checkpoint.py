@@ -22,12 +22,28 @@ from ..live.array_limits import validate_npz_bytes
 from ..symmetry.compiler import package_signature
 from . import structural_attention_weights as weights
 from .structural_model_files import MAX_BYTES,MAX_METADATA_BYTES
-from .structural_training_data import batches
+from .structural_training_data import feature_digest
 from .tof_kernel_arrays import array_identity,checksum,read_bounded
 
 SCHEMA='radar-owned-attention-training-checkpoint/v1'
+REPLAY_SCHEMA='radar-owned-attention-training-checkpoint/v2'
 ARRAYS={'parameters','best_parameters','first_moment','second_moment','steps',
         'initialized','visited','torch_rng'}
+
+
+def checked_row_layout(metadata, visited):
+    """Legacy checkpoints keep their limit; large rows need the new layout."""
+    from .structural_training_data import MAX_ROWS
+    from . import structural_replay_limits as limits
+    if visited.dtype!=bool or visited.ndim!=1 or not len(visited):
+        raise ValueError('Invalid checkpoint row visitation inventory')
+    if metadata.get('schema')==SCHEMA:
+        if len(visited)>MAX_ROWS or 'row_layout' in metadata:
+            raise ValueError('Legacy checkpoint exceeds its bounded row inventory')
+        return None
+    if metadata.get('schema')!=REPLAY_SCHEMA:
+        raise ValueError('Unsupported training checkpoint row schema')
+    return limits.validate(metadata.get('row_layout'),rows=len(visited))
 
 
 def identity(cohort,rows,targets,split,clean,mean,scale,*,epochs,seed,workers):
@@ -39,11 +55,15 @@ def identity(cohort,rows,targets,split,clean,mean,scale,*,epochs,seed,workers):
         'augmented_examples','ambiguous_examples','channels','representation','reference_kind','partition_method')}
     metadata.update(implementation=package_signature(),architecture=weights.ARCHITECTURE,
         torch_version=str(torch.__version__),numpy_version=np.__version__,epochs=epochs,seed=seed,workers=workers)
+    from .structural_training_data import MAX_ROWS
+    if len(rows)>MAX_ROWS:metadata['row_layout']=rows.row_layout
     for chunk in json.JSONEncoder(sort_keys=True,separators=(',',':'),allow_nan=False).iterencode(metadata):
         digest.update(chunk.encode())
     for value in (targets,split,clean,mean,scale,cohort['classes'],cohort['q_edges'],cohort['reference_features']):
         digest.update(value.dtype.str.encode());digest.update(str(value.shape).encode());digest.update(value.tobytes())
-    for _,values in batches(rows,np.arange(len(rows)),size=64):digest.update(values.tobytes())
+    digest.update(b'complete-feature-stream-sha256/v1\0')
+    digest.update(rows.dtype.str.encode());digest.update(str(rows.shape).encode())
+    digest.update(bytes.fromhex(feature_digest(rows)))
     return digest.hexdigest()
 
 
@@ -86,7 +106,7 @@ def _state(model,plane):
 
 
 def save(directory,run_identity,model,optimizer,scheduler,rng,visited,*,warmup,epochs,
-         history,best,selected_epoch,best_key,elapsed_seconds):
+         history,best,selected_epoch,best_key,elapsed_seconds,row_layout=None):
     import torch
     parameters,layout=weights.pack(model);named=list(model.named_parameters())
     if list(model.state_dict())!=[name for name,_ in named]:
@@ -104,6 +124,8 @@ def save(directory,run_identity,model,optimizer,scheduler,rng,visited,*,warmup,e
         warmup_completed=warmup,epochs_completed=epochs,history=history,selected_epoch=selected_epoch,
         best_key=best_key,numpy_rng=rng.bit_generator.state,optimizer_groups=optimizer.state_dict()['param_groups'],
         scheduler=scheduler.state_dict(),elapsed_seconds=elapsed_seconds)
+    if row_layout is not None:metadata.update(schema=REPLAY_SCHEMA,row_layout=row_layout.copy())
+    checked_row_layout(metadata,arrays['visited'])
     encoded=json.dumps(metadata,separators=(',',':'),allow_nan=False).encode()
     if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Training checkpoint metadata exceeds its bound')
     arrays['metadata']=np.frombuffer(encoded,np.uint8)
@@ -118,7 +140,7 @@ def save(directory,run_identity,model,optimizer,scheduler,rng,visited,*,warmup,e
     finally:Path(name).unlink(missing_ok=True)
 
 
-def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epochs,warmup_steps):
+def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epochs,warmup_steps,row_layout=None):
     import torch
     path=Path(directory)/'training-checkpoint.npz'
     if not path.exists() and not path.is_symlink():return None
@@ -130,8 +152,10 @@ def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epoch
     if encoded.dtype!=np.uint8 or encoded.ndim!=1 or len(encoded)>MAX_METADATA_BYTES:
         raise ValueError('Invalid training checkpoint metadata')
     metadata=json.loads(encoded.tobytes())
+    if not isinstance(metadata,dict) or checked_row_layout(metadata,arrays['visited'])!=row_layout:
+        raise ValueError('Training checkpoint differs from the current row layout')
     current,layout=weights.pack(model);named=list(model.named_parameters());count=len(named)
-    if (not isinstance(metadata,dict) or metadata.get('schema')!=SCHEMA or metadata.get('identity')!=run_identity
+    if (not isinstance(metadata,dict) or metadata.get('identity')!=run_identity
             or metadata.get('layout')!=layout or metadata.get('arrays_sha256')!=array_identity(arrays)
             or any(arrays[k].dtype!=np.float32 or arrays[k].shape!=current.shape or not np.isfinite(arrays[k]).all()
                    for k in ('parameters','first_moment','second_moment'))

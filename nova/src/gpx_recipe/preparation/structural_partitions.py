@@ -5,9 +5,18 @@ same group identity. Noise siblings cannot create independent class support.
 This assignment is for new three-curve cohorts, never a repair of test scores.
 """
 import numpy as np
+from . import structural_replay_limits as limits
 
 
 def partition(groups, labels, *, seed=69271):
+    """Legacy bounded row API; keep its existing admission limit."""
+    groups = list(groups)
+    if not 3 <= len(groups) <= 131072:
+        raise ValueError('Bounded physical groups and compatible class labels required')
+    return partition_rows(groups, labels, seed=seed)
+
+
+def partition_rows(groups, labels, *, seed=69271):
     """Keep 15% validation/test groups and require every class in each fold.
 
     Deterministic greedy set coverage preserves at least one independent
@@ -16,9 +25,9 @@ def partition(groups, labels, *, seed=69271):
     """
     groups=list(groups);labels=np.asarray(labels)
     if (type(seed) is not int or not 0<=seed<2**32
-            or not 3<=len(groups)<=131072 or labels.ndim!=2
+            or not 3<=len(groups)<=limits.MAX_ROWS or labels.ndim!=2
             or labels.shape[0]!=len(groups) or not 2<=labels.shape[1]<=230
-            or labels.dtype!=bool or not labels.any(1).all()
+            or labels.dtype!=bool or labels.nbytes>limits.MAX_LABEL_BYTES or not labels.any(1).all()
             or any(not isinstance(g,str) or not 1<=len(g)<=500 for g in groups)):
         raise ValueError('Bounded physical groups and compatible class labels required')
     unique=sorted(set(groups));n=len(unique)

@@ -1549,6 +1549,24 @@ qualification certificate. The existing feature-cache readers and row limits
 remain unchanged. Automatic worker selection still awaits the complete larger
 cohort, restart/transport and lifecycle measurements.
 
+The seekable layout separately bounds logical rows at 1,048,576, its typed
+selector/provenance/hash index at 96 MiB and its complete compatible-label plane
+at 64 MiB. Dense NPY and earlier count/checkpoint formats retain their 131,072-row
+limit. Larger count receipts use version 3 with the exact row-layout dimensions;
+larger numerical checkpoints use version 2 with the same layout. The ordinary
+CPU tensor/optimizer audit also checks the MPS envelope. Split selection remains
+the same grouped class-coverage algorithm, with at most 4,096 independent groups.
+Noisy siblings do not create new independent trajectories.
+
+Assembly also records the SHA256 of the actual complete feature stream. Recovery
+identity uses this same stream digest for dense, file-backed and seekable rows;
+replay can reuse its captured digest after checking its source and owned native
+bank for mutations. This avoids regenerating the whole cohort just to bind a
+checkpoint. Training reads still verify each reconstructed row and its declared
+observation provenance. This digest is integrity evidence, not model accuracy or
+native scientific qualification. Multi-packet Galaxy staging and complete cold
+continuation timing remain required before automatic large-cohort deployment.
+
 ## Structural size and pattern detectability are different diagnostics
 
 `structural_neighbor_change` reports changes in the fixed parent nearest-distance

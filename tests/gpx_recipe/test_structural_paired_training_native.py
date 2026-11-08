@@ -87,6 +87,7 @@ def test_bounded_and_dense_training_have_identical_parameters_and_holdout_scores
         second=train(disk,tmp_path/'disk-model',epochs=1,threads=1)
     finally:disk['features'].close()
     assert first['weights_sha256']==second['weights_sha256']
+    assert (tmp_path/'dense-model/training-identity.json').read_bytes()==(tmp_path/'disk-model/training-identity.json').read_bytes()
     assert first['test']==second['test'] and first['prior_only_test']==second['prior_only_test']
     assert first['curriculum']==second['curriculum']
     assert second['feature_storage']==storage

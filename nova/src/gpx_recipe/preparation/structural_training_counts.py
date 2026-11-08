@@ -6,12 +6,20 @@ denominators. Keep them explicit in portable receipts and lightweight UI reads.
 
 SCHEMA='radar-structural-training-counts/v1'
 COVERAGE_SCHEMA='radar-structural-training-counts/v2'
+REPLAY_SCHEMA='radar-structural-training-counts/v3'
 PARTITIONS=('train','validation','test')
 
 
 def describe(groups,split,clean,*,generated_pairs,simulated_observations,
-             compatible_labels=None,classes=None):
-    if (not isinstance(groups,list) or not groups or len(groups)>131072
+             compatible_labels=None,classes=None,row_layout=None):
+    from . import structural_replay_limits as limits
+    if not isinstance(groups,list) or not groups:
+        raise ValueError('Complete unique feature rows and physical trajectory assignments required')
+    if row_layout is not None:limits.validate(row_layout,rows=len(groups))
+    large=len(groups)>131072
+    if (large and (row_layout is None or classes is None)):
+        raise ValueError('Large training counts need the bounded native-row layout and complete family inventory')
+    if (not isinstance(groups,list) or not groups or len(groups)>(limits.MAX_ROWS if large else 131072)
             or len(split)!=len(groups) or len(clean)!=len(groups)
             or any(not isinstance(g,str) or not g or len(g)>500 for g in groups)
             or any(type(code) is not int or code not in (0,1,2) for code in split)
@@ -37,6 +45,7 @@ def describe(groups,split,clean,*,generated_pairs,simulated_observations,
         raise ValueError('Family coverage needs both native classes and compatible labels')
     if classes is not None:
         result.update(schema=COVERAGE_SCHEMA,family_coverage=_families(groups,split,clean,compatible_labels,classes))
+    if large:result.update(schema=REPLAY_SCHEMA,row_layout=row_layout.copy())
     return validate(result)
 
 
@@ -70,31 +79,38 @@ def _families(groups,split,clean,labels,classes):
 def validate(value):
     keys={'schema','generated_pairs','simulated_observations_generated','unique_rows',
           'unique_clean_pairs','unique_simulated_only_rows','trajectory_groups','partitions'}
-    covered=isinstance(value,dict) and value.get('schema')==COVERAGE_SCHEMA
-    if (not isinstance(value,dict) or set(value)!=keys|({'family_coverage'} if covered else set())
-            or not isinstance(value.get('schema'),str) or value['schema'] not in {SCHEMA,COVERAGE_SCHEMA}
+    large=isinstance(value,dict) and value.get('schema')==REPLAY_SCHEMA
+    covered=isinstance(value,dict) and isinstance(value.get('schema'),str) and value['schema'] in {COVERAGE_SCHEMA,REPLAY_SCHEMA}
+    from . import structural_replay_limits as limits
+    maximum=limits.MAX_ROWS if large else 131072
+    if (not isinstance(value,dict) or set(value)!=keys|({'family_coverage'} if covered else set())|({'row_layout'} if large else set())
+            or not isinstance(value.get('schema'),str) or value['schema'] not in {SCHEMA,COVERAGE_SCHEMA,REPLAY_SCHEMA}
             or any(type(value[k]) is not int or not 0<=value[k]<=10**9
                    for k in keys-{'schema','partitions'})
             or not isinstance(value['partitions'],dict) or set(value['partitions'])!=set(PARTITIONS)):
         raise ValueError('Invalid structural training-count receipt')
+    if large:
+        limits.validate(value['row_layout'],rows=value['unique_rows'])
+        if value['trajectory_groups']>4096:
+            raise ValueError('Replay counts exceed the independent-group partition inventory')
     rows=clean=simulated=groups=0
     for name in PARTITIONS:
         part=value['partitions'][name]
         if (not isinstance(part,dict) or set(part)!={'rows','clean_pairs','simulated_only_rows','trajectory_groups'}
-                or any(type(n) is not int or not 0<=n<=131072 for n in part.values())
+                or any(type(n) is not int or not 0<=n<=maximum for n in part.values())
                 or part['rows']!=part['clean_pairs']+part['simulated_only_rows']
                 or not 0<part['trajectory_groups']<=part['clean_pairs']<=part['rows']):
             raise ValueError('Invalid independent training/validation/test counts')
         rows+=part['rows'];clean+=part['clean_pairs'];simulated+=part['simulated_only_rows'];groups+=part['trajectory_groups']
-    if (not 0<rows<=131072 or value['unique_rows']!=rows or value['unique_clean_pairs']!=clean
+    if (not 0<rows<=maximum or value['unique_rows']!=rows or value['unique_clean_pairs']!=clean
             or value['unique_simulated_only_rows']!=simulated or value['trajectory_groups']!=groups
             or value['generated_pairs']<clean or value['simulated_observations_generated']<simulated):
         raise ValueError('Structural training-count totals are inconsistent')
-    if covered:_validate_families(value['family_coverage'],value['partitions'])
+    if covered:_validate_families(value['family_coverage'],value['partitions'],maximum=maximum)
     return value
 
 
-def _validate_families(value,parts):
+def _validate_families(value,parts,*,maximum=131072):
     if (not isinstance(value,dict) or set(value)!={'classes','partitions','membership'}
             or value['membership']!='compatible_native_labels_nonadditive'
             or not isinstance(value['classes'],list) or not 2<=len(value['classes'])<=230
@@ -109,7 +125,7 @@ def _validate_families(value,parts):
         for cell in part.values():
             if (not isinstance(cell,dict) or set(cell)!={'rows','clean_pairs','simulated_only_rows',
                     'trajectory_groups','clean_trajectory_groups'}
-                    or any(type(v)is not int or not 0<=v<=131072 for v in cell.values())
+                    or any(type(v)is not int or not 0<=v<=maximum for v in cell.values())
                     or cell['rows']!=cell['clean_pairs']+cell['simulated_only_rows']
                     or any(cell[k]>total[k] for k in ('rows','clean_pairs','simulated_only_rows','trajectory_groups'))
                     or not 0<=cell['clean_trajectory_groups']<=min(cell['trajectory_groups'],cell['clean_pairs'])

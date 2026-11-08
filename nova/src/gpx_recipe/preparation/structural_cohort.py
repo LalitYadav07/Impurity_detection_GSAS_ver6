@@ -237,14 +237,18 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
     if seen != len(metadata):
         raise ValueError('Structural inputs changed while building the feature cache')
     classes = sorted(set().union(*(o['labels'] for r in records for o in r['origins'])))
+    if paired:
+        from .structural_replay_limits import MAX_LABEL_BYTES
+        if len(records)*len(classes)>MAX_LABEL_BYTES:
+            raise ValueError('Complete paired label inventory exceeds its bounded metadata budget')
     indices = {c: i for i, c in enumerate(classes)}
     targets = np.zeros((len(records), len(classes)), bool)
     for i, record in enumerate(records):
         targets[i, [indices[c] for o in record['origins'] for c in o['labels']]] = True
     physical_groups=[find(r['group']) for r in records]
     if paired:
-        from .structural_partitions import partition
-        assignments=partition(physical_groups,targets,seed=split_seed)
+        from .structural_partitions import partition_rows
+        assignments=partition_rows(physical_groups,targets,seed=split_seed)
     else:
         assignments=partition_trajectories(physical_groups,seed=split_seed)
     split = np.asarray([{'train': 0, 'validation': 1, 'test': 2}[assignments[find(r['group'])]]

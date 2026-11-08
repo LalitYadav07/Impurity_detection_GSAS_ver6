@@ -17,7 +17,7 @@ from .structural_attention_metrics import evaluate
 from .structural_model_files import MAX_BYTES,MAX_METADATA_BYTES
 from .structural_ranker import _class_routes
 from .structural_support import fit_batches as fit_support
-from .structural_training_data import feature_rows,batches,channel_statistics
+from .structural_training_data import feature_rows,batches,channel_statistics,MAX_ROWS
 from .structural_training_counts import describe as describe_counts
 from . import structural_training_checkpoint as checkpoint
 from . import structural_training_backend as backend
@@ -87,10 +87,11 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             or not np.isfinite(_segment_seconds) or _segment_seconds<=0)):
         raise ValueError('An internal training segment needs a positive finite work budget')
     rows,targets,classes,split,clean,routes=_inputs(cohort)
+    row_layout=rows.row_layout if len(rows)>MAX_ROWS else None
     dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
         generated_pairs=cohort['original_examples'],
         simulated_observations=cohort.get('augmented_examples',0),
-        compatible_labels=(row.tolist() for row in targets),classes=classes.tolist())
+        compatible_labels=(row.tolist() for row in targets),classes=classes.tolist(),row_layout=row_layout)
     train_rows,validation_rows,test_rows=(np.flatnonzero(split==code) for code in range(3))
     clean_rows=train_rows[clean[train_rows]]
     representatives=_representatives(rows,clean_rows,targets,classes)
@@ -124,7 +125,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             optimizer=torch.optim.AdamW(model.parameters(),lr=.0003,weight_decay=.0001)
             scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=epochs,eta_min=.00001)
             recovered=recovery.restore(out,run_identity,model,optimizer,scheduler,rng,visited,
-                epochs=epochs,warmup_steps=warmup_steps)
+                epochs=epochs,warmup_steps=warmup_steps,row_layout=row_layout)
             warmup_done=completed_epochs=0;previous_seconds=0.
             if recovered is not None:
                 warmup_done=recovered['warmup'];completed_epochs=recovered['epochs']
@@ -135,7 +136,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             def save_checkpoint(warmup,completed):
                 recovery.save(out,run_identity,model,optimizer,scheduler,rng,visited,
                     warmup=warmup,epochs=completed,history=history,best=best,selected_epoch=selected_epoch,
-                    best_key=best_key,elapsed_seconds=previous_seconds+time.monotonic()-began)
+                    best_key=best_key,elapsed_seconds=previous_seconds+time.monotonic()-began,row_layout=row_layout)
 
             def continuation(warmup,completed,*,next_seconds=0.):
                 # Budget changes only job boundaries, never the complete

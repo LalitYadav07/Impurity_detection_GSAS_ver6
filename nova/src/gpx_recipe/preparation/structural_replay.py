@@ -21,7 +21,8 @@ from .structural_augmentation import Controls, ObservationAugmenter
 from .structural_cohort import assemble_into
 from .structural_features import ThreeCurveProjector
 from .structural_paired_blocks import read, filenames
-from .structural_training_data import FeatureRows, MAX_ROWS, MAX_BATCH_ROWS, MAX_STORE_BYTES, _PERMIT
+from .structural_training_data import FeatureRows, MAX_BATCH_ROWS, MAX_STORE_BYTES, _PERMIT
+from . import structural_replay_limits as limits
 
 MAX_NATIVE_CACHE_BYTES = 64*1024**2
 
@@ -38,15 +39,16 @@ def _file_state(paths):
 
 class _RowHashes:
     def reserve(self, count, bins):
-        if not 1 <= count <= MAX_ROWS:
-            raise ValueError('Replay rows exceed the existing bounded cohort inventory')
-        self.capacity = count; self.bins = bins; self.hashes = []
+        if not 1 <= count <= limits.MAX_ROWS or count*limits.INDEX_BYTES_PER_ROW > limits.MAX_INDEX_BYTES:
+            raise ValueError('Replay rows exceed the bounded seekable index inventory')
+        self.capacity = count; self.bins = bins; self.hashes = []; self.digest = hashlib.sha256()
 
     def append(self, feature):
         if (feature.shape != (3, self.bins) or feature.dtype != np.float32
                 or not np.isfinite(feature).all() or len(self.hashes) >= self.capacity):
             raise ValueError('Invalid or excess replay feature row')
-        self.hashes.append(hashlib.sha256(feature.tobytes()).digest())
+        raw=feature.tobytes()
+        self.hashes.append(hashlib.sha256(raw).digest()); self.digest.update(raw)
 
     def finish(self, rows):
         if rows != len(self.hashes):
@@ -75,7 +77,7 @@ class _NativeArrays:
             if os.pread(self.stream.fileno(), size, offset) != raw:
                 raise ValueError('Native array digest collision cannot merge source values')
             return index
-        if self.size+len(raw) > MAX_STORE_BYTES or len(self.records) >= 5*MAX_ROWS:
+        if self.size+len(raw) > MAX_STORE_BYTES or len(self.records) >= 5*limits.MAX_ROWS:
             raise ValueError('Native replay arrays exceed their bounded working-store budget')
         index = len(self.records); self.index[key] = index
         self.records.append((self.size, len(raw), value.dtype.str))
@@ -129,17 +131,30 @@ class ReplayRows(FeatureRows):
     bounded seekable data file. Archive decompression happens at assembly,
     never once per random minibatch. Changed files/values fail.
     """
-    def __init__(self, directories, names, cohort, hashes, states, augmenter, bank, *, _permit=None):
+    def __init__(self, directories, names, cohort, hashes, states, augmenter, bank, feature_sha, *, _permit=None):
         if _permit is not _PERMIT:
             raise TypeError('Build replay rows from a checked paired cohort')
         super().__init__(None, len(hashes), storage='native_pair_replay',
                          bins=len(cohort['q_edges'])-1, channels=3, _permit=_PERMIT)
         self._paths = tuple(tuple(p/name for name in filenames(names)) for p in directories)
         self._states = tuple(states)
+        self._feature_sha = feature_sha
         self._edges = np.frombuffer(cohort['q_edges'].tobytes(), dtype=np.float64)
-        self._hashes = tuple(hashes)
-        self._rows = tuple((tuple(refs[0]), json.dumps(simulations[0], sort_keys=True))
-            for refs, simulations in zip(cohort['references'], cohort['example_simulations']))
+        self._hashes = np.frombuffer(b''.join(hashes), dtype=np.uint8).reshape(len(hashes), 32)
+        selectors = np.empty((len(hashes), 3), np.int32)
+        provenance = np.empty((len(hashes), 32), np.uint8)
+        for i, (refs, simulations) in enumerate(zip(cohort['references'], cohort['example_simulations'])):
+            simulation = simulations[0]
+            if simulation == dict(kind='clean_native'): variant = -1
+            elif (augmenter is not None and simulation.get('kind') == 'simulated_observation'
+                    and type(simulation.get('variant')) is int
+                    and 0 <= simulation['variant'] < augmenter.controls.variants):
+                variant = simulation['variant']
+            else: raise ValueError('A replay row has no declared observation variant')
+            selectors[i] = *refs[0], variant
+            provenance[i] = np.frombuffer(hashlib.sha256(json.dumps(simulation, sort_keys=True).encode()).digest(), np.uint8)
+        self._selectors = np.frombuffer(selectors.tobytes(), dtype=np.int32).reshape(selectors.shape)
+        self._provenance = np.frombuffer(provenance.tobytes(), dtype=np.uint8).reshape(provenance.shape)
         self._augmenter = augmenter
         self._bank = bank; self._projectors = OrderedDict(); self._clean = OrderedDict()
         self._closed = False; self._regenerated = 0
@@ -155,12 +170,12 @@ class ReplayRows(FeatureRows):
         if (indices.ndim != 1 or indices.dtype.kind not in 'iu' or len(indices) > MAX_BATCH_ROWS
                 or np.any(indices < 0) or np.any(indices >= len(self))):
             raise ValueError('Read a bounded batch of valid structural feature rows')
-        blocks = {self._rows[int(i)][0][0] for i in indices}
+        blocks = set(map(int, self._selectors[indices, 0]))
         for index in blocks: self._check(index)
         self._bank.check()
         result = np.empty((len(indices), *self.shape[1:]), np.float32)
         for out_index, index in enumerate(indices):
-            (block_index, native_index), encoded = self._rows[int(index)]
+            block_index, native_index, variant = map(int, self._selectors[int(index)])
             locations = self._bank.blocks[block_index][native_index]
             q, current, background, parent, parent_background = (self._bank.get(i) for i in locations)
             grid = int(locations[0])
@@ -175,19 +190,19 @@ class ReplayRows(FeatureRows):
                 self._clean[key] = clean, hashlib.sha256(clean.tobytes()).hexdigest()
                 if len(self._clean) > 64: self._clean.popitem(last=False)
             self._clean.move_to_end(key); clean, identity = self._clean[key]
-            simulation = json.loads(encoded)
-            if simulation == dict(kind='clean_native'):
+            if variant == -1:
                 value = clean
             else:
-                if self._augmenter is None or simulation.get('kind') != 'simulated_observation':
+                if self._augmenter is None:
                     raise ValueError('A replay observation has no declared generator')
                 draw = self._augmenter.observation(q, current, background,
-                    clean_identity=identity, variant=simulation['variant'])
-                if dict(kind='simulated_observation', **draw['provenance']) != simulation:
+                    clean_identity=identity, variant=variant)
+                encoded = json.dumps(dict(kind='simulated_observation', **draw['provenance']), sort_keys=True).encode()
+                if hashlib.sha256(encoded).digest() != self._provenance[int(index)].tobytes():
                     raise ValueError('Replay observation provenance differs from cohort assembly')
                 value = projector.features(draw['intensity'], parent,
                     background=draw['background'], reference_background=parent_background)['features']
-            if hashlib.sha256(value.tobytes()).digest() != self._hashes[int(index)]:
+            if hashlib.sha256(value.tobytes()).digest() != self._hashes[int(index)].tobytes():
                 raise ValueError('Replayed feature bytes differ from the assembled row')
             result[out_index] = value; self._regenerated += 1
         for index in blocks: self._check(index)
@@ -201,6 +216,18 @@ class ReplayRows(FeatureRows):
             retained_clean_rows=len(self._clean), retained_grid_plans=len(self._projectors),
             source_blocks_captured=len(self._bank.blocks), native_array_reads=self._bank.reads,
             reconstructed_rows=self._regenerated, screening_qualified=False)
+
+    def feature_sha256(self):
+        if self._closed:raise ValueError('The native replay training rows are closed')
+        self._bank.check()
+        for index in range(len(self._paths)):self._check(index)
+        return self._feature_sha
+
+    @property
+    def row_layout(self):
+        return limits.validate(dict(schema=limits.SCHEMA, rows=len(self), bins=self.shape[2], channels=3,
+            native_bytes=self._bank.size,
+            index_bytes=self._selectors.nbytes+self._provenance.nbytes+self._hashes.nbytes))
 
     def close(self):
         if not self._closed: self._bank.close()
@@ -245,7 +272,7 @@ def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pa
             raise ValueError('Native replay sources changed during cohort assembly')
         bank.seal()
         cohort['features'] = ReplayRows(directories, names, cohort, sink.hashes, states,
-                                      augmenter, bank, _permit=_PERMIT)
+                                      augmenter, bank, sink.digest.hexdigest(), _permit=_PERMIT)
     except BaseException:
         bank.close(); raise
     return cohort

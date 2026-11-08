@@ -111,6 +111,22 @@ def batches(rows, indices, *, size=64):
         yield selected, rows.take(selected)
 
 
+def feature_digest(rows):
+    """Bind the same complete feature stream for every storage representation.
+
+    Owned replay rows captured this digest while the shared assembler actually
+    computed every row. Their source/bank mutation checks still run before it
+    is reused. Other representations hash current bounded row reads.
+    """
+    rows=feature_rows(rows)
+    from .structural_replay import ReplayRows
+    if isinstance(rows, ReplayRows):return rows.feature_sha256()
+    digest=hashlib.sha256()
+    for _,values in batches(rows,np.arange(len(rows)),size=MAX_BATCH_ROWS):
+        digest.update(values.tobytes(order='C'))
+    return digest.hexdigest()
+
+
 def channel_statistics(rows, indices, *, minimum_scale=.02, center=True):
     """Two-pass float64 statistics, with bounded feature working memory."""
     if (type(minimum_scale) not in (int,float) or not np.isfinite(minimum_scale)

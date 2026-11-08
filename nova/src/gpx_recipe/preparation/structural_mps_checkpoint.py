@@ -93,7 +93,7 @@ def _read(path,run_identity):
     return arrays
 
 
-def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epochs,warmup_steps):
+def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epochs,warmup_steps,row_layout=None):
     _require_device(model);directory=Path(directory);path=directory/STATE
     if not path.exists() and not path.is_symlink():return None
     arrays=_read(path,run_identity);cpu,opt,schedule=_cpu_views(model,optimizer,scheduler)
@@ -102,7 +102,7 @@ def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epoch
     with tempfile.TemporaryDirectory(prefix='mps-cpu-restore-',dir=directory) as temporary:
         (Path(temporary)/'training-checkpoint.npz').write_bytes(arrays['cpu_checkpoint'].tobytes())
         result=canonical.restore(Path(temporary),run_identity,cpu,opt,schedule,copied_rng,copied_visited,
-            epochs=epochs,warmup_steps=warmup_steps)
+            epochs=epochs,warmup_steps=warmup_steps,row_layout=row_layout)
     # The canonical audit has checked every tensor, optimizer setting,
     # schedule, incumbent and complete boundary before replacing this model.
     model.load_state_dict(cpu.state_dict(),strict=True)

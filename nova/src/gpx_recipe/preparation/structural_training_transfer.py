@@ -19,7 +19,6 @@ from ..live.array_limits import validate_npz_bytes
 from ..symmetry.compiler import package_signature
 from . import structural_training_checkpoint as checkpoint
 from .structural_model_files import MAX_BYTES,MAX_METADATA_BYTES
-from .structural_training_data import MAX_ROWS
 from .tof_kernel_arrays import array_identity,checksum,read_bounded
 
 SCHEMA='radar-attention-training-continuation/v1'
@@ -38,11 +37,12 @@ def inspect(path,*,identity=None,epochs=None):
     if encoded.dtype!=np.uint8 or encoded.ndim!=1 or len(encoded)>MAX_METADATA_BYTES:
         raise ValueError('Invalid training continuation metadata')
     metadata=json.loads(encoded.tobytes())
-    if (not isinstance(metadata,dict) or metadata.get('schema')!=checkpoint.SCHEMA
+    if (not isinstance(metadata,dict)
             or not checksum(metadata.get('identity')) or not checksum(metadata.get('layout'))
             or (identity is not None and metadata['identity']!=identity)
             or metadata.get('arrays_sha256')!=array_identity(arrays)):
         raise ValueError('Training continuation identity or numerical bytes changed')
+    checkpoint.checked_row_layout(metadata,arrays['visited'])
     parameters=arrays['parameters']
     if (parameters.dtype!=np.float32 or parameters.ndim!=1 or not len(parameters)
             or any(arrays[key].dtype!=np.float32 or arrays[key].shape!=parameters.shape
@@ -58,7 +58,6 @@ def inspect(path,*,identity=None,epochs=None):
             or arrays['initialized'].dtype!=bool or arrays['initialized'].shape!=arrays['steps'].shape
             or not np.array_equal(arrays['initialized'],arrays['steps']>0)
             or arrays['visited'].dtype!=bool or arrays['visited'].ndim!=1
-            or not 1<=len(arrays['visited'])<=MAX_ROWS
             or arrays['torch_rng'].dtype!=np.uint8 or arrays['torch_rng'].ndim!=1):
         raise ValueError('Invalid bounded training continuation arrays')
     done=metadata.get('epochs_completed');warmup=metadata.get('warmup_completed')
