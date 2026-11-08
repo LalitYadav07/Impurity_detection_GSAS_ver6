@@ -34,6 +34,7 @@ class StructuralLiveMixin:
         self._webmon_display_kind='magnetic';self._webmon_kind_headers={}
         self.server.state.update(dict(webmon_analysis_kind='magnetic',webmon_structural_ready=False,
             webmon_structural_recovery=False,
+            webmon_structural_ranking='',
             webmon_structural_summary='',webmon_structural_message='Use a reviewed structural plan from Model exploration.',
             webmon_structural_rows=[],webmon_structural_choices=[],webmon_structural_selected='',
             webmon_structural_axis='d',webmon_structural_scale='linear',webmon_structural_has_result=False,
@@ -43,6 +44,7 @@ class StructuralLiveMixin:
         self._webmon_structural_plan=None;self._webmon_structural_results={}
         s=self.server.state
         for name,value in dict(webmon_structural_ready=False,webmon_structural_summary='',webmon_structural_rows=[],
+                webmon_structural_ranking='',
                 webmon_structural_recovery=False,
                 webmon_structural_choices=[],webmon_structural_selected='',webmon_structural_has_result=False,
                 webmon_structural_parameters=[],webmon_structural_timing='',
@@ -182,7 +184,8 @@ class StructuralLiveMixin:
             html.P('{{ webmon_structural_message }}')
             html.P('{{ webmon_stream_message }}',v_if='webmon_stream_active')
             html.P('Point fits require optimization and scientific review. A current Rwp leader is not a uniquely identified structure; no structural posterior or counting-stop recommendation is produced.')
-            v.VDataTable(headers=([dict(title='Model',key='name'),dict(title='State',key='display_state'),dict(title='Rwp (%)',key='rwp'),dict(title='Revision',key='revision')],),items=('webmon_structural_rows',),items_per_page=8,density='compact')
+            html.P('{{ webmon_structural_ranking }}',v_if='webmon_structural_ranking')
+            v.VDataTable(headers=([dict(title='Search order',key='priority'),dict(title='Model',key='name'),dict(title='State',key='display_state'),dict(title='Rwp (%)',key='rwp'),dict(title='Revision',key='revision')],),items=('webmon_structural_rows',),items_per_page=8,density='compact')
             with html.Details(v_if='webmon_structural_rows.some(row => !!row.reason)'):
                 html.Summary('View job messages',style='cursor:pointer')
                 with html.Ul():
@@ -275,7 +278,24 @@ class StructuralLiveMixin:
         self._webmon_remote_cancel=ScopeCancellation(current)
         if not current():return
         plan['last_item']=item
-        s.webmon_busy=True;s.webmon_stale=bool(s.webmon_structural_has_result);s.webmon_calculation_status='Submitting structural models';s.flush()
+        s.webmon_busy=True;s.webmon_stale=bool(s.webmon_structural_has_result);s.webmon_calculation_status='Submitting structural models'
+        s.webmon_structural_ranking='';s.flush()
+        def ranking_progress(row):
+            if not current():return
+            if row['state']=='ranked':
+                evidence=row['result']['ranking']
+                if evidence['ranking_available']:
+                    groups=', '.join('SG '+str(r['space_group']) for r in evidence['families'][:5])
+                    s.webmon_structural_ranking=f'Prepared family order: {groups}. Every reviewed model remains in the native fits.'
+                else:s.webmon_structural_ranking=evidence['reason']
+                s.webmon_calculation_status='Submitting structural models'
+            elif row['state'] in {'failed','cancelled','not_available','not_started'}:
+                s.webmon_structural_ranking=row.get('reason','Prepared ranking unavailable; the full native portfolio is retained.')
+            else:
+                state=STATES.get(row['state'],row['state'].replace('_',' '))
+                s.webmon_structural_ranking='Prepared model ranking · '+state
+                s.webmon_calculation_status='Checking prepared model ranking'
+            s.flush()
         def progress(rows):
             if not current():return
             s.webmon_structural_rows=[dict({k:v for k,v in row.items() if k!='result'},
@@ -300,7 +320,7 @@ class StructuralLiveMixin:
             s.flush()
         try:
             rows=await analyse_snapshot(StructuralSnapshotRuntime(plan['runtime']),item,plan['root'],source=plan['source'],
-                labels=plan['labels'],cancel=self._webmon_remote_cancel,on_progress=progress)
+                labels=plan['labels'],cancel=self._webmon_remote_cancel,on_progress=progress,on_ranking_progress=ranking_progress)
             if not current():return
             s.webmon_structural_recovery=False
             good=[row for row in rows if row['state']=='verified_point_fit']

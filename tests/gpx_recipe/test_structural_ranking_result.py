@@ -56,3 +56,26 @@ def test_receipt_from_a_previous_source_revision_is_not_reused():
 def test_unavailable_receipt_cannot_sneak_in_an_order_or_score():
     p=protocol();r=unavailable(p,'No supported model');r['candidate_order'].reverse()
     with pytest.raises(ValueError):validate(r,p)
+
+
+def test_live_ranking_cannot_be_reused_for_a_completed_gpx_or_another_snapshot():
+    from gpx_recipe.preparation.structural_ranking_result import SNAPSHOT_SCHEMA
+    p=protocol();r=ranked(p)
+    observation=dict(snapshot_sha256='f'*64,calculation_source_sha256='e'*64,
+        acquisition_sha256='d'*64,revision=2)
+    r.update(schema=SNAPSHOT_SCHEMA,observation=observation)
+    assert validate(r,p,observation=observation) is r
+    with pytest.raises(ValueError):validate(r,p)
+    for key in observation:
+        changed=dict(observation);changed[key]=3 if key=='revision' else '0'*64
+        with pytest.raises(ValueError):validate(r,p,observation=changed)
+    rows=[dict(candidate=key) for key in ('first','second','third')]
+    assert [row['candidate'] for row in prioritize(rows,r,p,observation=observation)]==['second','first','third']
+    assert unavailable(p,'Unavailable',observation=observation)['schema']==SNAPSHOT_SCHEMA
+
+
+@pytest.mark.parametrize('observation',[{},None,dict(snapshot_sha256='f'*64,
+    calculation_source_sha256='e'*64,acquisition_sha256='d'*64,revision=True)])
+def test_live_binding_requires_exact_hashes_and_integer_revision(observation):
+    from gpx_recipe.preparation.structural_ranking_result import observation_binding
+    with pytest.raises(ValueError):observation_binding(observation)

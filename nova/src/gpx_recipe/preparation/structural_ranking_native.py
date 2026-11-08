@@ -5,6 +5,7 @@ work. It imports the exact prepared parent and bank, preserves measured data,
 and recalculates background without running another diffraction refinement.
 """
 import json
+from functools import partial
 from pathlib import Path
 import time
 
@@ -12,7 +13,7 @@ import numpy as np
 
 from ..execution import write_json
 from ..fit_domain import native_powder_fit_mask
-from ..symmetry.compiler import confined,package_signature,verify_inputs
+from ..symmetry.compiler import confined,file_sha,package_signature,verify_inputs
 from ..symmetry.contracts import validate_protocol
 from .structural_ranking_result import unavailable,validate
 
@@ -133,7 +134,7 @@ def observed_features(source,histogram,*,include_reference=False):
     return result
 
 
-def rank_gpx(input_root,protocol,destination):
+def rank_gpx(input_root,protocol,destination,*,source_override=None,observation=None):
     """Read one exact source revision and attached data-only training context."""
     from .structural_hints import read
     from . import structural_ranking_hints as hints
@@ -145,20 +146,29 @@ def rank_gpx(input_root,protocol,destination):
     protocol=validate_protocol(protocol);verify_inputs(protocol,input_root)
     if protocol['kind']!='structural' or protocol['implementation_sha256']!=package_signature():
         raise ValueError('Structural ranking needs the exact captured structural implementation')
+    source=confined(input_root,protocol['source']['path'])
+    if (source_override is None)!=(observation is None):
+        raise ValueError('A live ranking source needs its exact observation binding')
+    if observation is not None:
+        from .structural_ranking_result import observation_binding
+        observation=observation_binding(observation);source=Path(source_override)
+        if source.is_symlink() or file_sha(source)!=observation['calculation_source_sha256']:
+            raise ValueError('The native structural ranking observation changed')
+    fallback=partial(unavailable,protocol,observation=observation)
     began=time.monotonic();out=Path(destination).resolve();out.mkdir(parents=True,exist_ok=False)
     checks=[];snapshot=None;features=None;support=None
-    result=unavailable(protocol,'No compatible prepared structural ranking is attached')
+    result=fallback('No compatible prepared structural ranking is attached')
     try:
         document=read(input_root,protocol)
         if document is None:return result
         snapshot=document['snapshot_sha256']
         entries=document.get('ranking_models',{}).get('entries',[])
         if not entries:
-            result=unavailable(protocol,'No prepared structural ranking model is attached',snapshot=snapshot)
+            result=fallback('No prepared structural ranking model is attached',snapshot=snapshot)
             return result
         G,*_=modules();require_nuclear_runtime()
         require_runtime(runtime_identity(),protocol['magnetic_function_sha256'])
-        source=confined(input_root,protocol['source']['path']);project=G.G2Project(gpxfile=str(source))
+        project=G.G2Project(gpxfile=str(source))
         require_unconstrained_project(project)
         parent=project.phase(protocol['parent_phase']);histogram=project.histogram(protocol['histogram'])
         if setting_fingerprint(parent.data['General']['SGData'])!=protocol['parent_setting_sha256']:
@@ -186,22 +196,24 @@ def rank_gpx(input_root,protocol,destination):
                         reason=ranked.get('reason','Prepared model inference is unavailable')[:600]));continue
                 checks.append(dict(entry=row['entry'],status='compatible',
                     reason='Native parent, bank profile, sites/ADPs and sample corrections matched within the trained lattice envelope'))
-                result=dict(unavailable(protocol,'Prepared simulations prioritize native work; every declared candidate remains available',snapshot=snapshot),
+                result=dict(fallback('Prepared simulations prioritize native work; every declared candidate remains available',snapshot=snapshot),
                     ranking_available=True,candidate_order=ranked['candidate_order'],families=ranked['families'],
                     entry_id=row['entry'],bank=row['bank'],support=ranked['support'])
                 break
             except (OSError,ValueError,ImportError,KeyError,TypeError,IndexError) as error:
                 checks.append(dict(entry=row['entry'],status='incompatible',reason=str(error)[:600]))
         else:
-            result=unavailable(protocol,'Prepared ranking is unavailable for this scan; the complete native search is retained',
+            result=fallback('Prepared ranking is unavailable for this scan; the complete native search is retained',
                                snapshot=snapshot,support=support)
     except (OSError,ValueError,ImportError,KeyError,TypeError,IndexError) as error:
-        result=unavailable(protocol,'Native ranking admission did not complete: '+str(error)[:600],snapshot=snapshot)
+        result=fallback('Native ranking admission did not complete: '+str(error)[:600],snapshot=snapshot)
     finally:
         result.update(checks=checks,seconds=time.monotonic()-began)
-        validate(result,protocol)
+        validate(result,protocol,observation=observation)
         write_json(out/'ranking.json',result)
         verify_inputs(protocol,input_root)
+        if observation is not None and file_sha(source)!=observation['calculation_source_sha256']:
+            raise ValueError('The native structural ranking observation changed during inference')
     return result
 
 

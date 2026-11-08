@@ -18,7 +18,7 @@ import uuid
 from gpx_recipe.execution import write_json
 from gpx_recipe.symmetry.compiler import assets, confined, file_sha, package_signature
 from gpx_recipe.symmetry.contracts import digest
-from gpx_recipe.symmetry.native_protocol import validate_native_payload,native_timeout_limit,validate_native_timeout
+from gpx_recipe.symmetry.native_protocol import validate_native_payload,native_timeout_limit,validate_native_timeout,STRUCTURAL_SNAPSHOT_OPERATIONS
 from .model_checkpoint import job_record
 from .models import UtilityActionRecord, RunStatus
 from .refinement_runtime import RuntimeUnavailable
@@ -124,14 +124,14 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     for relative in directories:
         directory=confined(root,relative);job=json.loads((directory/'job.json').read_text())
         asset_root=directory
-        if operation=='structural-snapshot':
+        if operation in STRUCTURAL_SNAPSHOT_OPERATIONS:
             from gpx_recipe.structural_live.job import reviewed_job
             from gpx_recipe.symmetry.compiler import job_inputs
             _,protocol,_=reviewed_job(directory)
             asset_root=job_inputs(directory,job)
-            if (file_sha(confined(root,payload['source']))!=protocol['source']['sha256']
-                    or float(timeout)<protocol['policy']['structural_seconds']+
-                        protocol['policy']['structural_recovery_seconds']+15):
+            minimum=(protocol['policy']['structural_seconds']+protocol['policy']['structural_recovery_seconds']+15
+                     if operation=='structural-snapshot' else 15)
+            if (file_sha(confined(root,payload['source']))!=protocol['source']['sha256'] or float(timeout)<minimum):
                 raise ValueError('Structural snapshot source or native cleanup allocation differs from its reviewed scope')
             if (file_sha(confined(root,payload['anchor_snapshot']))!=payload['mapping']['snapshot_sha256']
                     or file_sha(confined(root,payload['snapshot']))!=payload['receipt']['content_sha256']):
@@ -152,7 +152,7 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
         files=['packet.json']
     source=runtime.resolve(source)
-    if operation in {'structural-snapshot','preparation-structural-training','preparation-structural-examples'}:
+    if operation in STRUCTURAL_SNAPSHOT_OPERATIONS|{'preparation-structural-training','preparation-structural-examples'}:
         if file_sha(confined(root,payload['source']))!=source['source_sha256']:
             raise ValueError('Structural operation belongs to another Galaxy source revision')
     request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,

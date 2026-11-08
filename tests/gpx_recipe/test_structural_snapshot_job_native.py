@@ -22,7 +22,8 @@ from gpx_recipe.symmetry.native_audit import inspect_source
 
 
 @pytest.mark.parametrize('shared',[False,True])
-def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structural_snapshot(tmp_path,shared):
+@pytest.mark.parametrize('operation',['structural-snapshot','structural-snapshot-ranking'])
+def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structural_snapshot(tmp_path,shared,operation):
     source,public=native_source(tmp_path/'public','PNT');source_sha=sha(source)
     parent=G.G2Project(gpxfile=str(source));warm=tmp_path/'warm.gpx'
     # A separately reviewed fractional structure/ADP reference must survive
@@ -82,7 +83,7 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
         source_revision='PG3_2:'+mapping['snapshot_sha256'],reference_revision='PG3_ref:'+source_sha,
         refine_transfer=False,destination='snapshot-output',prepared_scattering=preparation)
     hashes={str(p.relative_to(packet)):sha(p) for p in packet.rglob('*') if p.is_file() and p.suffix!='.py'}
-    request=dict(schema='radar-model-native/v1',operation='structural-snapshot',payload=payload,
+    request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,
         implementation_sha256=package_signature(),expected_source_sha256=source_sha,input_hashes=hashes,
         timeout=180,dispatch_key='b'*24)
     # Omit the source bytes in the archive; the normal Galaxy HDA hydration
@@ -96,7 +97,31 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
             check=False,timeout=210,stdout=log,stderr=subprocess.STDOUT)
     assert completed.returncode==0,(tmp_path/'wrapper.log').read_text()[-16000:]
     received=unpack(tmp_path/'result.zip',tmp_path/'received')
-    response=json.loads((received/'response.json').read_text());result=response['result'];fitted=result['result']
+    response=json.loads((received/'response.json').read_text());result=response['result']
+    if operation=='structural-snapshot-ranking':
+        from gpx_recipe.structural_live.acquisition import _mapping
+        from gpx_recipe.preparation.structural_ranking_result import validate
+        assert result['schema']=='radar-structural-snapshot-ranking-result/v1'
+        assert result['source_sha256']==source_sha and result['protocol_sha256']==digest(protocol)
+        observation=result['observation']
+        assert observation['snapshot_sha256']==hashlib.sha256(raw).hexdigest() and observation['revision']==2
+        assert observation['acquisition_sha256']==digest([_mapping(mapping),payload['source_scope']])
+        validate(result['ranking'],protocol,snapshot=preparation['snapshot_sha256'],observation=observation)
+        assert not result['ranking']['ranking_available'] and not result['candidate_pruning_authorized']
+        assert result['ranking']['candidate_order']==[candidate['id']]
+        assert result['artifacts']==['ranking/ranking.json','transfer.json','result.json']
+        assert not list(received.rglob('*.gpx')) and not list(received.rglob('*.dat'))
+        assert not list((tmp_path/'worker/verified_projects').glob('*.gpx'))
+        assert not list((tmp_path/'worker/reviewable_projects').glob('*.gpx'))
+        context=tmp_path/'worker/native/snapshot-output/ranking-parent.gpx'
+        assert file_sha(context)==observation['calculation_source_sha256']
+        arrays=G.G2Project(gpxfile=str(context)).histogram(h.name).data['data'][1]
+        expected=uniform_density_to_tof(parse_live_ascii(raw),export_difc=factor)
+        for index,key in enumerate(('x','y','weights')):
+            np.testing.assert_allclose(arrays[index],expected[key],rtol=1e-12,atol=0)
+        assert sha(source)==source_sha and sha(warm)==warm_sha
+        return
+    fitted=result['result']
     assert result['schema']=='radar-structural-snapshot-result/v1' and result['revision']==2
     stages=result['workflow_timings']
     assert stages['scope']=='acquisition' and stages['preparation_seconds']>0

@@ -48,7 +48,7 @@ def _remember(library,runtime,handle,root):
 
 def input_ids(runtime,request):
     document=request.get('prepared_scattering') or {}
-    if request.get('operation')=='structural-snapshot':
+    if request.get('operation') in {'structural-snapshot','structural-snapshot-ranking'}:
         document=request.get('payload',{}).get('prepared_scattering') or {}
     if not document.get('evidence'):return []
     service=runtime.service

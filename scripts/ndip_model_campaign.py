@@ -22,7 +22,7 @@ from gpx_recipe.symmetry.compiler import confined,file_sha,package_signature,req
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.symmetry.chunks import execute_chunk
 from gpx_recipe.symmetry.resources import allocation
-from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout
+from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout,STRUCTURAL_SNAPSHOT_OPERATIONS
 
 
 def native(request,inputs,root,cancel):
@@ -54,6 +54,7 @@ def native(request,inputs,root,cancel):
     write_json(request_file,payload)
     if operation=='inspect':command=['-m','gpx_recipe.symmetry.inspect',payload['source'],str(output)]
     elif operation=='structural-snapshot':command=['-m','gpx_recipe.structural_live.job',str(request_file),str(output)]
+    elif operation=='structural-snapshot-ranking':command=['-m','gpx_recipe.structural_live.ranking',str(request_file),str(output)]
     elif operation.startswith('preparation-'):command=['-m','gpx_recipe.preparation.worker',operation.removeprefix('preparation-'),str(request_file),str(output)]
     elif operation.startswith('k-'):command=['-m','gpx_recipe.symmetry.k_native',operation[2:],str(request_file),str(output)]
     else:command=['-m','gpx_recipe.symmetry.isodistort_native',operation,str(request_file),str(output)]
@@ -111,7 +112,7 @@ def _work(action,source,assets,request_file,directory,archive):
         elif action=='native':
             root=directory/'native';root.mkdir()
             result,root=native(request,inputs,root,cancel)
-            if request['operation'].startswith('preparation-') or request['operation']=='structural-snapshot':
+            if request['operation'].startswith('preparation-') or request['operation'] in STRUCTURAL_SNAPSHOT_OPERATIONS:
                 # Only declared portable data leaves theoretical preparation.
                 # Native construction GPXs and repeated scratch are ephemeral.
                 owned=Path(result['output']).resolve()

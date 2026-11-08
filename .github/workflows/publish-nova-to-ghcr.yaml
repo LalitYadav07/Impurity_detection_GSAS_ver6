@@ -207,6 +207,7 @@ jobs:
             /validation-tests/test_preparation_evidence.py \
             /validation-tests/test_structural_stream.py \
             /validation-tests/test_structural_snapshot_transport.py \
+            /validation-tests/test_structural_snapshot_ranking.py \
             /validation-tests/test_structural_live_ui.py'
 
       - name: Verify packaged saved-watch recovery contracts

@@ -11,8 +11,23 @@ The preparation workspace now generates paired examples and trains the
 three-channel attention model by default. Clean pairs, noisy feature rows and
 independent trajectory holdouts have separate receipts. Trained rankings can
 prioritize Model campaign work after isolated native parent/profile admission;
-they retain the complete candidate list. Structural live snapshot fitting does
-not yet use those scores to filter its reviewed model portfolio.
+they retain the complete candidate list. An attached model also supplies an
+advisory search order for structural live snapshots. One isolated native
+ranking operation uses the current captured counts and masks, the reviewed
+producer conversion and the transferred nuclear parent. It recalculates the
+parent reference and background on the current grid through the same admission
+and inference engine as completed-scan Model campaigns. It cannot reuse a
+completed-GPX score for a live revision or filter the reviewed model portfolio.
+
+The live panel shows ranking-job status, the leading space-group families and
+the resulting native search order. A missing/incompatible model or known
+ranking failure retains every native candidate in the reviewed order. An
+uncertain dispatch or uncollected result retains its existing Galaxy handle
+and requires recovery before admitting more work. Ranking scratch GPXs and
+measured arrays stay in the scientific worker; only its bound ranking and
+transfer receipts are exported. Ranking is currently a separate job before
+the bounded point fits, so its Galaxy queue, staging and startup add latency;
+the native test timings do not establish fast end-to-end live performance.
 
 The expanded 63-construction, 20,223-pair cohort is a development benchmark.
 Completion of its generation, training and independent scientific evaluation

@@ -142,6 +142,24 @@ def test_partial_structural_fit_appears_without_erasing_previous_checked_results
     assert 'review required' in s.webmon_structural_choices[0]['title']
 
 
+@pytest.mark.parametrize('available',[True,False])
+def test_current_snapshot_ranking_status_is_visible_without_claiming_a_structure(tmp_path,monkeypatch,available):
+    from test_structural_snapshot_ranking import ranking_result
+    obj,_=view(tmp_path);asyncio.run(obj.webmon_adopt_structural_plan());plan=obj._webmon_structural_plan
+    stream=obj._new_structural_stream();item=stream.capture();seen=[]
+    async def ranking_updates(*args,on_ranking_progress,**kwargs):
+        on_ranking_progress(dict(state='queued'))
+        seen.append(obj.server.state.webmon_calculation_status)
+        on_ranking_progress(dict(state='ranked',result=ranking_result(item['payloads'][0],available=available)))
+        return []
+    monkeypatch.setattr(structural_ui,'analyse_snapshot',ranking_updates)
+    asyncio.run(obj._webmon_execute_structural(item,stream,plan))
+    assert seen==['Checking prepared model ranking']
+    message=obj.server.state.webmon_structural_ranking
+    assert ('SG 63' in message and 'Every reviewed model remains' in message) if available else message=='Public transport fixture'
+    assert not obj.server.state.webmon_structural_has_result
+
+
 def test_job_status_polls_do_not_rehash_every_completed_view_or_redraw_the_selected_fit(tmp_path,monkeypatch):
     obj,_=view(tmp_path,2);asyncio.run(obj.webmon_adopt_structural_plan());plan=obj._webmon_structural_plan
     stream=obj._new_structural_stream();item=stream.capture();draws=[];hashed=[]

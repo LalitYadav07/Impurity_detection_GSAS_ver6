@@ -5,27 +5,43 @@ import re
 from ..symmetry.contracts import digest
 
 SCHEMA='radar-structural-ranking-evidence/v1'
+SNAPSHOT_SCHEMA='radar-structural-snapshot-ranking-evidence/v1'
 
 
 def _hash(value):return isinstance(value,str) and re.fullmatch('[a-f0-9]{64}',value) is not None
 
 
-def unavailable(protocol,reason,*,snapshot=None,seconds=0.,checks=(),support=None):
-    return dict(schema=SCHEMA,protocol_sha256=digest(protocol),source_sha256=protocol['source']['sha256'],
+def observation_binding(value):
+    if (not isinstance(value,dict) or set(value)!={'snapshot_sha256','calculation_source_sha256','acquisition_sha256','revision'}
+            or any(not _hash(value[k]) for k in ('snapshot_sha256','calculation_source_sha256','acquisition_sha256'))
+            or type(value['revision']) is not int or value['revision']<0):
+        raise ValueError('Structural ranking needs its exact native snapshot and acquisition revision')
+    return dict(value)
+
+
+def unavailable(protocol,reason,*,snapshot=None,seconds=0.,checks=(),support=None,observation=None):
+    result=dict(schema=SCHEMA,protocol_sha256=digest(protocol),source_sha256=protocol['source']['sha256'],
         implementation_sha256=protocol['implementation_sha256'],preparation_snapshot_sha256=snapshot,
         candidate_order=[c['id'] for c in protocol['candidates']],ranking_available=False,
         families=[],entry_id=None,bank=None,support=support,checks=list(checks),seconds=float(seconds),reason=reason[:1000],
         candidate_pruning_authorized=False,screening_qualified=False,
         native_refinement_required=True,complete_native_search_required=True)
+    if observation is not None:result.update(schema=SNAPSHOT_SCHEMA,observation=observation_binding(observation))
+    return result
 
 
-def validate(value,protocol,*,snapshot=None):
+def validate(value,protocol,*,snapshot=None,observation=None):
     required={'schema','protocol_sha256','source_sha256','implementation_sha256','preparation_snapshot_sha256',
         'candidate_order','ranking_available','families','entry_id','bank','support','checks','seconds','reason',
         'candidate_pruning_authorized','screening_qualified','native_refinement_required','complete_native_search_required'}
+    schema=SCHEMA
+    if observation is not None:
+        observation=observation_binding(observation);required.add('observation');schema=SNAPSHOT_SCHEMA
+        if not isinstance(value,dict) or value.get('observation')!=observation:
+            raise ValueError('Structural ranking belongs to another snapshot revision')
     candidates=[c['id'] for c in protocol['candidates']]
     if (protocol['kind']!='structural' or not isinstance(value,dict) or set(value)!=required
-            or value['schema']!=SCHEMA or value['protocol_sha256']!=digest(protocol)
+            or value['schema']!=schema or value['protocol_sha256']!=digest(protocol)
             or value['source_sha256']!=protocol['source']['sha256']
             or value['implementation_sha256']!=protocol['implementation_sha256']
             or (value['preparation_snapshot_sha256'] is not None and not _hash(value['preparation_snapshot_sha256']))
@@ -85,8 +101,8 @@ def validate(value,protocol,*,snapshot=None):
     return value
 
 
-def prioritize(rows,value,protocol):
-    validate(value,protocol)
+def prioritize(rows,value,protocol,*,observation=None):
+    validate(value,protocol,observation=observation)
     if not value['ranking_available']:return list(rows)
     positions={key:i for i,key in enumerate(value['candidate_order'])}
     if any(row['candidate'] not in positions for row in rows):raise ValueError('Ranking cannot introduce a new native candidate')

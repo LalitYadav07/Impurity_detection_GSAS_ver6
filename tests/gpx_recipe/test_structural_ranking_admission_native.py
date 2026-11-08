@@ -94,7 +94,7 @@ def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change)
         with pytest.raises(ValueError):require_compatible(parent,h,r.phase(0),r.histogram(0),maximum_metric=.001)
 
 
-@pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain'])
+@pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain','live_counts'])
 def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_path,monkeypatch,change):
     """Inference is a controlled stub here; native input admission is real."""
     from gpx_recipe.preparation import structural_hints,structural_ranking_hints as hints
@@ -126,7 +126,8 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
             maximum_trials=1,maximum_cell_multiplier=8,maximum_moment=6.,fit_band_percent=.25,
             maximum_mode=.5,adequate_rwp_percent=12.)))
     metadata=dict(training_domain=envelope(.001))
-    if change.startswith('paired_'):
+    paired=change.startswith('paired_') or change=='live_counts'
+    if paired:
         from gpx_recipe.preparation.structural_attention_weights import SCHEMA
         metadata['schema']=SCHEMA
         metadata['training_domain']=envelope(.001,parent_references=change!='paired_legacy_domain')
@@ -139,17 +140,37 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
     monkeypatch.setattr(hints,'checked_files',lambda *a:dict(parent=tmp_path/'control/parent.cif',
         instrument=root/'profile.instprm',model=model))
     calls=[]
+    observation=None;override=None;before_source=file_sha(source)
+    if change=='live_counts':
+        override=tmp_path/'current-ranking.gpx'
+        live=G.G2Project(gpxfile=str(source),newgpx=str(override))
+        arrays=live.histogram(0).data['data'][1]
+        arrays[1][30:40]=-7.;arrays[2][31:34]=0.
+        live.save()
+        observation=dict(snapshot_sha256='0'*64,calculation_source_sha256=file_sha(override),
+            acquisition_sha256='1'*64,revision=3)
+        from gpx_recipe.preparation.structural_ranking_native import observed_features
+        expected=observed_features(override,live.histogram(0),include_reference=True)
     def inference(*args,**kwargs):
         calls.append(kwargs)
-        assert ('reference' in kwargs)==change.startswith('paired_')
+        assert ('reference' in kwargs)==paired
+        if change=='live_counts':
+            for key in ('q','intensity','valid','background'):
+                np.testing.assert_array_equal(kwargs[key],expected[key])
+            assert np.count_nonzero(kwargs['intensity']<0)>0 and np.count_nonzero(~kwargs['valid'])>=3
         return dict(ranking_available=True,candidate_order=['public-ersi'],
             families=[dict(space_group=63,model_score=1.,candidate_ids=['public-ersi'])],
             support=dict(status='within_empirical_synthetic_support',nearest_training_rms=.1,
                          validation_maximum_rms=.2,statistical_coverage_qualified=False))
     monkeypatch.setattr(hints,'rank',inference)
-    destination=tmp_path/'ranking';result=rank_gpx(root,protocol,destination)
+    destination=tmp_path/'ranking';result=rank_gpx(root,protocol,destination,source_override=override,observation=observation)
     assert result==json.loads((destination/'ranking.json').read_text())
-    expected=change in {'same','paired_parent_within'}
-    assert result['ranking_available']==expected and len(calls)==int(expected)
+    available=change in {'same','paired_parent_within','live_counts'}
+    assert result['ranking_available']==available and len(calls)==int(available)
     assert result['candidate_order']==['public-ersi'] and result['candidate_pruning_authorized'] is False
     assert result['preparation_snapshot_sha256']=='e'*64
+    assert file_sha(source)==before_source
+    if observation is not None:
+        from gpx_recipe.preparation.structural_ranking_result import validate
+        validate(result,protocol,observation=observation)
+        with pytest.raises(ValueError):validate(result,protocol)

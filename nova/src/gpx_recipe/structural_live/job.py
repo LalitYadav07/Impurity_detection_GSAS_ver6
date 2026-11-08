@@ -17,7 +17,7 @@ from ..execution import write_json
 from ..live.snapshot import stable_read
 from ..symmetry.compiler import confined, file_sha, package_signature, verify_inputs,job_inputs
 from ..symmetry.contracts import digest, trial_id, validate_protocol
-from .acquisition import _mapping, _scope, prepare_acquisition, StructuralAcquisition
+from .acquisition import _mapping, _scope, require_snapshot_metadata, prepare_acquisition, StructuralAcquisition
 from .service import SearchSettings, workflow_timings
 
 FIELDS={'source','directory','anchor_snapshot','snapshot','receipt','mapping',
@@ -76,8 +76,8 @@ def reviewed_job(directory):
     return job,protocol,candidate
 
 
-def execute(payload):
-    """Own one scientific job; do not poll, discover models or infer settings."""
+def captured_context(payload):
+    """The same reviewed source, native parent and bytes for fitting/ranking."""
     validate_payload(payload)
     directory=Path(payload['directory']).resolve()
     job,protocol,candidate=reviewed_job(directory)
@@ -95,14 +95,29 @@ def execute(payload):
     anchor=stable_read(payload['anchor_snapshot'])
     if hashlib.sha256(anchor).hexdigest()!=mapping['snapshot_sha256']:
         raise ValueError('The reviewed structural anchor changed before dispatch')
+    require_snapshot_metadata(payload['receipt'],mapping,payload['source_scope'])
     # Bind the actual native parent/runtime, independently of uploaded labels.
-    from ..symmetry.native_audit import inspect_source,write_view
+    from ..symmetry.native_audit import inspect_source
     from ..symmetry.worker import require_runtime
     actual=inspect_source(source)
     require_runtime(actual['runtime'],protocol['magnetic_function_sha256'])
     parent=next((p for p in actual['phases'] if p['name']==protocol['parent_phase']),None)
     if parent is None or parent['setting_sha256']!=protocol['parent_setting_sha256']:
         raise ValueError('The captured nuclear parent setting differs from its reviewed model')
+    return job,protocol,candidate,inputs,source,snapshot,anchor
+
+
+def transfer_request(payload,protocol):
+    return dict(source_gpx=str(Path(payload['source']).resolve()),source_sha256=protocol['source']['sha256'],
+        observation_source=payload['anchor_snapshot'],observation_source_sha256=payload['mapping']['snapshot_sha256'],
+        source_revision=payload['source_revision'],reference_revision=payload['reference_revision'],
+        parent_phase=protocol['parent_phase'],mapping=payload['mapping'],refine_transfer=payload['refine_transfer'])
+
+
+def execute(payload):
+    """Own one scientific job; do not poll, discover models or infer settings."""
+    job,protocol,candidate,inputs,source,snapshot,anchor=captured_context(payload)
+    mapping=payload['mapping']
     scope=protocol['policy']
     settings=SearchSettings(mode_radius=scope['structural_mode_radius'],cell_radius=scope['structural_cell_radius'],
         seconds=scope['structural_seconds'],starts=scope['structural_starts'],
@@ -114,10 +129,7 @@ def execute(payload):
     attachment['profile_tables']=profile_attachment
     reference=confined(inputs,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None
     root=Path(payload['destination']);root.mkdir(parents=True,exist_ok=False)
-    request=dict(source_gpx=str(source),source_sha256=protocol['source']['sha256'],
-        observation_source=payload['anchor_snapshot'],observation_source_sha256=mapping['snapshot_sha256'],
-        source_revision=payload['source_revision'],reference_revision=payload['reference_revision'],
-        parent_phase=protocol['parent_phase'],mapping=mapping,refine_transfer=payload['refine_transfer'])
+    request=transfer_request(payload,protocol)
     preparation_began=time.monotonic()
     contract=prepare_acquisition(request,confined(inputs,candidate['child']['path']),
         candidate['transformation_matrix'],candidate['origin_shift'],root/'acquisition',
@@ -134,6 +146,7 @@ def execute(payload):
     stages=workflow_timings(fitting_began-preparation_began,time.monotonic()-fitting_began,scope='acquisition')
     from .native import modules
     G,*_=modules();project=G.G2Project(gpxfile=fitted['continuation']['path'])
+    from ..symmetry.native_audit import write_view
     view=root/'view.json';write_view(project,metadata['histogram'],view)
     result=dict(schema='radar-structural-snapshot-result/v1',state='verified_point_fit',
         kind='structural_point_fit',optimization_status='optimization_unresolved',

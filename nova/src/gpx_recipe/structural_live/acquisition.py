@@ -65,6 +65,18 @@ def _scope(value,identity):
     return copy.deepcopy(value)
 
 
+def require_snapshot_metadata(receipt,mapping,source_scope):
+    metadata=receipt.get('metadata',{})
+    if not isinstance(metadata,dict):raise ValueError('Captured structural metadata must be an object')
+    for key,expected in [('sample_id',source_scope['sample_id']),('physical_bank',mapping['physical_bank']),
+                         ('producer_config_sha256',mapping['producer_config_sha256'])]:
+        if key in metadata and str(metadata[key])!=str(expected):
+            raise ValueError('Captured sample, bank or producer metadata changed')
+    exposure=metadata.get('cumulative_exposure')
+    if exposure is not None and (type(exposure) not in (float,int) or not np.isfinite(exposure) or exposure<=0):
+        raise ValueError('Exposure must be unknown or finite and positive')
+
+
 def _json(path):
     path=Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size>MAX_JSON:
@@ -195,12 +207,7 @@ class StructuralAcquisition:
                 or receipt.get('content_sha256')!=hashlib.sha256(raw).hexdigest()
                 or not isinstance(receipt.get('metadata',{}),dict)):
             raise ValueError('The structural snapshot receipt does not bind its source bytes or acquisition')
-        metadata=receipt.get('metadata',{})
-        for key,expected in [('sample_id',c['source_scope']['sample_id']),
-                             ('physical_bank',c['mapping']['physical_bank']),
-                             ('producer_config_sha256',c['mapping']['producer_config_sha256'])]:
-            if key in metadata and str(metadata[key])!=str(expected):
-                raise ValueError('Captured sample, bank or producer metadata changed')
+        require_snapshot_metadata(receipt,c['mapping'],c['source_scope'])
         pattern=parse_live_ascii(raw)
         transformed=uniform_density_to_tof(pattern,export_difc=c['mapping']['export_geometry']['microseconds_per_angstrom'])
         if pattern.spectrum_marker!=c['spectrum_marker'] or not np.array_equal(transformed['x'],self.x):

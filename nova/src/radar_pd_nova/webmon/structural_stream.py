@@ -109,68 +109,106 @@ class StructuralObservationStream:
         return item
 
 
-async def analyse_snapshot(adapter,item,root,*,source,labels=None,cancel=None,on_progress=None,poll_seconds=3.):
-    """Use the existing bounded model jobs; retain every candidate outcome."""
-    root=Path(root).resolve();labels=labels or {};rows=[];unresolved=[]
-    for payload in item['payloads']:
-        job,_,candidate=reviewed_job(payload['directory'])
-        rows.append(dict(id=job['id'],candidate=candidate['id'],name=labels.get(candidate['id'],candidate['id']),
-            state='pending',revision=item['revision'],snapshot_sha256=item['receipt']['content_sha256']))
-    def publish():
-        write_json(Path(item['folder'])/'progress.json',dict(schema='radar-structural-stream-progress/v1',
-            snapshot_sha256=item['receipt']['content_sha256'],revision=item['revision'],rows=rows,
-            total=len(rows),terminal=sum(r['state'] in {'verified_point_fit','failed','cancelled'} for r in rows)))
-        if on_progress:on_progress(copy.deepcopy(rows))
-    publish()
-    maximum=getattr(adapter.runtime,'max_active_jobs',1)
-    slots=asyncio.Semaphore(maximum)
+async def _native_step(adapter,payload,item,root,*,source,cancel,row,handle_name,submit,collect,accept,publish,poll_seconds):
+    """One durable lifecycle for optional ranking and scientific point fits."""
     def stopped():return cancel is not None and cancel.is_set()
-    async def one(index,payload):
-        row=rows[index]
-        async with slots:
+    if stopped():
+        row.update(state='not_started',reason='Monitoring paused before dispatch');publish();return False
+    saved=Path(item['folder'])/handle_name
+    def retain(handle):write_json(saved,handle)
+    try:
+        row['state']='submitting';publish()
+        handle=await asyncio.to_thread(submit,payload,root,source=source,cancel=cancel,on_intent=retain)
+        retain(handle);row['dispatch_key']=handle['key'];started=time.monotonic()
+        while True:
             if stopped():
-                row.update(state='not_started',reason='Monitoring paused before dispatch');publish();return
-            try:
-                row['state']='submitting';publish()
-                def retain(handle):
-                    write_json(Path(item['folder'])/('handle-'+digest(row['candidate'])[:24]+'.json'),handle)
-                handle=await asyncio.to_thread(adapter.submit,payload,root,source=source,cancel=cancel,on_intent=retain)
-                retain(handle);row['dispatch_key']=handle['key']
-                started=time.monotonic()
-                while True:
-                    if stopped():
-                        row.update(state='waiting_stopped',reason='Existing Galaxy job retained; recover its saved handle')
-                        unresolved.append(row['candidate']);publish();return
-                    status=await asyncio.to_thread(adapter.poll,handle)
-                    handle=status.get('handle',handle);retain(handle)
-                    state=status['state'];row['state']=state;publish()
-                    if state=='finished':
-                        result,seconds=await asyncio.to_thread(adapter.collect,handle,root)
-                        row.update(state='verified_point_fit',result=result,native_seconds=seconds,
-                            rwp=result['result']['metrics']['rwp_native'],
-                            seconds_from_capture=time.monotonic()-item['captured_monotonic'])
-                        publish();return
-                    if state in {'failed','cancelled'}:
-                        row['reason']=status.get('message') or 'Galaxy job '+state;publish();return
-                    if state in {'needs_recovery','not_submitted'}:
-                        unresolved.append(row['candidate']);row['reason']='Recover the saved dispatch before admitting another snapshot';publish();return
-                    if time.monotonic()-started>getattr(adapter.runtime,'timeout',7200):
-                        unresolved.append(row['candidate']);row.update(state='waiting_stopped',reason='Galaxy job is still pending; saved handle retained');publish();return
-                    await asyncio.sleep(poll_seconds)
-            except Exception as exc:
-                # An uncertain POST must not be treated as a terminal native
-                # failure that allows the next acquisition to start.
-                saved=Path(item['folder'])/('handle-'+digest(row['candidate'])[:24]+'.json')
-                h=json.loads(saved.read_text()) if saved.is_file() else None
-                # A finished Galaxy job is not a collected result. Preserve
-                # its handle when transfer or publication checks fail, so
-                # explicit recovery collects that same immutable attempt.
-                pending=h is not None and h.get('submission_started') and row.get('state') not in {'failed','cancelled'}
-                if pending:unresolved.append(row['candidate'])
-                reason=str(exc)
-                if pending and row.get('state') in {'finished','verified_point_fit'}:
-                    reason='Galaxy job finished; result collection needs recovery: '+reason
-                row.update(state='needs_recovery' if pending else 'failed',reason=reason);publish()
-    await asyncio.gather(*(one(index,payload) for index,payload in enumerate(item['payloads'])))
+                row.update(state='waiting_stopped',reason='Existing Galaxy job retained; recover its saved handle');publish();return True
+            status=await asyncio.to_thread(adapter.poll,handle)
+            handle=status.get('handle',handle);retain(handle);row['state']=status['state'];publish()
+            if row['state']=='finished':
+                result,seconds=await asyncio.to_thread(collect,handle,root)
+                row.update(accept(result,seconds));publish();return False
+            if row['state'] in {'failed','cancelled'}:
+                row['reason']=status.get('message') or 'Galaxy job '+row['state'];publish();return False
+            if row['state'] in {'needs_recovery','not_submitted'}:
+                row['reason']='Recover the saved dispatch before admitting another snapshot';publish();return True
+            if time.monotonic()-started>getattr(adapter.runtime,'timeout',7200):
+                row.update(state='waiting_stopped',reason='Galaxy job is still pending; saved handle retained');publish();return True
+            await asyncio.sleep(poll_seconds)
+    except Exception as exc:
+        handle=json.loads(saved.read_text()) if saved.is_file() else None
+        pending=handle is not None and handle.get('submission_started') and row.get('state') not in {'failed','cancelled'}
+        reason=str(exc)
+        if pending and row.get('state') in {'finished','verified_point_fit','ranked'}:
+            reason='Galaxy job finished; result collection needs recovery: '+reason
+        row.update(state='needs_recovery' if pending else 'failed',reason=reason);publish();return bool(pending)
+
+
+async def analyse_snapshot(adapter,item,root,*,source,labels=None,cancel=None,on_progress=None,on_ranking_progress=None,poll_seconds=3.):
+    """Rank actual snapshot data, then fit the complete bounded portfolio."""
+    root=Path(root).resolve();labels=labels or {};rows=[];protocol=None;ranking_row=None;payloads={}
+    for index,payload in enumerate(item['payloads']):
+        job,current,candidate=reviewed_job(payload['directory']);protocol=protocol or current
+        if digest(current)!=digest(protocol):raise ValueError('Structural snapshot contains conflicting reviewed protocols')
+        if candidate['id'] in payloads:raise ValueError('A structural snapshot cannot duplicate a reviewed model')
+        payloads[candidate['id']]=payload
+        rows.append(dict(id=job['id'],candidate=candidate['id'],name=labels.get(candidate['id'],candidate['id']),
+            state='pending',priority=index+1,revision=item['revision'],snapshot_sha256=item['receipt']['content_sha256']))
+    if not rows:raise ValueError('A structural snapshot needs its complete reviewed portfolio')
+    if set(payloads)!={c['id'] for c in protocol['candidates']}:
+        raise ValueError('A structural snapshot must retain every reviewed model')
+    maximum=getattr(adapter.runtime,'max_active_jobs',1)
+    if type(maximum) is not int or maximum<1:raise ValueError('A positive structural job allocation is required')
+    def publish():
+        value=dict(schema='radar-structural-stream-progress/v1',snapshot_sha256=item['receipt']['content_sha256'],
+            revision=item['revision'],rows=rows,total=len(rows),
+            terminal=sum(r['state'] in {'verified_point_fit','failed','cancelled'} for r in rows))
+        if ranking_row is not None:value['ranking']=ranking_row
+        write_json(Path(item['folder'])/'progress.json',value)
+        if on_progress:on_progress(copy.deepcopy(rows))
+    def rank_progress():
+        publish()
+        if on_ranking_progress:on_ranking_progress(copy.deepcopy(ranking_row))
+    publish()
+    def stopped():return cancel is not None and cancel.is_set()
+    eligible=getattr(adapter,'has_prepared_ranking',None)
+    if not stopped() and eligible is not None and await asyncio.to_thread(eligible,item['payloads'][0]):
+        payload=copy.deepcopy(item['payloads'][0]);payload['destination']=str(Path(item['folder'])/'ranking-output')
+        ranking_row=dict(state='pending')
+        def accept_ranking(result,seconds):
+            from gpx_recipe.preparation.structural_ranking_result import validate,observation_binding
+            observation=observation_binding(result['observation'])
+            if (result.get('schema')!='radar-structural-snapshot-ranking-result/v1'
+                    or result.get('protocol_sha256')!=digest(protocol) or result.get('source_sha256')!=protocol['source']['sha256']
+                    or observation['snapshot_sha256']!=item['receipt']['content_sha256'] or observation['revision']!=item['revision']
+                    or observation['acquisition_sha256']!=digest([_mapping(payload['mapping']),payload['source_scope']])):
+                raise ValueError('Prepared ranking belongs to another structural snapshot')
+            validate(result['ranking'],protocol,observation=observation)
+            return dict(state='ranked',result=result,native_seconds=seconds)
+        pending=await _native_step(adapter,payload,item,root,source=source,cancel=cancel,row=ranking_row,
+            handle_name='ranking-handle.json',submit=adapter.submit_ranking,collect=adapter.collect_ranking,
+            accept=accept_ranking,publish=rank_progress,poll_seconds=poll_seconds)
+        if pending:raise ReviewRequired('Structural ranking dispatch is unresolved. Recover its saved handle before continuing snapshots.')
+        if ranking_row['state']=='ranked':
+            evidence=ranking_row['result']['ranking']
+            write_json(Path(item['folder'])/'ranking-evidence.json',evidence)
+            if evidence['ranking_available']:
+                positions={key:i+1 for i,key in enumerate(evidence['candidate_order'])}
+                for row in rows:row['priority']=positions[row['candidate']]
+                rows.sort(key=lambda row:row['priority']);rank_progress()
+    elif on_ranking_progress:
+        on_ranking_progress(dict(state='not_started' if stopped() else 'not_available',
+            reason='Monitoring paused' if stopped() else 'No prepared structural ranking model is attached; using the reviewed model order.'))
+    slots=asyncio.Semaphore(maximum);unresolved=[]
+    async def one(row):
+        async with slots:
+            def accept(result,seconds):
+                return dict(state='verified_point_fit',result=result,native_seconds=seconds,
+                    rwp=result['result']['metrics']['rwp_native'],seconds_from_capture=time.monotonic()-item['captured_monotonic'])
+            pending=await _native_step(adapter,payloads[row['candidate']],item,root,source=source,cancel=cancel,row=row,
+                handle_name='handle-'+digest(row['candidate'])[:24]+'.json',submit=adapter.submit,collect=adapter.collect,
+                accept=accept,publish=publish,poll_seconds=poll_seconds)
+            if pending:unresolved.append(row['candidate'])
+    await asyncio.gather(*(one(row) for row in rows))
     if unresolved:raise ReviewRequired('Structural dispatch is unresolved. Existing job handles are saved; recover them before continuing snapshots.')
     return rows
