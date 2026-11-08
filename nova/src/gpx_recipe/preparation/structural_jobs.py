@@ -343,7 +343,8 @@ def execute_training(request):
         raise ValueError('Training settings differ from the captured example representation')
     paired=plan.get('representation')==REPRESENTATION
     if paired:
-        from .structural_paired_store import build,load
+        from .structural_paired_store import load
+        from .structural_replay import build as build_replay
     else:
         from .structural_store import build
     source = Path(request['source'])
@@ -380,20 +381,29 @@ def execute_training(request):
         augmenter = (None if controls is None else ObservationAugmenter(Controls(**controls),
                      instrument_sha256=plan['instrument_sha256']))
         cache=out/'working-features'
-        if paired and (cache/'store.json').exists():
+        if paired and cache.is_symlink():raise ValueError('Training working data must remain in an owned directory')
+        if paired and ((cache/'store.json').exists() or (cache/'store.json').is_symlink()):
             cohort=load(cache)
             if (cohort['input_sha256']!=[row['examples_sha256'] for row in plan['blocks']]
                     or cohort['parent_sha256']!=plan['parent_sha256']
                     or cohort['instrument_sha256']!=plan['instrument_sha256']):
                 cohort['features'].close()
                 raise ValueError('Recovered feature cache differs from the captured native inputs')
+        elif paired:
+            cache.mkdir(exist_ok=True)
+            if any(cache.iterdir()):
+                raise ValueError('Unverified partial feature-cache files remain; refusing to replace or use them')
+            # One automatic path for new paired training. The reader retains
+            # native arrays and verifies exact reconstructed feature rows;
+            # it never materializes the expanded multi-gigabyte feature plane.
+            cohort=build_replay(directories,bins=settings['bins'],split_seed=settings['split_seed'],
+                augmenter=augmenter,names='examples',destination=cache)
         else:
             cohort = build(directories, cache, bins=settings['bins'],
-                           split_seed=settings['split_seed'], augmenter=augmenter,
-                           **({'names':'examples'} if paired else {}))
+                           split_seed=settings['split_seed'], augmenter=augmenter)
         try:
             write_json(out/'progress.json', dict(state='training', examples=len(cohort['features']),
-                                                independent_groups=len(set(cohort['groups']))))
+                independent_groups=len(set(cohort['groups'])),feature_storage=cohort['features'].storage))
             model = train(cohort, out/'model', epochs=settings['epochs'], seed=settings['seed'],
                           threads=settings['workers'],**(dict(_segment_seconds=segments.SEGMENT_SECONDS,
                               _resume=resume_directory(plan_path,plan)) if paired else {}))

@@ -65,6 +65,8 @@ def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_mo
     monkeypatch.setattr(segments,'SEGMENT_SECONDS',None)
     reference=jobs.execute_training(dict(payload,destination=str(tmp_path/'reference')))
     reference_model=json.loads((tmp_path/'reference/model/model.json').read_text())
+    assert reference_model['feature_storage']=='native_pair_replay'
+    assert not list((tmp_path/'reference').rglob('features.npy'))
     monkeypatch.setattr(segments,'SEGMENT_SECONDS',1e-9)
     resume=None;previous=None;partial_results=[]
     for index in range(20):
@@ -76,6 +78,8 @@ def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_mo
         jobs.create_plan(payload['source'],[job/'examples'],plan,resume=resume)
         current=dict(payload,plan=str(plan),destination=str(job/'compiled'))
         result=jobs.execute_training(current)
+        assert not list((job/'compiled').rglob('features.npy'))
+        assert not list((job/'compiled/working-features').iterdir())
         if result.get('schema')!=segments.SCHEMA:break
         assert result['status']=='checkpointed' and result['trained_model'] is False
         assert result['artifacts']==segments.ARTIFACTS

@@ -1546,8 +1546,14 @@ Reconstruction uses the same observation generator and Q projection; each row
 must reproduce its assembled hash and observation provenance. Changed source or
 captured bytes fail. This owns worker-local data, not an uploaded program or a
 qualification certificate. The existing feature-cache readers and row limits
-remain unchanged. Automatic worker selection still awaits the complete larger
-cohort, restart/transport and lifecycle measurements.
+remain unchanged. Fresh three-curve worker training now selects this bounded
+reader automatically, without a storage or accuracy selector. Its temporary
+native bank closes after completion or failure. A verified earlier file cache
+is still read for recovery; unverified partial files and symlinked workspaces
+are preserved and rejected instead of silently reused or overwritten.
+Complete warmup/epoch continuation tests retain the same parameters, optimizer,
+random state, history and holdouts. The full large-cohort cold lifecycle and
+actual NDIP transport still require acceptance before release.
 
 The seekable layout separately bounds logical rows at 1,048,576, its typed
 selector/provenance/hash index at 96 MiB and its complete compatible-label plane

@@ -1,6 +1,7 @@
 """Interrupt real attention optimization and compare complete resumed outputs."""
 import io
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -101,23 +102,33 @@ def test_shared_worker_recovers_verified_features_and_keeps_checkpoints_out_of_l
     from gpx_recipe.preparation.worker import execute
     from gpx_recipe.preparation.structural_jobs import create_plan
     from gpx_recipe.preparation import structural_paired_store
+    from gpx_recipe.preparation import structural_replay
     from gpx_recipe.preparation.structural_training_blocks import REPRESENTATION
     from test_structural_paired_preparation import inputs
     example,directory=inputs(tmp_path/'inputs')
     plan=tmp_path/'inputs/plan.json';create_plan(example['source'],[directory],plan)
     request=dict(source=example['source'],instrument=example['instrument'],plan=str(plan),grid=example['grid'],
         destination=str(tmp_path/'reference'),settings=dict(representation=REPRESENTATION,bins=128,epochs=4,workers=1,augmentation=None))
+    # Seed the prior verified file-cache format under the worker's actual
+    # ownership boundary. Recovery must still read this format without
+    # rebuilding or changing the scientific row stream.
+    def prior_cache(directories,*,destination,**kwargs):
+        destination.rmdir()  # The new reader was given an empty owned workspace.
+        return structural_paired_store.build(directories,destination,**kwargs)
+    monkeypatch.setattr(structural_replay,'build',prior_cache)
     reference=execute('structural-training',request)
     request['destination']=str(tmp_path/'interrupted');original=interrupt(monkeypatch,'epoch')
     with pytest.raises(InterruptedError):execute('structural-training',request)
     monkeypatch.setattr(training,'write_json',original)
     def no_reassembly(*args,**kwargs):raise AssertionError('Completed features were rebuilt')
     monkeypatch.setattr(structural_paired_store,'build',no_reassembly)
+    monkeypatch.setattr(structural_replay,'build',no_reassembly)
     recovered=execute('structural-training',request)
     assert recovered['status']=='prepared'
     first=json.loads((tmp_path/'reference/model/model.json').read_text())
     second=json.loads((tmp_path/'interrupted/model/model.json').read_text())
     assert first['weights_sha256']==second['weights_sha256']
+    assert first['feature_storage']==second['feature_storage']=='file_backed'
     assert second['training_recovery']['epochs_completed_on_resume']==2
     assert set(recovered['artifacts'])=={'entry.json','model/model.json','model/weights.npz','training.json'}
     assert not any('checkpoint' in name or 'working-features' in name for name in recovered['artifacts'])
@@ -127,3 +138,36 @@ def test_shared_worker_recovers_verified_features_and_keeps_checkpoints_out_of_l
     assert all((tmp_path/'interrupted'/name).read_bytes()==raw for name,raw in before.items())
     with (tmp_path/'interrupted/model/weights.npz').open('ab') as stream:stream.write(b'changed')
     with pytest.raises(ValueError,match='artifact changed'):execute('structural-training',request)
+
+
+@pytest.mark.parametrize('kind',['partial_file','symlink'])
+def test_unverified_working_files_are_preserved_and_never_used_as_a_feature_cache(tmp_path,monkeypatch,kind):
+    from gpx_recipe.preparation import structural_jobs as jobs,structural_replay
+    from test_structural_training_continuation import request
+    payload,_=request(tmp_path/'inputs');cache=Path(payload['destination'])/'working-features'
+    outside=tmp_path/'outside';outside.mkdir();(outside/'keep.txt').write_text('untouched')
+    def interrupted(*args,destination,**kwargs):
+        if kind=='partial_file':(destination/'features.npy').write_bytes(b'unverified partial bytes')
+        else:destination.rmdir();destination.symlink_to(outside,target_is_directory=True)
+        raise InterruptedError('Incomplete prior working data')
+    monkeypatch.setattr(structural_replay,'build',interrupted)
+    with pytest.raises(InterruptedError):jobs.execute_training(payload)
+    monkeypatch.setattr(structural_replay,'build',lambda *a,**k:pytest.fail('Unverified working data reached reconstruction'))
+    with pytest.raises(ValueError,match='Unverified partial|owned directory'):jobs.execute_training(payload)
+    if kind=='partial_file':assert (cache/'features.npy').read_bytes()==b'unverified partial bytes'
+    else:assert cache.is_symlink() and (outside/'keep.txt').read_text()=='untouched'
+    assert not (Path(payload['destination'])/'entry.json').exists()
+
+
+def test_worker_closes_owned_native_replay_after_training_failure(tmp_path,monkeypatch):
+    from gpx_recipe.preparation import structural_jobs as jobs,structural_replay,structural_ranker
+    from test_structural_training_continuation import request
+    payload,_=request(tmp_path/'inputs');original=structural_replay.build;captured=[]
+    def build(*args,**kwargs):
+        cohort=original(*args,**kwargs);captured.append(cohort['features']);return cohort
+    def stop(*args,**kwargs):raise InterruptedError('Controlled training interruption')
+    monkeypatch.setattr(structural_replay,'build',build);monkeypatch.setattr(structural_ranker,'train',stop)
+    with pytest.raises(InterruptedError):jobs.execute_training(payload)
+    assert len(captured)==1
+    with pytest.raises(ValueError,match='closed'):captured[0].take([0])
+    assert not list((Path(payload['destination'])/'working-features').iterdir())

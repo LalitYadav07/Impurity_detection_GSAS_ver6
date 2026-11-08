@@ -95,12 +95,15 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3
     assert model.metadata['architecture']==ARCHITECTURE and model.metadata['readout_health']['readout_active']
     assert model.metadata['classes']==[12,166]
+    assert model.metadata['feature_storage']=='native_pair_replay'
     entry=json.loads((collected/'native/trained/entry.json').read_text())
     assert entry['detail']['dataset']==model.metadata['dataset']
     assert not model.metadata['screening_qualified'] and not model.metadata['candidate_pruning_authorized']
     assert set(result['files'])=={'native/trained/model/model.json','native/trained/model/weights.npz',
         'native/trained/training.json','native/trained/entry.json'}
     assert not list(collected.rglob('features.npy'))
+    assert not list((tmp_path/'job').rglob('features.npy'))
+    assert not list((tmp_path/'job/native/trained/working-features').iterdir())
 
 
 def test_default_paired_library_training_remains_usable_after_export_and_model_handoff(tmp_path):
