@@ -420,7 +420,7 @@ trees must remain read-only.
 
 ## Transition tracking (0.4.11)
 
-In 0.6.59, **Full-Q U-Net (experimental)** is the default transition evidence
+In 0.6.60, **Full-Q U-Net (experimental)** is the default transition evidence
 view. Each compatible measured pair is transformed with its checksum-verified
 instrument profile, rebinned once onto 1,024 Q bins from 0.25 to 12 Å⁻¹,
 and evaluated in one pass. The before, after and signed-difference curves use
@@ -430,10 +430,11 @@ coordinates; missing Q coverage and unverified profiles are disclosed instead
 of being silently inferred. The heatmap, scan cursor, linked raw curves and fit
 panels remain. These synthetic-trained scores are uncalibrated on measured data.
 **Boundary indicators (legacy)** remains selectable for comparison.
-The transition tab brings the map into view when opened. Its inline chart uses
-less height for short series, while **Expand map** retains a larger inspection
-view. **Focus plots** toggles the setup rail; monitor and fit qualifications
-remain available from the Results tab and fit note.
+The transition tab hides the setup rail and centers the map when opened. Its
+inline chart uses less height for short series, while **Expand map** retains a
+larger inspection view. **Show setup** restores the rail; **Focus plots** hides
+it and centers the map again. Monitor and fit qualifications remain available
+from the Results tab and fit note.
 
 Live experiments open on **Results**, with the familiar phase-fraction,
 refinement-quality and composition plots, completed-scan selector and full-result
