@@ -42,6 +42,16 @@ def test_native_measurement_binds_request_attempt_and_installed_code(tmp_path):
         native_size.publish(request,**measured(request))
 
 
+def test_unpublished_native_size_is_pending_instead_of_an_invalid_record(tmp_path):
+    request,_=inputs(tmp_path)
+    with pytest.raises(FileNotFoundError):native_size.read(request,package_signature())
+    Path(request['destination']).mkdir()
+    with pytest.raises(FileNotFoundError):native_size.read(request,package_signature())
+    # A dangling link is an invalid publication, not a pending producer.
+    (Path(request['destination'])/native_size.NAME).symlink_to(tmp_path/'missing.json')
+    with pytest.raises(ValueError):native_size.read(request,package_signature())
+
+
 @pytest.mark.parametrize('case',['extra','rows','bins','numeric','reserve','implementation','request'])
 def test_changed_or_foreign_sizing_cannot_reduce_reservations(tmp_path,case):
     request,_=inputs(tmp_path);Path(request['destination']).mkdir()
@@ -132,6 +142,8 @@ def test_only_valid_owned_small_sizes_unlock_granted_workers(tmp_path,monkeypatc
     assert peak==(4 if report=='valid' else 2)
     if report=='valid':assert result['allocation']['native_sized_tasks']>=2
     elif report=='foreign':assert result['allocation']['native_size_reports_rejected']>=1
+    if report in {'valid','absent','uploaded'}:
+        assert result['allocation']['native_size_reports_rejected']==0
     assert result['allocation']['peak_reserved_result_bytes']<=batch.RESULT_BUDGET
     assert not any(native_size.NAME in name for name in result['artifacts'])
 

@@ -73,6 +73,10 @@ def read(request, implementation_sha256):
     """Read only the task's fresh output namespace, never captured input files."""
     request = _context(request)
     path = Path(request['destination'])/NAME
+    # A producer has not published its dimensions yet. Keep this distinct
+    # from an existing invalid record in scheduler diagnostics. The bounded
+    # no-follow reader below still checks the opened file against replacement.
+    path.lstat()
     raw = read_bounded(path, MAX_RECORD_BYTES)
     value = json.loads(raw)
     fields = {'schema', 'request_sha256', 'implementation_sha256', 'rows', 'bins',
