@@ -5,7 +5,9 @@ import json
 import numpy as np
 
 SCHEMA='radar-three-curve-structural-ranking-model/v1'
-ARCHITECTURE='parent-q-convolution-attention-3-24-32-t128-h4/v1'
+LEGACY_ARCHITECTURE='parent-q-convolution-attention-3-24-32-t128-h4/v1'
+ARCHITECTURE='parent-q-convolution-attention-3-24-32-t128-h4-normalized-readout/v2'
+ARCHITECTURES=frozenset({LEGACY_ARCHITECTURE,ARCHITECTURE})
 REPRESENTATION='reference-current-signed-difference/shared-Q-asinh/v1'
 REFERENCE_KIND='calculated_parent_at_shared_parent_compatible_cell'
 NORMALIZATION='training-channel-standard-deviation/no-centering/v1'

@@ -13,7 +13,7 @@ from gpx_recipe.preparation.worker import execute
 from gpx_recipe.preparation.structural_jobs import create_plan,plan_inputs
 from gpx_recipe.preparation.structural_paired_blocks import read
 from gpx_recipe.preparation.structural_training_blocks import REPRESENTATION,PARENT_RANGE
-from gpx_recipe.preparation.structural_attention_weights import SCHEMA
+from gpx_recipe.preparation.structural_attention_weights import SCHEMA,ARCHITECTURE
 from gpx_recipe.preparation.structural_ranker import Ranker
 from gpx_recipe.symmetry.bundle import pack,unpack
 from gpx_recipe.symmetry.compiler import file_sha,package_signature
@@ -72,6 +72,7 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path):
     assert result['result']['status']=='prepared'
     collected=unpack(tmp_path/'result.zip',tmp_path/'collected');model=Ranker(collected/'native/trained/model')
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3
+    assert model.metadata['architecture']==ARCHITECTURE and model.metadata['readout_health']['readout_active']
     assert model.metadata['classes']==[12,166]
     entry=json.loads((collected/'native/trained/entry.json').read_text())
     assert entry['detail']['dataset']==model.metadata['dataset']

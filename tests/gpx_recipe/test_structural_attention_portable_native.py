@@ -14,9 +14,10 @@ from gpx_recipe.preparation.structural_support import STREAM_METHOD
 from gpx_recipe.live.array_limits import validate_npz_bytes
 
 
-def artifact(root):
+def artifact(root,*,architecture=None):
     root.mkdir();torch.set_num_threads(1);torch.manual_seed(65173)
-    model=network(2);model.eval();plane,layout=w.pack(model)
+    architecture=w.ARCHITECTURE if architecture is None else architecture
+    model=network(2,architecture=architecture);model.eval();plane,layout=w.pack(model)
     q=np.linspace(.5,4.,301);edges=np.linspace(.5,4.,129);bg=np.full(len(q),3.)
     parent=bg+np.exp(-((q-1.2)/.08)**2);current=parent+.15*np.exp(-((q-2.3)/.06)**2)
     feature=three_curve_features(q,current,parent,edges,background=bg,reference_background=bg)['features']
@@ -27,7 +28,7 @@ def artifact(root):
     np.savez_compressed(root/'weights.npz',**arrays)
     candidates=[dict(id=key,transformation_matrix=np.eye(3).tolist(),origin_shift=[0,0,0],
         child=dict(path=key+'.cif',sha256='c'*64)) for key in ['child','parent']]
-    metadata=dict(schema=w.SCHEMA,architecture=w.ARCHITECTURE,representation=w.REPRESENTATION,
+    metadata=dict(schema=w.SCHEMA,architecture=architecture,representation=w.REPRESENTATION,
         channels=3,reference_kind=w.REFERENCE_KIND,normalization_method=w.NORMALIZATION,
         weights_sha256=hashlib.sha256((root/'weights.npz').read_bytes()).hexdigest(),
         classes=[12,166],bins=128,candidates=candidates,candidate_groups=dict(child=12,parent=166),
@@ -41,8 +42,9 @@ def artifact(root):
     return model,q,current,request,arrays,metadata
 
 
-def test_attention_roundtrip_keeps_exact_logits_with_six_data_arrays(tmp_path):
-    model,q,current,request,arrays,d=artifact(tmp_path/'model')
+@pytest.mark.parametrize('architecture',sorted(w.ARCHITECTURES))
+def test_attention_roundtrip_keeps_exact_logits_with_six_data_arrays(tmp_path,architecture):
+    model,q,current,request,arrays,d=artifact(tmp_path/'model',architecture=architecture)
     raw=(tmp_path/'model/weights.npz').read_bytes();validate_npz_bytes(raw,maximum_bytes=32*1024**2)
     assert len(arrays)==6 and len(model.state_dict())>16
     loaded=Ranker(tmp_path/'model')
@@ -59,6 +61,27 @@ def test_attention_roundtrip_keeps_exact_logits_with_six_data_arrays(tmp_path):
     outside=loaded.rank(q,current+np.sin(q*37),**request)
     assert not outside['ranking_available'] and outside['candidate_order']==['child','parent']
     assert json.loads(json.dumps(outside))==outside
+
+
+def test_a_dead_legacy_readout_never_advertises_pattern_based_ranking(tmp_path):
+    model,q,current,request,arrays,d=artifact(tmp_path/'model',architecture=w.LEGACY_ARCHITECTURE)
+    with torch.no_grad():model.head[1].weight.zero_();model.head[1].bias.fill_(-100.)
+    arrays['parameters'],d['tensor_layout_sha256']=w.pack(model)
+    root=tmp_path/'model';np.savez_compressed(root/'weights.npz',**arrays)
+    d['weights_sha256']=hashlib.sha256((root/'weights.npz').read_bytes()).hexdigest()
+    (root/'model.json').write_text(json.dumps(d))
+    result=Ranker(root).rank(q,current,**request)
+    assert not result['ranking_available'] and 'inactive readout' in result['reason']
+    assert result['candidate_order']==['child','parent'] and result['complete_native_search_required']
+    assert all(row['model_score'] is None for row in result['families'])
+    assert result['support']['status']=='within_empirical_synthetic_support'
+
+
+def test_an_architecture_label_cannot_reinterpret_older_numeric_weights(tmp_path):
+    _,_,_,_,_,d=artifact(tmp_path/'model',architecture=w.LEGACY_ARCHITECTURE)
+    d['architecture']=w.ARCHITECTURE
+    (tmp_path/'model/model.json').write_text(json.dumps(d))
+    with pytest.raises(ValueError,match='installed architecture'):Ranker(tmp_path/'model')
 
 
 def test_a_leading_parent_family_does_not_swallow_the_entire_child_search_order(tmp_path):

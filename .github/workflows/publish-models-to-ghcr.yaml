@@ -54,6 +54,7 @@ on:
       - tests/gpx_recipe/test_structural_ranker_training_native.py
       - tests/gpx_recipe/test_structural_attention_portable_native.py
       - tests/gpx_recipe/test_structural_attention_metrics_native.py
+      - tests/gpx_recipe/test_structural_readout_health_native.py
       - tests/gpx_recipe/test_structural_paired_training_native.py
       - tests/gpx_recipe/test_structural_training_counts.py
       - tests/gpx_recipe/test_structural_training_checkpoint*.py
@@ -247,6 +248,7 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_ranker_training_native.py \
             /validation/tests/gpx_recipe/test_structural_attention_portable_native.py \
             /validation/tests/gpx_recipe/test_structural_attention_metrics_native.py \
+            /validation/tests/gpx_recipe/test_structural_readout_health_native.py \
             /validation/tests/gpx_recipe/test_structural_paired_training_native.py \
             /validation/tests/gpx_recipe/test_structural_pair_packing.py \
             /validation/tests/gpx_recipe/test_structural_paired_preparation.py \

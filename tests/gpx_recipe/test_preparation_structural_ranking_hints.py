@@ -15,7 +15,7 @@ from gpx_recipe.symmetry.contracts import digest
 from test_structural_preparation_dependencies import library_inputs,complete_examples,TRAINING
 
 
-def prepared(root,*,three_curve=False):
+def prepared(root,*,three_curve=False,architecture=None):
     library,originals=library_inputs(root)
     complete_examples(library,originals,root/'examples-attempts')
     trainer=next(r for r in library.document['entries'] if r['model']['kind']==TRAINING)
@@ -29,7 +29,7 @@ def prepared(root,*,three_curve=False):
         weights_sha256=file_sha(out/'model/weights.npz'))
     if three_curve:
         from gpx_recipe.preparation.structural_attention_weights import SCHEMA,ARCHITECTURE
-        metadata.update(schema=SCHEMA,architecture=ARCHITECTURE)
+        metadata.update(schema=SCHEMA,architecture=ARCHITECTURE if architecture is None else architecture)
     write_json(out/'model/model.json',metadata);write_json(out/'training.json',dict(status='trained'))
     result=publish_result(TRAINING,request,dict(seconds=.1),['model/model.json','model/weights.npz','training.json'])
     publish_entry(library,trainer['id'],attempt,request,result)
@@ -37,14 +37,18 @@ def prepared(root,*,three_curve=False):
     return library,protocol
 
 
-def test_three_curve_attention_data_use_the_same_portable_routes_and_integrity_checks(tmp_path):
-    library,protocol=prepared(tmp_path/'control',three_curve=True);packet=tmp_path/'packet'
+@pytest.mark.parametrize('architecture',[
+    'parent-q-convolution-attention-3-24-32-t128-h4/v1',
+    'parent-q-convolution-attention-3-24-32-t128-h4-normalized-readout/v2'])
+def test_three_curve_attention_data_use_the_same_portable_routes_and_integrity_checks(tmp_path,architecture):
+    library,protocol=prepared(tmp_path/'control',three_curve=True,architecture=architecture);packet=tmp_path/'packet'
     document=hints.capture(library,protocol,packet);row=document['ranking_models']['entries'][0]
     assert row['routes']=={'first':'first','second':'second'}
     restored=hints.restore(document,protocol,packet,tmp_path/'restored')
     assert restored['ranking_models']['attached']==1 and not restored['ranking_models']['discarded_entries']
     files=ranking.checked_files(packet,row,protocol)
     assert json.loads(files['model'].read_text())['schema']=='radar-three-curve-structural-ranking-model/v1'
+    assert json.loads(files['model'].read_text())['architecture']==architecture
 
 
 def test_model_capture_restore_and_subset_keep_exact_routes_and_all_candidates(tmp_path):

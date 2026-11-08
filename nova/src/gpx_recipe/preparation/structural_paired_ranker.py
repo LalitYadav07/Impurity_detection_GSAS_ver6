@@ -25,7 +25,8 @@ class Ranker:
         d=document(directory,metadata_name,weights_name)
         raw=read_bounded(Path(directory)/weights_name,MAX_BYTES)
         classes=d.get('classes');bins=d.get('bins')
-        if (d.get('schema')!=weights.SCHEMA or d.get('architecture')!=weights.ARCHITECTURE
+        if (d.get('schema')!=weights.SCHEMA or not isinstance(d.get('architecture'),str)
+                or d.get('architecture') not in weights.ARCHITECTURES
                 or d.get('representation')!=weights.REPRESENTATION or d.get('channels')!=3
                 or d.get('reference_kind')!=weights.REFERENCE_KIND
                 or d.get('normalization_method')!=weights.NORMALIZATION
@@ -85,7 +86,8 @@ class Ranker:
                 or not np.isfinite(prototypes).all()):
             raise ValueError('Invalid three-curve training-support index')
         self.allocation=allocation(threads);torch.set_num_threads(self.allocation['workers'])
-        self.model=network(len(classes));weights.restore(self.model,a['parameters'],d.get('tensor_layout_sha256'))
+        self.model=network(len(classes),architecture=d['architecture'])
+        weights.restore(self.model,a['parameters'],d.get('tensor_layout_sha256'))
         self.metadata=d;self.edges=edges;self.mean=mean;self.scale=scale;self.reference=reference
         self.routes=routes;self.support_prototypes=prototypes;self.support_limit=float(normal[6])
 
@@ -113,19 +115,24 @@ class Ranker:
         inside=bool(distance<=self.support_limit+np.finfo(np.float32).eps*max(1.,self.support_limit))
         support=dict(status='within_empirical_synthetic_support' if inside else 'outside_prepared_support',
             nearest_training_rms=distance,validation_maximum_rms=self.support_limit,statistical_coverage_qualified=False)
-        scores=None
+        scores=None;available=False;reason='This pattern is outside the prepared simulations; retain all families for native refinement'
         if inside:
-            with torch.no_grad():scores=self.model(torch.from_numpy(feature[None])).softmax(1)[0].numpy()
-            if not np.isfinite(scores).all():raise ValueError('Three-curve model inference produced nonfinite scores')
+            from .structural_readout_health import forward
+            with torch.no_grad():logits,active=forward(self.model,torch.from_numpy(feature[None]))
+            available=bool(active.any())
+            if available:
+                scores=logits.softmax(1)[0].numpy()
+                if not np.isfinite(scores).all():raise ValueError('Three-curve model inference produced nonfinite scores')
+                reason='Relative attention scores order hypotheses; all native candidates remain available'
+            else:reason='The prepared model has an inactive readout for this pattern; retain all families for native refinement'
         order=range(len(self.metadata['classes'])) if scores is None else np.argsort(-scores,kind='stable')
-        preferred=_preferred_routes(self.metadata['classes'],self.metadata['candidate_groups'],self.routes) if inside else self.routes
+        preferred=_preferred_routes(self.metadata['classes'],self.metadata['candidate_groups'],self.routes) if available else self.routes
         families=[dict(space_group=self.metadata['classes'][i],model_score=None if scores is None else float(scores[i]),
             candidate_ids=list(preferred[str(self.metadata['classes'][i])])) for i in order]
         first=list(dict.fromkeys(key for row in families for key in row['candidate_ids']))
-        return dict(families=families,ranking_available=inside,
+        return dict(families=families,ranking_available=available,reason=reason,
             candidate_order=(first+[key for key in self.metadata['candidate_groups'] if key not in first]
-                if inside else sorted(self.metadata['candidate_groups'])),support=support,
+                if available else sorted(self.metadata['candidate_groups'])),support=support,
             screening_qualified=False,candidate_pruning_authorized=False,native_refinement_required=True,
             complete_native_search_required=True,
-            interpretation=('Relative attention scores order hypotheses; all native candidates remain available'
-                if inside else 'This pattern is outside the prepared simulations; retain all families for native refinement'))
+            interpretation=reason)

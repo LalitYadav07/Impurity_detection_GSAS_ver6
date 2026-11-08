@@ -1202,7 +1202,8 @@ possible hidden distortions. Training with calculated references does not
 validate substitution of measured references. Both cases need separate
 acceptance, including anisotropic thermal cell changes and weak signals that
 finite-resolution powder data cannot distinguish. No three-curve pilot score
-currently authorizes candidate pruning or changes Model/Live execution.
+currently authorizes candidate pruning. Compatible trained models can
+prioritize pending native work in Model/Live execution.
 
 `structural_paired_blocks.read` validates the separate three-curve source
 format before allocating its bounded arrays. Parent-only controls must retain
@@ -1232,19 +1233,38 @@ portable weights; the trainer below produces the separate inference artifact.
 
 The shared trainer now accepts validated three-curve cohorts and trains the
 fixed convolution/attention architecture with 128 Q-region tokens and four
-attention heads. Training-only channel scales preserve the signed difference.
+attention heads. Its version-two readout normalizes the 64 hidden features
+before GELU. A many-family development run exposed the original readout
+saturating entirely to zero despite input-dependent convolution/attention
+features, leaving only class biases. The normalization changes neither the
+three physical channels nor the candidate definitions, physical bounds,
+generated examples, labels or independent holdouts.
+
+Training-only channel scales preserve the signed difference.
 Strong clean training prototypes precede a clean-to-noisy curriculum. A
 published checkpoint must have seen every declared training row. Validation
 selects among eligible checkpoints using macro family top-five recall, overall
 top-five recall and loss; the test fold is scored afterward. Per-family and
 worst-family recall accompany overall recall and a training-prior baseline.
 
+Training checks the actual hidden readout on strong training-only
+representatives after warmup, after each epoch and after restoring the
+validation-selected checkpoint. A completely inactive readout fails before
+test scoring or model publication. The check preserves dropout/random state
+and reads bounded batches. Readout activity alone does not establish
+discrimination, accuracy, calibration or scientific adequacy; those require
+the independent scores and real-data acceptance described above.
+
 Portable attention parameters occupy one typed numerical plane. Tensor names
 and dimensions come from installed code, never an uploaded layout or program.
 The six-array file retains the existing sixteen-array and 32 MiB transport
 limits. The shared ranker reader dispatches by the versioned data schema;
 existing eight-channel files remain readable without a user-facing method
-switch. Native preparation snapshots retain the same parent, bank and exact
+switch. The original version-one three-channel architecture also remains
+readable through its fixed installed tensor layout. A metadata label cannot
+reinterpret weights from a different architecture. An inactive readout yields
+no ranking scores and retains every native candidate, including when reading
+an older library. Native preparation snapshots retain the same parent, bank and exact
 candidate-route integrity checks for both formats.
 
 Three-curve inference requires a freshly calculated parent on the actual
@@ -1277,7 +1297,7 @@ checked by the same installed contract in NOVA and the Galaxy entry point.
 The queue uses that deadline for a trainer's single allocated job. Other
 native operations retain their 600-second limit, and native generation batches
 retain their existing scheduling and cleanup limits. The longer ceiling is
-not a wall-time guarantee or resumable optimizer checkpoint. Real NDIP queue,
+not a wall-time guarantee or portable optimizer recovery. Real NDIP queue,
 allocation, full-data training and experimental acceptance remain to be tested.
 
 Large native paired blocks also support lossless byte-plane storage. The

@@ -6,11 +6,14 @@ Candidate pruning requires separate scientific qualification.
 """
 
 
-def network(class_count, *, attention=True, tokens=128):
+def network(class_count, *, attention=True, tokens=128, architecture=None):
     import torch
     from torch import nn
+    from .structural_attention_weights import ARCHITECTURE,ARCHITECTURES
+    architecture=ARCHITECTURE if architecture is None else architecture
     if (type(class_count) is not int or not 2 <= class_count <= 230
-            or type(attention) is not bool or tokens not in (64, 128, 256)):
+            or type(attention) is not bool or tokens not in (64, 128, 256)
+            or not isinstance(architecture,str) or architecture not in ARCHITECTURES):
         raise ValueError('Explicit bounded three-curve attention architecture required')
 
     class ThreeCurveModel(nn.Module):
@@ -30,8 +33,14 @@ def network(class_count, *, attention=True, tokens=128):
                     batch_first=True, norm_first=False)
                 self.attention = nn.TransformerEncoder(layer, num_layers=1,
                     enable_nested_tensor=False)
-            self.head = nn.Sequential(nn.Flatten(), nn.Linear(32*tokens, 64),
-                nn.GELU(), nn.Dropout(.1), nn.Linear(64, class_count))
+            layers=[nn.Flatten(),nn.Linear(32*tokens,64)]
+            if architecture==ARCHITECTURE:
+                # The unnormalized hidden layer can become entirely negative
+                # on a many-family curriculum, saturating GELU to exact zero.
+                # Normalize before that nonlinearity, preserving all three
+                # physical input channels and the attention encoder.
+                layers.append(nn.LayerNorm(64))
+            self.head=nn.Sequential(*layers,nn.GELU(),nn.Dropout(.1),nn.Linear(64,class_count))
 
         def forward(self, values, coverage=None):
             if values.ndim != 3 or values.shape[1] != 3:

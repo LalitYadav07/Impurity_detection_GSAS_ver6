@@ -20,6 +20,7 @@ from .structural_support import fit_batches as fit_support
 from .structural_training_data import feature_rows,batches,channel_statistics
 from .structural_training_counts import describe as describe_counts
 from . import structural_training_checkpoint as checkpoint
+from .structural_readout_health import training_health
 from .tof_kernel_arrays import checksum
 
 
@@ -124,6 +125,14 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                     warmup=warmup,epochs=completed,history=history,best=best,selected_epoch=selected_epoch,
                     best_key=best_key,elapsed_seconds=previous_seconds+time.monotonic()-began)
 
+            def require_readout():
+                health=training_health(model,rows,representatives,mean,scale)
+                if not health['readout_active']:
+                    reason='The attention hidden readout is inactive on every training representative; no ranking model was published'
+                    progress('training_rejected',reason=reason,readout_health=health)
+                    raise ValueError(reason)
+                return health
+
             if recovered is None:save_checkpoint(0,0)
 
             def update(selected,values):
@@ -141,6 +150,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                 if (step+1)%20==0:
                     save_checkpoint(step+1,0)
                     progress('clean_prototype_warmup',step=step+1,steps=warmup_steps)
+            require_readout()
             for epoch in range(completed_epochs,epochs):
                 pool=clean_rows if epoch<clean_epochs else train_rows
                 buckets=[pool[targets[pool,c]] for c in range(len(classes))]
@@ -154,19 +164,22 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                     # and forcing validation to choose the final checkpoint.
                     missing=train_rows[~visited[train_rows]]
                     for chosen,values in batches(rows,rng.permutation(missing),size=64):update(chosen,values)
+                health=require_readout()
                 model.eval();metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes)
                 eligible=epoch>=clean_epochs and visited[train_rows].all()
                 key=(-metrics['macro_top5'],-metrics['top5'],metrics['loss'])
                 if eligible and (best_key is None or key<best_key):
                     best_key=key;selected_epoch=epoch+1;best=copy.deepcopy(model.state_dict())
                 history.append(dict(epoch=epoch+1,validation=metrics,checkpoint_eligible=bool(eligible),
-                    training_rows_seen=int(visited[train_rows].sum())))
+                    training_rows_seen=int(visited[train_rows].sum()),readout_health=health))
                 scheduler.step()
                 save_checkpoint(warmup_steps,epoch+1)
                 progress('training',epoch=epoch+1,epochs=epochs,
-                    selected_epoch=selected_epoch,validation=metrics,training_rows_seen=int(visited[train_rows].sum()))
+                    selected_epoch=selected_epoch,validation=metrics,training_rows_seen=int(visited[train_rows].sum()),
+                    readout_health=health)
             if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
             model.load_state_dict(best);model.eval()
+            health=require_readout()
             progress('calibrating_training_support',selected_epoch=selected_epoch)
             support=fit_support(rows,train_rows,validation_rows,targets,mean,scale,seed=seed)
             # Test labels have no influence on initialization, normalization,
@@ -190,6 +203,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
             counts={name:targets[split==code].sum(0).tolist() for code,name in enumerate(['train','validation','test'])},
             partition_rows=[len(train_rows),len(validation_rows),len(test_rows)],dataset=dataset,test=test,prior_only_test=prior,
             selected_epoch=selected_epoch,checkpoint_selection='all-training-rows-seen/validation-macro-top5-then-top5-then-loss',
+            readout_health=health,
             curriculum=dict(warmup_steps=warmup_steps,clean_epochs=clean_epochs,gradient_norm_limit=1.,
                 initialization='shared-convolution-and-readout/independent-attention-parameters/v1',
                 sampling='four draws per compatible family; bounded balanced minibatches; first-noisy-epoch coverage pass',
