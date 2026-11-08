@@ -35,6 +35,14 @@ class Ranker:
                 or classes!=sorted(set(classes)) or type(bins) is not int or not 64<=bins<=8192
                 or d.get('background_required') is not True):
             raise ValueError('Unsupported or changed three-curve attention model')
+        if 'dataset' in d:
+            from .structural_training_counts import validate as validate_counts
+            counts=validate_counts(d['dataset'])
+            if (counts['unique_rows']!=d.get('examples')
+                    or counts['generated_pairs']!=d.get('original_examples')
+                    or counts['trajectory_groups']!=d.get('independent_groups')
+                    or [counts['partitions'][p]['rows'] for p in ('train','validation','test')]!=d.get('partition_rows')):
+                raise ValueError('Attention training-count receipt differs from its model')
         candidates=d.get('candidates');groups=d.get('candidate_groups')
         if (not isinstance(candidates,list) or not 1<=len(candidates)<=5000
                 or not isinstance(groups,dict)

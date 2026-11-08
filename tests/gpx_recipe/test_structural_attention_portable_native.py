@@ -95,3 +95,17 @@ def test_portable_model_dispatch_keeps_asset_names_confined(tmp_path):
         Ranker(tmp_path/'model',metadata_name='../model/model.json')
     (tmp_path/'bad.json').write_text('[]')
     with pytest.raises(ValueError,match='metadata object'):Ranker(tmp_path,metadata_name='bad.json')
+
+
+@pytest.mark.parametrize('changed',['examples','original_examples','independent_groups','partition_rows'])
+def test_optional_dataset_counts_must_match_the_published_model_totals(tmp_path,changed):
+    from gpx_recipe.preparation.structural_training_counts import describe
+    _,_,_,_,_,d=artifact(tmp_path/'model')
+    d.update(dataset=describe(['a','b','c'],[0,1,2],[True,True,True],
+        generated_pairs=3,simulated_observations=0),examples=3,original_examples=3,
+        independent_groups=3,partition_rows=[1,1,1])
+    path=tmp_path/'model/model.json';path.write_text(json.dumps(d))
+    assert Ranker(tmp_path/'model').metadata['dataset']['unique_clean_pairs']==3
+    d[changed]=[2,1,1] if changed=='partition_rows' else 4
+    path.write_text(json.dumps(d))
+    with pytest.raises(ValueError,match='training-count receipt'):Ranker(tmp_path/'model')

@@ -1236,3 +1236,17 @@ rows and bins. Proposal tables still cannot authorize a native likelihood or
 candidate exclusion. Full prepared-curve generation remains on its independently
 checked native renderer; these changes do not relabel approximate curves as
 native training truth.
+
+## Explicit training-set counts
+
+Three-curve model metadata and completed preparation entries separately record
+generated native pairs, deduplicated clean pairs, generated simulated
+observations and distinct simulated-only feature rows. Each train, validation
+and test partition reports its clean-pair, feature-row and trajectory-group
+counts. Compatible labels and noisy siblings do not multiply independent
+groups. The Libraries table shows these clean counts from the checked entry
+receipt. Older saved models without this descriptive receipt remain readable;
+their counts are left unavailable rather than inferred from augmented totals.
+New readers reject inconsistent count receipts. Training progress retains the
+same denominator from warmup through holdout scoring. These are descriptive
+dataset counts, not evidence that the classifier is scientifically qualified.

@@ -437,7 +437,7 @@ class PreparationMixin:
             s.prep_stage_rows=[dict(kind=kind,title=titles[kind],total=sum(r['model']['kind']==kind for r in library.document['entries']),
                 prepared=sum(r['model']['kind']==kind and r['state']=='prepared' for r in library.document['entries']))
                 for kind in titles if kind in kinds]
-            from .preparation_labels import scope_labels,entry_label,native_dimensions
+            from .preparation_labels import scope_labels,entry_label,native_dimensions,training_description
             labels=scope_labels(library)
             text=str(s.prep_entry_search).strip().lower()[:200];rows=[]
             for row in library.document['entries']:
@@ -464,6 +464,8 @@ class PreparationMixin:
             for row in visible:
                 entry=entries[row['id']]
                 row.update(entry_label(entry['model'],labels,dimensions=native_dimensions(library,entry)))
+                description=training_description(library,entry)
+                if description:row['coordinates']=description
             s.prep_entries=visible
         except (OSError,ValueError) as exc:
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1;s.prep_stage_rows=[]

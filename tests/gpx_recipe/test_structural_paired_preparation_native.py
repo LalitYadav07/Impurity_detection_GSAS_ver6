@@ -71,6 +71,8 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path):
     collected=unpack(tmp_path/'result.zip',tmp_path/'collected');model=Ranker(collected/'native/trained/model')
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3
     assert model.metadata['classes']==[12,166]
+    entry=json.loads((collected/'native/trained/entry.json').read_text())
+    assert entry['detail']['dataset']==model.metadata['dataset']
     assert not model.metadata['screening_qualified'] and not model.metadata['candidate_pruning_authorized']
     assert set(result['files'])=={'native/trained/model/model.json','native/trained/model/weights.npz',
         'native/trained/training.json','native/trained/entry.json'}

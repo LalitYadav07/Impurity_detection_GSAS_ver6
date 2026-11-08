@@ -29,6 +29,15 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
     progress=json.loads((tmp_path/'model/progress.json').read_text())
     assert progress['state']=='complete' and progress['examples']==result['examples']
     assert progress['selected_epoch']==result['selected_epoch']
+    dataset=result['dataset']
+    assert progress['dataset']==dataset
+    assert dataset['generated_pairs']==cohort['original_examples']
+    clean=np.array([any(p.get('kind')=='clean_native' for p in values) for values in cohort['example_simulations']])
+    assert dataset['unique_clean_pairs']==int(clean.sum())
+    for code,name in enumerate(('train','validation','test')):
+        part=dataset['partitions'][name]
+        assert part['rows']==int(np.count_nonzero(cohort['split']==code))
+        assert part['clean_pairs']==int(np.count_nonzero((cohort['split']==code)&clean))
     assert all(cohort['split'][i]==0 for i in result['curriculum']['clean_training_representatives'])
     for key in ('test','prior_only_test'):
         metric=result[key]
@@ -57,6 +66,7 @@ def test_file_backed_and_dense_training_have_identical_parameters_and_holdout_sc
     assert first['test']==second['test'] and first['prior_only_test']==second['prior_only_test']
     assert first['curriculum']==second['curriculum']
     assert second['feature_storage']=='file_backed'
+    assert first['dataset']==second['dataset']
 
 
 def test_validation_can_select_checkpoints_after_first_full_training_epoch(tmp_path):

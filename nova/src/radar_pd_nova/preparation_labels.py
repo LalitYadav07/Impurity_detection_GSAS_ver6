@@ -37,23 +37,18 @@ def scope_labels(library):
     return labels
 
 
-def native_dimensions(library, entry):
-    """Read display counts from the exact completed entry, not discovery hints.
-
-    Inventory integrity does not authorize reuse of imported numerical assets.
-    The consumer still qualifies those against its current native context.
-    """
-    if entry.get('state') != 'prepared' or entry['model']['kind'] not in {'structural','structural-examples'}:
+def _entry_detail(library,entry,kinds):
+    if entry.get('state') != 'prepared' or entry['model']['kind'] not in kinds:
         return None
     names = [row['path'] for row in entry.get('files', [])
              if row['path'].endswith('/entry.json')]
     if not names:
         return None
     if len(names) != 1:
-        raise ValueError('Prepared model has ambiguous dimension metadata')
+        raise ValueError('Prepared model has ambiguous entry metadata')
     path = confined(library.root, names[0])
     if path.stat().st_size > 8 * 1024 * 1024:
-        raise ValueError('Prepared dimension metadata exceeds its display budget')
+        raise ValueError('Prepared entry metadata exceeds its display budget')
     path = library.verify_assets(names)[names[0]]
     document = json.loads(path.read_text())
     model = entry['model']
@@ -62,14 +57,31 @@ def native_dimensions(library, entry):
             or document.get('kind') != model['kind']
             or document.get('settings') != model.get('settings')
             or document.get('grid') != model.get('grid')):
-        raise ValueError('Prepared dimension metadata differs from this model')
+        raise ValueError('Prepared entry metadata differs from this model')
     detail = document.get('detail')
-    if not isinstance(detail, dict):
-        return None
+    return detail if isinstance(detail,dict) else None
+
+
+def native_dimensions(library, entry):
+    """Checked completed-entry counts; not authority for numerical reuse."""
+    detail=_entry_detail(library,entry,{'structural','structural-examples'})
+    if detail is None:return None
     counts = tuple(detail.get(k) for k in ('mode_dimensions', 'cell_dimensions'))
     if any(type(value) is not int or value < 0 for value in counts):
         return None
     return counts
+
+
+def training_description(library,entry):
+    detail=_entry_detail(library,entry,{'structural-training'})
+    if detail is None or 'dataset' not in detail:return None
+    from gpx_recipe.preparation.structural_training_counts import validate
+    counts=validate(detail['dataset']);parts=counts['partitions']
+    split=' / '.join(f"{parts[name]['clean_pairs']:,}" for name in ('train','validation','test'))
+    return (f"{counts['unique_clean_pairs']:,} unique clean pairs · "
+        f"train / validation / test: {split} · "
+        f"{counts['unique_simulated_only_rows']:,} additional simulated rows · "
+        f"{counts['trajectory_groups']:,} separate trajectory groups")
 
 
 def entry_label(model, labels, *, dimensions=None):

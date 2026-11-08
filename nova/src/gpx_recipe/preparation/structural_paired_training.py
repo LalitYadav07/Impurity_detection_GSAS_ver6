@@ -18,6 +18,7 @@ from .structural_model_files import MAX_BYTES,MAX_METADATA_BYTES
 from .structural_ranker import _class_routes
 from .structural_support import fit_batches as fit_support
 from .structural_training_data import feature_rows,batches,channel_statistics
+from .structural_training_counts import describe as describe_counts
 from .tof_kernel_arrays import checksum
 
 
@@ -79,12 +80,19 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
             or type(seed) is not int or not 0<=seed<2**32):
         raise ValueError('Bounded attention training epochs and seed required')
     rows,targets,classes,split,clean,routes=_inputs(cohort)
+    dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
+        generated_pairs=cohort['original_examples'],
+        simulated_observations=cohort.get('augmented_examples',0))
     train_rows,validation_rows,test_rows=(np.flatnonzero(split==code) for code in range(3))
     clean_rows=train_rows[clean[train_rows]]
     representatives=_representatives(rows,clean_rows,targets,classes)
     budget=allocation(threads);torch.set_num_threads(budget['workers'])
     mean,scale=channel_statistics(rows,train_rows,minimum_scale=.01,center=False)
     out=Path(destination);out.mkdir(parents=True,exist_ok=False);began=time.monotonic()
+
+    def progress(state,**values):
+        write_json(out/'progress.json',dict(state=state,dataset=dataset,**values))
+
     rng=np.random.default_rng(seed);visited=np.zeros(len(rows),bool);history=[]
     clean_epochs=min(10,epochs//4);best=None;best_key=None;selected_epoch=None
     warmup_steps=200
@@ -111,7 +119,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
         for step in range(warmup_steps):
             # Even a 230-class model uses bounded feature/activation batches.
             for selected,values in batches(rows,representatives,size=64):update(selected,values)
-            if step%20==0:write_json(out/'progress.json',dict(state='clean_prototype_warmup',step=step+1,steps=warmup_steps))
+            if step%20==0:progress('clean_prototype_warmup',step=step+1,steps=warmup_steps)
         for epoch in range(epochs):
             pool=clean_rows if epoch<clean_epochs else train_rows
             buckets=[pool[targets[pool,c]] for c in range(len(classes))]
@@ -132,19 +140,19 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                 best_key=key;selected_epoch=epoch+1;best=copy.deepcopy(model.state_dict())
             history.append(dict(epoch=epoch+1,validation=metrics,checkpoint_eligible=bool(eligible),
                 training_rows_seen=int(visited[train_rows].sum())))
-            write_json(out/'progress.json',dict(state='training',epoch=epoch+1,epochs=epochs,
-                selected_epoch=selected_epoch,validation=metrics,training_rows_seen=int(visited[train_rows].sum())))
+            progress('training',epoch=epoch+1,epochs=epochs,
+                selected_epoch=selected_epoch,validation=metrics,training_rows_seen=int(visited[train_rows].sum()))
             scheduler.step()
         if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
         model.load_state_dict(best);model.eval()
-        write_json(out/'progress.json',dict(state='calibrating_training_support',selected_epoch=selected_epoch))
+        progress('calibrating_training_support',selected_epoch=selected_epoch)
         support=fit_support(rows,train_rows,validation_rows,targets,mean,scale,seed=seed)
         # Test labels have no influence on initialization, normalization,
         # sampling, prototypes, stopping or checkpoint selection.
-        write_json(out/'progress.json',dict(state='scoring_holdout',selected_epoch=selected_epoch))
+        progress('scoring_holdout',selected_epoch=selected_epoch)
         test=evaluate(model,rows,targets,test_rows,mean,scale,classes)
         prior=evaluate(model,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0))
-    write_json(out/'progress.json',dict(state='packing_model',selected_epoch=selected_epoch))
+    progress('packing_model',selected_epoch=selected_epoch)
     plane,layout=weights.pack(model)
     arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
         normalization=np.r_[mean.ravel().astype(np.float64),scale.ravel().astype(np.float64),support['limit']],
@@ -158,7 +166,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
         class_candidate_ids=routes,weights_sha256=hashlib.sha256(raw).hexdigest(),tensor_layout_sha256=layout,
         classes=classes.tolist(),bins=rows.shape[2],epochs=epochs,seed=seed,allocation=budget,
         counts={name:targets[split==code].sum(0).tolist() for code,name in enumerate(['train','validation','test'])},
-        partition_rows=[len(train_rows),len(validation_rows),len(test_rows)],test=test,prior_only_test=prior,
+        partition_rows=[len(train_rows),len(validation_rows),len(test_rows)],dataset=dataset,test=test,prior_only_test=prior,
         selected_epoch=selected_epoch,checkpoint_selection='all-training-rows-seen/validation-macro-top5-then-top5-then-loss',
         curriculum=dict(warmup_steps=warmup_steps,clean_epochs=clean_epochs,gradient_norm_limit=1.,
             initialization='shared-convolution-and-readout/independent-attention-parameters/v1',
@@ -175,6 +183,6 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
     encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
     if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
     (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)
-    write_json(out/'progress.json',dict(state='complete',examples=len(rows),selected_epoch=selected_epoch,
-        screening_qualified=False,seconds=time.monotonic()-began))
+    progress('complete',examples=len(rows),selected_epoch=selected_epoch,
+        screening_qualified=False,seconds=time.monotonic()-began)
     return metadata

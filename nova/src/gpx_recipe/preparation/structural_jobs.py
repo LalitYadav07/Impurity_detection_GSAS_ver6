@@ -289,6 +289,7 @@ def execute_training(request):
         weights_sha256=model['weights_sha256'], observations_included=False,
         screening_qualified=False, candidate_pruning_authorized=False, scientific_result=False,
         seconds=time.monotonic()-began)
+    if paired:receipt['dataset']=model['dataset']
     write_json(out/'training.json', receipt)
     write_json(out/'progress.json', dict(state='complete', examples=model['examples'],
                                        screening_qualified=False))

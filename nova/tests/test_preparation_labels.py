@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from radar_pd_nova.preparation_labels import entry_label,scope_labels,native_dimensions
+from radar_pd_nova.preparation_labels import entry_label,scope_labels,native_dimensions,training_description
 
 
 def test_children_of_one_irrep_show_their_declared_subgroup_and_k():
@@ -76,6 +76,28 @@ def test_untyped_completed_counts_are_unavailable(tmp_path,counts):
         settings={},grid={},detail=dict(mode_dimensions=counts[0],cell_dimensions=counts[1]))))
     library=SimpleNamespace(root=tmp_path,verify_assets=lambda names:{name:path})
     assert native_dimensions(library,dict(state='prepared',model=model,files=[dict(path=name)])) is None
+
+
+def test_completed_training_shows_clean_splits_without_calling_simulated_rows_independent_pairs(tmp_path):
+    from gpx_recipe.preparation.structural_training_counts import describe
+    dataset=describe(['a','a','b','c'],[0,0,1,2],[True,False,True,True],generated_pairs=5,simulated_observations=2)
+    model=dict(kind='structural-training',settings={},grid={});name='entries/train/entry.json'
+    path=tmp_path/name;path.parent.mkdir(parents=True)
+    document=dict(schema='radar-experiment-preparation-entry/v1',kind='structural-training',
+        settings={},grid={},detail=dict(dataset=dataset))
+    path.write_text(json.dumps(document));seen=[]
+    def verify(names):seen.extend(names);return {name:path}
+    library=SimpleNamespace(root=tmp_path,verify_assets=verify)
+    entry=dict(state='prepared',model=model,files=[dict(path=name)])
+    result=training_description(library,entry)
+    assert '3 unique clean pairs' in result and 'train / validation / test: 1 / 1 / 1' in result
+    assert '1 additional simulated rows' in result and '3 separate trajectory groups' in result
+    assert seen==[name]
+    assert training_description(library,dict(entry,state='pending')) is None
+    document['detail']={};path.write_text(json.dumps(document))
+    assert training_description(library,entry) is None
+    document['detail']={'dataset':dict(dataset,unique_clean_pairs=30)};path.write_text(json.dumps(document))
+    with pytest.raises(ValueError):training_description(library,entry)
 
 
 def test_scope_labels_verify_the_captured_metadata_and_only_include_selected_models(tmp_path):
