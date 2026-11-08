@@ -1,10 +1,12 @@
 """Closed structural dispatch and immutable complete-model capture, no GSAS."""
 import copy
+import asyncio
 import hashlib
 import io
 import json
 from pathlib import Path
 import zipfile
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -83,6 +85,32 @@ def test_structural_dispatch_carries_the_sealed_optional_preparation_snapshot(re
     handle=StructuralSnapshotRuntime(runtime).submit(payload,root,source=source,timeout=60)
     assert handle['request']['payload']['prepared_scattering']==document
     assert 'model/'+structural_hints.MANIFEST in handle['request']['input_hashes']
+
+
+@pytest.mark.parametrize('problem',[OSError('Result download interrupted'),ValueError('Publication needs verification')])
+def test_finished_snapshot_with_uncollected_result_recovers_the_same_galaxy_job(remote,tmp_path,monkeypatch,problem):
+    from radar_pd_nova.webmon.structural_stream import analyse_snapshot
+    from radar_pd_nova.webmon.stream import ReviewRequired
+    runtime,service,source=remote;root,payload,_=captured(tmp_path,source)
+    folder=root/'revision';folder.mkdir()
+    item=dict(payloads=[payload],revision=payload['revision'],receipt=payload['receipt'],
+        captured_monotonic=time.monotonic(),folder=str(folder))
+    adapter=StructuralSnapshotRuntime(runtime);collections=[]
+    def collect(handle,directory):
+        collections.append(handle['key'])
+        if len(collections)==1:raise problem
+        return dict(result=dict(metrics=dict(rwp_native=2.))),1.
+    monkeypatch.setattr(adapter,'collect',collect)
+    with pytest.raises(ReviewRequired,match='unresolved'):
+        asyncio.run(analyse_snapshot(adapter,item,root,source=source,poll_seconds=.001))
+    saved=json.loads((folder/'progress.json').read_text())
+    assert saved['terminal']==0 and saved['rows'][0]['state']=='needs_recovery'
+    assert 'Galaxy job finished; result collection needs recovery' in saved['rows'][0]['reason']
+    assert len(service.submissions)==1
+    rows=asyncio.run(analyse_snapshot(adapter,item,root,source=source,poll_seconds=.001))
+    assert rows[0]['state']=='verified_point_fit'
+    assert collections[0]==collections[1] and len(service.submissions)==1
+    assert json.loads((folder/'progress.json').read_text())['terminal']==1
 
 
 def test_structural_native_dispatch_uses_the_existing_shared_model_input_layout(remote,tmp_path):

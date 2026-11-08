@@ -1250,3 +1250,18 @@ their counts are left unavailable rather than inferred from augmented totals.
 New readers reject inconsistent count receipts. Training progress retains the
 same denominator from warmup through holdout scoring. These are descriptive
 dataset counts, not evidence that the classifier is scientifically qualified.
+
+## Structural live result collection and display
+
+A finished Galaxy job is not a collected point fit. Interrupted result
+transfers or publication verification retain the exact dispatch handle and
+pause automatic snapshot advancement for explicit recovery. Recovery uses the
+same captured native request, so it does not launch another refinement.
+Confirmed worker failures and cancellations remain distinct terminal outcomes.
+The live model table uses readable state labels; expandable job messages retain
+the specific collection or dispatch problem beside the recovery controls.
+
+Status polling publishes each completed view once. It does not rehash every
+completed artifact or redraw the unchanged selected fit on every other job's
+queue update. Selection, coordinate, intensity and zoom changes retain the
+normal publication-integrity checks before drawing.

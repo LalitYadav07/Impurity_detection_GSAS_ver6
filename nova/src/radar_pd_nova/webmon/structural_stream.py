@@ -162,9 +162,15 @@ async def analyse_snapshot(adapter,item,root,*,source,labels=None,cancel=None,on
                 # failure that allows the next acquisition to start.
                 saved=Path(item['folder'])/('handle-'+digest(row['candidate'])[:24]+'.json')
                 h=json.loads(saved.read_text()) if saved.is_file() else None
-                pending=h is not None and h.get('submission_started') and row.get('state') not in {'finished','failed','cancelled'}
+                # A finished Galaxy job is not a collected result. Preserve
+                # its handle when transfer or publication checks fail, so
+                # explicit recovery collects that same immutable attempt.
+                pending=h is not None and h.get('submission_started') and row.get('state') not in {'failed','cancelled'}
                 if pending:unresolved.append(row['candidate'])
-                row.update(state='needs_recovery' if pending else 'failed',reason=str(exc));publish()
+                reason=str(exc)
+                if pending and row.get('state') in {'finished','verified_point_fit'}:
+                    reason='Galaxy job finished; result collection needs recovery: '+reason
+                row.update(state='needs_recovery' if pending else 'failed',reason=reason);publish()
     await asyncio.gather(*(one(index,payload) for index,payload in enumerate(item['payloads'])))
     if unresolved:raise ReviewRequired('Structural dispatch is unresolved. Existing job handles are saved; recover them before continuing snapshots.')
     return rows

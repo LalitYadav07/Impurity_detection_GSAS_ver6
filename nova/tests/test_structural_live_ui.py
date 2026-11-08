@@ -142,6 +142,48 @@ def test_partial_structural_fit_appears_without_erasing_previous_checked_results
     assert 'review required' in s.webmon_structural_choices[0]['title']
 
 
+def test_job_status_polls_do_not_rehash_every_completed_view_or_redraw_the_selected_fit(tmp_path,monkeypatch):
+    obj,_=view(tmp_path,2);asyncio.run(obj.webmon_adopt_structural_plan());plan=obj._webmon_structural_plan
+    stream=obj._new_structural_stream();item=stream.capture();draws=[];hashed=[]
+    obj.webmon_render_structural=lambda **kwargs:draws.append(obj.server.state.webmon_structural_selected)
+    original=structural_ui.file_sha
+    def checksum(path):hashed.append(str(path));return original(path)
+    monkeypatch.setattr(structural_ui,'file_sha',checksum)
+    rows=[]
+    for index,payload in enumerate(item['payloads']):
+        from gpx_recipe.structural_live.job import reviewed_job
+        candidate=reviewed_job(payload['directory'])[2]['id']
+        path=tmp_path/f'view-{index}.json';path.write_text('{}')
+        rows.append(dict(candidate=candidate,name=candidate,state='queued',revision=item['revision'],rwp=2.-index,
+            result=dict(view=str(path))))
+    async def status_updates(*args,on_progress,**kwargs):
+        on_progress(copy.deepcopy(rows))
+        rows[0]['state']='verified_point_fit'
+        for _ in range(5):on_progress(copy.deepcopy(rows))
+        rows[1]['state']='verified_point_fit';on_progress(copy.deepcopy(rows))
+        return rows
+    monkeypatch.setattr(structural_ui,'analyse_snapshot',status_updates)
+    asyncio.run(obj._webmon_execute_structural(item,stream,plan))
+    assert len(obj._webmon_structural_results)==2 and len(hashed)==2
+    assert len(draws)==2  # first available fit and final status; queued polls do no plot work
+    assert draws[0]==draws[1] and len(obj.server.state.webmon_structural_choices)==2
+    assert {r['display_state'] for r in obj.server.state.webmon_structural_rows}=={'Fit available · review required'}
+
+
+def test_result_collection_recovery_message_is_reachable_in_live_job_details(tmp_path,monkeypatch):
+    obj,_=view(tmp_path);asyncio.run(obj.webmon_adopt_structural_plan());plan=obj._webmon_structural_plan
+    stream=obj._new_structural_stream();item=stream.capture()
+    reason='Galaxy job finished; result collection needs recovery: Download interrupted'
+    async def lost_result(*args,on_progress,**kwargs):
+        on_progress([dict(candidate='public',name='Public model',state='needs_recovery',reason=reason)])
+        raise ReviewRequired('Structural dispatch is unresolved')
+    monkeypatch.setattr(structural_ui,'analyse_snapshot',lost_result)
+    asyncio.run(obj._webmon_execute_structural(item,stream,plan))
+    row=obj.server.state.webmon_structural_rows[0]
+    assert row['reason']==reason and row['display_state']=='Recovery needed'
+    assert obj.server.state.webmon_structural_recovery
+
+
 def test_structural_plot_uses_native_calibration_and_rejects_changed_display_artifact(tmp_path):
     obj,_=view(tmp_path);updates=[]
     from trame.app import get_server

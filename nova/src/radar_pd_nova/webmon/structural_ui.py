@@ -20,6 +20,13 @@ from .stream import LatestQueue,scope_of
 from .structural_stream import StructuralObservationStream,analyse_snapshot
 from .structural_runtime import StructuralSnapshotRuntime
 
+STATES={'pending':'Waiting for dispatch','submitting':'Submitting job','new':'Submitted',
+    'queued':'Queued in Galaxy','running':'Running','finished':'Collecting result',
+    'verified_point_fit':'Fit available · review required','failed':'Failed',
+    'cancelled':'Cancelled','needs_recovery':'Recovery needed',
+    'not_submitted':'Not submitted','waiting_stopped':'Waiting stopped · recover job',
+    'not_started':'Paused before submission'}
+
 
 class StructuralLiveMixin:
     def _init_structural_live(self):
@@ -175,7 +182,13 @@ class StructuralLiveMixin:
             html.P('{{ webmon_structural_message }}')
             html.P('{{ webmon_stream_message }}',v_if='webmon_stream_active')
             html.P('Point fits require optimization and scientific review. A current Rwp leader is not a uniquely identified structure; no structural posterior or counting-stop recommendation is produced.')
-            v.VDataTable(headers=([dict(title='Model',key='name'),dict(title='State',key='state'),dict(title='Rwp (%)',key='rwp'),dict(title='Revision',key='revision')],),items=('webmon_structural_rows',),items_per_page=8,density='compact')
+            v.VDataTable(headers=([dict(title='Model',key='name'),dict(title='State',key='display_state'),dict(title='Rwp (%)',key='rwp'),dict(title='Revision',key='revision')],),items=('webmon_structural_rows',),items_per_page=8,density='compact')
+            with html.Details(v_if='webmon_structural_rows.some(row => !!row.reason)'):
+                html.Summary('View job messages',style='cursor:pointer')
+                with html.Ul():
+                    html.Li('{{ row.name }} · {{ row.display_state }}: {{ row.reason }}',
+                        v_for='row in webmon_structural_rows.filter(row => !!row.reason)',key='row.candidate',
+                        style='overflow-wrap:anywhere')
             with html.Div(v_if='webmon_structural_has_result'):
                 with html.Div(classes='wm-toolbar'):
                     v.VSelect(label='Inspect structural fit',v_model=('webmon_structural_selected',),items=('webmon_structural_choices',),update_modelValue=(self.webmon_render_structural,'[$event]'),density='compact')
@@ -265,16 +278,26 @@ class StructuralLiveMixin:
         s.webmon_busy=True;s.webmon_stale=bool(s.webmon_structural_has_result);s.webmon_calculation_status='Submitting structural models';s.flush()
         def progress(rows):
             if not current():return
-            s.webmon_structural_rows=[{k:v for k,v in row.items() if k!='result'} for row in rows]
+            s.webmon_structural_rows=[dict({k:v for k,v in row.items() if k!='result'},
+                display_state=STATES.get(row['state'],row['state'].replace('_',' '))) for row in rows]
             complete=sum(row['state']=='verified_point_fit' for row in rows)
             failed=sum(row['state'] in {'failed','cancelled'} for row in rows)
             s.webmon_count_summary=f'{complete} / {len(rows)} point fits · {failed} need attention'
             s.webmon_structural_message=f"Run {stream.run} · revision {item['revision']} · {s.webmon_count_summary}. Waiting for remaining models."
+            selected=s.webmon_structural_selected;received=False
             for row in rows:
                 if row['state']=='verified_point_fit':
+                    key=item['id']+':'+row['candidate']
+                    if key in self._webmon_structural_results:continue
                     row['view_sha256']=file_sha(row['result']['view'])
-                    self._webmon_structural_results[item['id']+':'+row['candidate']]=row
-            self._structural_result_choices(item['id']);self.webmon_render_structural();s.flush()
+                    self._webmon_structural_results[key]=row;received=True
+            if received:
+                self._structural_result_choices(item['id'])
+                if s.webmon_structural_selected!=selected:self.webmon_render_structural()
+            # Polling another queued job must not reread every completed
+            # artifact or rebuild an unchanged selected Plotly figure. User
+            # selections/axis edits still perform their normal integrity check.
+            s.flush()
         try:
             rows=await analyse_snapshot(StructuralSnapshotRuntime(plan['runtime']),item,plan['root'],source=plan['source'],
                 labels=plan['labels'],cancel=self._webmon_remote_cancel,on_progress=progress)
