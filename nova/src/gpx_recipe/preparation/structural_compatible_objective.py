@@ -35,14 +35,24 @@ def checkpoint_key(metrics):
     else:raise ValueError('Unknown structural validation objective')
     if any(type(v) not in (int,float) or not math.isfinite(v) for v in values):
         raise ValueError('Finite validation selection scores are required')
+    if 'mode_validation' in metrics:
+        from .structural_joint_modes import validate_metrics
+        mode=validate_metrics(metrics['mode_validation'])
+        if metrics.get('loss_method')!=OBJECTIVE or len(mode['classes'])<2:
+            raise ValueError('Joint validation needs the same all-compatible class objective')
+        mode_loss=mode['loss'] if mode['available'] else 0.
+        return (values[0]/math.log(len(mode['classes']))+mode_loss,*values)
     return tuple(values)
 
 
 def validate_policy(metadata):
     """Check a newly declared policy without reinterpreting legacy models."""
-    if 'training_objective' not in metadata and metadata.get('checkpoint_selection')!=SELECTION:return
+    from .structural_joint_modes import OBJECTIVE as JOINT_OBJECTIVE,SELECTION as JOINT_SELECTION
+    joint=(metadata.get('training_objective')==JOINT_OBJECTIVE or metadata.get('checkpoint_selection')==JOINT_SELECTION)
+    if 'training_objective' not in metadata and metadata.get('checkpoint_selection') not in {SELECTION,JOINT_SELECTION}:return
     history=metadata.get('history');epochs=metadata.get('epochs')
-    if (metadata.get('training_objective')!=OBJECTIVE or metadata.get('checkpoint_selection')!=SELECTION
+    if (metadata.get('training_objective')!=(JOINT_OBJECTIVE if joint else OBJECTIVE)
+            or metadata.get('checkpoint_selection')!=(JOINT_SELECTION if joint else SELECTION)
             or type(epochs)is not int or not 1<=epochs<=1000
             or not isinstance(history,list) or len(history)!=epochs):
         raise ValueError('All-compatible training needs its exact objective and validation history')
@@ -51,11 +61,14 @@ def validate_policy(metadata):
         if (not isinstance(row,dict) or row.get('epoch')!=i+1
                 or type(row.get('checkpoint_eligible'))is not bool
                 or not isinstance(row.get('validation'),dict)
-                or row['validation'].get('loss_method')!=OBJECTIVE):
+                or row['validation'].get('loss_method')!=OBJECTIVE
+                or ('mode_validation' in row['validation'])!=joint):
             raise ValueError('All-compatible training history changed its selection policy')
         checkpoint_key(row['validation'])
         if row['checkpoint_eligible']:eligible.append(row)
     if not eligible or metadata.get('selected_epoch')!=min(eligible,key=lambda row:checkpoint_key(row['validation']))['epoch']:
         raise ValueError('The structural model lost its all-compatible validation-selected checkpoint')
-    if not isinstance(metadata.get('test'),dict) or metadata['test'].get('loss_method')!=OBJECTIVE:
+    if (not isinstance(metadata.get('test'),dict) or metadata['test'].get('loss_method')!=OBJECTIVE
+            or ('mode_validation' in metadata['test'])!=joint):
         raise ValueError('The structural test uses a different objective from training')
+    checkpoint_key(metadata['test'])

@@ -53,7 +53,7 @@ class Backend:
             torch.mps.synchronize()
             torch.mps.set_rng_state(before)
 
-    def portable_model(self,model,rows,indices,mean,scale):
+    def portable_model(self,model,rows,indices,mean,scale,*,mode_context=None):
         """Audit GPU -> CPU logits on training representatives before export.
 
         This checks numerical transport, not accuracy or scientific admission.
@@ -62,11 +62,14 @@ class Backend:
         if self.kind=='cpu':return model,None
         import torch
         from .structural_training_data import batches
-        cpu=copy.deepcopy(model).cpu().eval();largest=0.;count=0
+        cpu=copy.deepcopy(model).cpu().eval();largest=0.;count=0;mode_queries=0;mode_error=0.
         with torch.no_grad():
             for _,values in batches(rows,indices,size=64):
                 inputs=torch.from_numpy((values-mean)/scale)
-                actual=forward(model,inputs);expected=cpu(inputs)
+                if mode_context is None:actual=forward(model,inputs);expected=cpu(inputs)
+                else:
+                    actual,expected,checked=mode_context.transport(model,cpu,inputs)
+                    mode_queries+=checked['mode_queries'];mode_error=max(mode_error,checked['maximum_mode_absolute_error'])
                 if (not torch.isfinite(actual).all() or not torch.isfinite(expected).all()
                         or not torch.allclose(actual,expected,rtol=1e-4,atol=1e-5)):
                     raise ValueError('GPU training weights do not reproduce portable CPU logits')
@@ -74,6 +77,7 @@ class Backend:
         if not count:raise ValueError('CPU portability requires training representatives')
         return cpu,dict(device='mps',portable_inference_device='cpu',
             representatives=count,maximum_logit_absolute_error=largest,
+            **(dict(mode_queries=mode_queries,maximum_mode_absolute_error=mode_error) if mode_context is not None else {}),
             relative_tolerance=1e-4,absolute_tolerance=1e-5,
             scope='Training-only numerical transport; no screening qualification')
 

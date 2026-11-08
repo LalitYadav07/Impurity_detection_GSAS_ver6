@@ -44,3 +44,19 @@ def test_visible_scan_priorities_keep_independent_protocols_and_do_not_reload_th
     saved={'a':first,'b':second}
     assert visible_rows(saved,[dict(protocol='b',source='scan-b')])==[
         dict(id='b',scan='scan-b',summary=second['reason'])]
+
+
+def test_conditional_modes_remain_unresolved_and_follow_the_selected_scan_only():
+    from radar_pd_nova.structural_ranking_labels import mode_rows
+    from test_structural_ranking_result import mode_estimates
+    estimates=mode_estimates([12]);evidence=dict(ranking_available=True,families=[dict(space_group=12)],mode_estimates=estimates)
+    result=mode_rows(evidence)
+    assert result[0]['family']=='GM1+' and result[0]['k']=='0, 0, 0'
+    assert result[0]['status']=='Unresolved · uncalibrated'
+    estimates['rows'][0].update(lower_estimate=None,upper_estimate=None,reason='No fitting support')
+    assert mode_rows(evidence)[0]['amplitude']=='Not learned'
+    shown=visible_rows({'one':evidence},[dict(protocol='one',source='Run 1')])
+    assert shown[0]['mode_rows']==mode_rows(evidence)
+    assert visible_rows({'one':evidence},[dict(protocol='other',source='Run 2')])==[]
+    estimates['rows'][0]['status']='absent'
+    assert mode_rows(evidence)==[]

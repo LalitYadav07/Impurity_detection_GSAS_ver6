@@ -209,6 +209,9 @@ def rank(root,protocol,q,intensity,*,background,parent_sha256,instrument_sha256,
                 from .structural_adaptive_sets import requested_scope
                 result=dict(result,adaptive_work_set=requested_scope(result['adaptive_work_set'],
                     [r['space_group'] for r in families]))
+            if 'mode_estimates' in result:
+                from .structural_joint_modes import scope_estimates
+                result=dict(result,mode_estimates=scope_estimates(result['mode_estimates'],[r['space_group'] for r in families]))
             ranked=list(dict.fromkeys(key for family in families for key in family['candidate_ids']))
             return dict(result,families=families,candidate_order=ranked+[key for key in order if key not in ranked],
                         entry=row['entry'],bank=row['bank'],snapshot_sha256=document['snapshot_sha256'],

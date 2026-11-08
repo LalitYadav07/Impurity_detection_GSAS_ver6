@@ -44,6 +44,23 @@ def visible_rows(evidence,rows):
     result=[]
     for sha,row in first.items():
         if sha not in evidence:continue
-        result.append(dict(id=sha,scan=(row.get('metadata') or {}).get('scan') or row.get('source',''),
-            summary=describe(evidence[sha])))
+        value=dict(id=sha,scan=(row.get('metadata') or {}).get('scan') or row.get('source',''),summary=describe(evidence[sha]))
+        if 'mode_estimates' in evidence[sha]:value['mode_rows']=mode_rows(evidence[sha])
+        result.append(value)
+    return result
+
+
+def mode_rows(evidence):
+    """One bounded presentation for campaign and live-snapshot consumers."""
+    from gpx_recipe.preparation.structural_joint_modes import validate_estimates
+    try:value=validate_estimates(evidence.get('mode_estimates'))
+    except (ValueError,TypeError,KeyError):return []
+    if not value['available']:return []
+    result=[]
+    for row in value['rows']:
+        family=value['families'][row['family_index']];lower=row['lower_estimate'];upper=row['upper_estimate']
+        result.append(dict(space_group='SG '+str(row['space_group']),family=family['irrep'],
+            k=', '.join(family['k']),amplitude='Not learned' if lower is None else f'{lower:.5g} – {upper:.5g}',
+            status='Unresolved · uncalibrated' if lower is not None else 'Unresolved · no fitting support',
+            reason=row['reason']))
     return result

@@ -89,6 +89,47 @@ def work_set(classes):
         experimental_coverage_qualified=False,candidate_pruning_authorized=False,native_refinement_required=True)
 
 
+def mode_estimates(groups):
+    """Authored receipt data; no inference or scientific qualification claim."""
+    from gpx_recipe.preparation.structural_joint_modes import SCHEMA,validate_estimates
+    from gpx_recipe.preparation.structural_mode_families import family_label,NORMALIZATION
+    parsed=family_label('R-3m[0,0,0]GM1+(a)[A:c:dsp]A(a)',parent_sha256='a'*64)
+    family={k:parsed[k] for k in ['id','parent_sha256','parent_convention','k','irrep']}
+    return validate_estimates(dict(schema=SCHEMA,available=True,space_groups=groups,families=[family],
+        readout_identity='f'*64,amplitude_normalization=NORMALIZATION,reason='Authored transport control',
+        intervals_calibrated=False,experimental_mode_absence_qualified=False,candidate_pruning_authorized=False,
+        rows=[dict(space_group=c,family_index=0,status='unresolved',lower_estimate=.01,upper_estimate=.02,
+                   reason='Not calibrated',intervals_calibrated=False) for c in groups]))
+
+
+@pytest.mark.parametrize('live',[False,True])
+def test_conditional_mode_receipts_retain_exact_source_scope_and_every_family(live):
+    from gpx_recipe.preparation.structural_ranking_result import attach_modes,attach_adaptive,MODE_SCHEMA,MODE_SNAPSHOT_SCHEMA
+    p=protocol();value=ranked(p);observation=None
+    if live:
+        observation=dict(snapshot_sha256='f'*64,calculation_source_sha256='e'*64,acquisition_sha256='d'*64,revision=3)
+        value.update(schema='radar-structural-snapshot-ranking-evidence/v1',observation=observation)
+    result=attach_adaptive(attach_modes(value,mode_estimates([12])),work_set([12]))
+    assert result['schema']==(MODE_SNAPSHOT_SCHEMA if live else MODE_SCHEMA)
+    assert validate(result,p,observation=observation)==result
+    assert result['candidate_order']==value['candidate_order'] and result['complete_native_search_required']
+
+
+@pytest.mark.parametrize('change',['missing','duplicate','foreign','negative','presence','absence','qualification','family_identity','schema'])
+def test_mode_receipts_cannot_omit_conditions_or_turn_raw_predictions_into_physical_claims(change):
+    from gpx_recipe.preparation.structural_ranking_result import attach_modes
+    p=protocol();value=attach_modes(ranked(p),mode_estimates([12]));m=value['mode_estimates']
+    if change=='missing':m['rows'].clear()
+    elif change=='duplicate':m['rows'].append(copy.deepcopy(m['rows'][0]))
+    elif change=='foreign':m['rows'][0]['space_group']=166
+    elif change=='negative':m['rows'][0]['lower_estimate']=-.1
+    elif change in {'presence','absence'}:m['rows'][0]['status']=change
+    elif change=='qualification':m['experimental_mode_absence_qualified']=True
+    elif change=='family_identity':m['families'][0]['irrep']='GM3-'
+    else:value['schema']='radar-structural-ranking-evidence/v1'
+    with pytest.raises(ValueError):validate(value,p)
+
+
 @pytest.mark.parametrize('live',[False,True])
 def test_adaptive_evidence_keeps_source_binding_and_all_native_work(live):
     from gpx_recipe.preparation.structural_ranking_result import attach_adaptive,ADAPTIVE_SCHEMA,ADAPTIVE_SNAPSHOT_SCHEMA

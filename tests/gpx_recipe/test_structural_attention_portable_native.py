@@ -42,7 +42,7 @@ def artifact(root,*,architecture=None):
     return model,q,current,request,arrays,metadata
 
 
-@pytest.mark.parametrize('architecture',sorted(w.ARCHITECTURES))
+@pytest.mark.parametrize('architecture',sorted(w.CLASS_ARCHITECTURES))
 def test_attention_roundtrip_keeps_exact_logits_with_six_data_arrays(tmp_path,architecture):
     model,q,current,request,arrays,d=artifact(tmp_path/'model',architecture=architecture)
     raw=(tmp_path/'model/weights.npz').read_bytes();validate_npz_bytes(raw,maximum_bytes=32*1024**2)

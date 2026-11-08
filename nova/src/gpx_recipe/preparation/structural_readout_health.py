@@ -5,7 +5,7 @@ from .structural_training_data import batches
 from .structural_training_backend import forward as training_forward
 
 
-def forward(model,values):
+def forward(model,values,*,_embedding_sink=None):
     """One actual forward pass, inspecting the final linear layer's input."""
     import torch
     captured=[]
@@ -16,6 +16,7 @@ def forward(model,values):
     if (len(captured)!=1 or captured[0].ndim!=2 or captured[0].shape[0]!=len(values)
             or not torch.isfinite(captured[0]).all() or not torch.isfinite(logits).all()):
         raise ValueError('The fixed attention readout returned invalid activations')
+    if _embedding_sink is not None:_embedding_sink(captured[0])
     return logits,torch.any(captured[0]!=0,dim=1)
 
 

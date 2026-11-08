@@ -219,6 +219,9 @@ def rank_gpx(input_root,protocol,destination,*,source_override=None,observation=
                 if 'adaptive_work_set' in ranked:
                     from .structural_ranking_result import attach_adaptive
                     result=attach_adaptive(result,ranked['adaptive_work_set'])
+                if 'mode_estimates' in ranked:
+                    from .structural_ranking_result import attach_modes
+                    result=attach_modes(result,ranked['mode_estimates'])
                 checks.append(dict(entry=row['entry'],status='compatible',
                     reason='Native parent, bank profile, sites/ADPs and sample corrections matched within the trained lattice envelope'))
                 break

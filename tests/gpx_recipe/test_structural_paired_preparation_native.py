@@ -61,12 +61,20 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
 
 
 @pytest.mark.parametrize('multipart',[False,True])
-@pytest.mark.parametrize('native_maps,additive',[(False,False),(True,False),(True,True)])
+@pytest.mark.parametrize('native_maps,additive',[(False,False),(True,False),(True,True),('families',True)])
 def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart,native_maps,additive):
     root=tmp_path/'capture';example,directory=inputs(root)
     if native_maps or additive:
         from test_structural_mode_projection import attach
         attach(directory,names='examples')
+    known_modes=native_maps=='families'
+    if known_modes:
+        from test_structural_mode_projection import rewrite_projection
+        rewrite_projection(directory,change=lambda d:d.update(native_mode_labels=[
+            'R-3m[0,0,0]GM1+(a)[A:c:dsp]A(a)','unresolved origin']))
+        metadata=json.loads((directory/'examples.json').read_text())
+        metadata['mode_projection']['metadata_sha256']=file_sha(directory/'mode-projection.json')
+        (directory/'examples.json').write_text(json.dumps(metadata))
     directories=[directory]
     if additive:
         from test_structural_supplement_pairs import addition
@@ -105,11 +113,14 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
     if native_maps or additive:
         supervision=model.metadata['mode_family_supervision']
         assert supervision['mapped_blocks']==supervision['total_blocks']==len(directories)
-        assert supervision['rows']==model.metadata['examples'] and supervision['intervals']==0
-        assert model.metadata['mode_head_trained'] is False
+        assert supervision['rows']==model.metadata['examples']
+        assert bool(supervision['intervals'])==known_modes
+        assert model.metadata['mode_head_trained']==known_modes
     else:assert 'mode_family_supervision' not in model.metadata
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3
-    assert model.metadata['architecture']==ARCHITECTURE and model.metadata['readout_health']['readout_active']
+    from gpx_recipe.preparation.structural_attention_weights import MODE_ARCHITECTURE
+    assert model.metadata['architecture']==(MODE_ARCHITECTURE if known_modes else ARCHITECTURE)
+    assert model.metadata['readout_health']['readout_active']
     assert model.metadata['classes']==[12,166]
     if native_maps or additive:
         assert model.metadata['mode_projection_coverage']['complete']
@@ -117,7 +128,11 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
     if additive:
         assert set(model.metadata['additive_pair_inventory'])=={'1'}
         assert model.metadata['partition_anchor']['schema']=='radar-owned-original-additive-partition/v1'
-        assert model.metadata['mode_head_trained'] is False
+        assert model.metadata['mode_head_trained']==known_modes
+    if known_modes:
+        from gpx_recipe.preparation.structural_joint_modes import OBJECTIVE,SELECTION
+        assert model.metadata['training_objective']==OBJECTIVE and model.metadata['checkpoint_selection']==SELECTION
+        assert model.metadata['test']['mode_validation']['available']
     assert model.metadata['feature_storage']=='native_pair_replay'
     entry=json.loads((collected/'native/trained/entry.json').read_text())
     assert entry['detail']['dataset']==model.metadata['dataset']

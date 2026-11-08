@@ -59,9 +59,18 @@ def test_null_three_curve_input_has_finite_logits_and_weight_gradients():
 @pytest.mark.parametrize('source,target',list(itertools.permutations(sorted(weights.ARCHITECTURES),2)))
 def test_old_and_new_architecture_names_cannot_reinterpret_numeric_planes(source,target):
     torch.manual_seed(91)
-    plane,layout=weights.pack(network(4,architecture=source))
+    def construct(architecture):
+        return network(4,architecture=architecture,**(dict(family_count=3) if architecture==weights.MODE_ARCHITECTURE else {}))
+    plane,layout=weights.pack(construct(source))
     with pytest.raises(ValueError,match='installed architecture'):
-        weights.restore(network(4,architecture=target),plane,layout)
+        weights.restore(construct(target),plane,layout)
+
+
+def test_conditional_family_counts_cannot_reinterpret_a_mode_weight_plane():
+    source=network(4,architecture=weights.MODE_ARCHITECTURE,family_count=3)
+    plane,layout=weights.pack(source)
+    with pytest.raises(ValueError,match='installed architecture'):
+        weights.restore(network(4,architecture=weights.MODE_ARCHITECTURE,family_count=2),plane,layout)
 
 
 @pytest.mark.parametrize('bins',[0,63,8193])

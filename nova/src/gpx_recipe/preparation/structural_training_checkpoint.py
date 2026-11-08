@@ -54,8 +54,8 @@ def identity(cohort,rows,targets,split,clean,mean,scale,*,epochs,seed,workers):
         'reference_feature_sha256','training_domain','augmentation','augmentation_sha256','original_examples',
         'augmented_examples','ambiguous_examples','channels','representation','reference_kind','partition_method','partition_anchor',
         'mode_projection_inventory','mode_projection_references','mode_projection_coverage','calibration_partition',
-        'training_objective','checkpoint_selection','mode_family_target_identity','mode_family_supervision','additive_pair_inventory')}
-    metadata.update(implementation=package_signature(),architecture=weights.ARCHITECTURE,
+        'training_objective','checkpoint_selection','mode_family_target_identity','mode_family_supervision','additive_pair_inventory','mode_readout')}
+    metadata.update(implementation=package_signature(),architecture=(weights.MODE_ARCHITECTURE if cohort.get('mode_readout') is not None else weights.ARCHITECTURE),
         torch_version=str(torch.__version__),numpy_version=np.__version__,epochs=epochs,seed=seed,workers=workers)
     from .structural_training_data import MAX_ROWS
     if len(rows)>MAX_ROWS:metadata['row_layout']=rows.row_layout

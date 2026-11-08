@@ -100,9 +100,28 @@ class Ranker:
             from .structural_domain import validate
             validate(d['training_domain'])
         validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
+        mode_model=d['architecture']==weights.MODE_ARCHITECTURE
         with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
-            if set(archive.files)!=ARRAYS:raise ValueError('Unexpected three-curve model array inventory')
-            a={k:archive[k] for k in ARRAYS}
+            from . import structural_joint_modes as joint
+            expected=ARRAYS|({joint.ARRAY} if mode_model else set())
+            if set(archive.files)!=expected:raise ValueError('Unexpected three-curve model array inventory')
+            a={k:archive[k] for k in expected}
+        spec=None
+        if mode_model:
+            spec=joint.decode(a[joint.ARRAY],d.get('mode_readout'))
+            supervision=d.get('mode_family_supervision')
+            if (d.get('mode_head_trained') is not True or spec['classes']!=classes
+                    or d.get('training_objective')!=joint.OBJECTIVE or d.get('checkpoint_selection')!=joint.SELECTION
+                    or not isinstance(supervision,dict) or supervision.get('identity')!=spec['targets_identity']
+                    or supervision.get('families')!=spec['families'] or supervision.get('classes')!=classes
+                    or any(f['parent_sha256']!=d['parent_sha256'] for f in spec['families'])):
+                raise ValueError('Mode head differs from its complete class, parent or native supervision inventory')
+            for metric in [r['validation'] for r in d['history']]+[d['test']]:
+                mode=joint.validate_metrics(metric['mode_validation'])
+                if mode['classes']!=classes or mode['families']!=[f['id'] for f in spec['families']]:
+                    raise ValueError('Mode validation differs from the complete trained conditional inventory')
+        elif 'mode_readout' in d or d.get('mode_head_trained') is True:
+            raise ValueError('A legacy class model cannot claim trained conditional mode tensors')
         edges=a['q_edges'];normal=a['normalization'];reference=a['reference_features']
         if (edges.dtype!=np.float64 or edges.shape!=(bins+1,) or not np.isfinite(edges).all()
                 or edges[0]<=0 or np.any(np.diff(edges)<=0)
@@ -126,10 +145,12 @@ class Ranker:
                 or not np.isfinite(prototypes).all()):
             raise ValueError('Invalid three-curve training-support index')
         self.allocation=allocation(threads);torch.set_num_threads(self.allocation['workers'])
-        self.model=network(len(classes),architecture=d['architecture'])
+        self.model=network(len(classes),architecture=d['architecture'],
+            **({} if spec is None else dict(family_count=len(spec['families']))))
         weights.restore(self.model,a['parameters'],d.get('tensor_layout_sha256'))
         self.metadata=d;self.edges=edges;self.mean=mean;self.scale=scale;self.reference=reference
         self.routes=routes;self.support_prototypes=prototypes;self.support_limit=float(normal[6])
+        self.mode_spec=spec
 
     def rank(self,q,intensity,*,background,parent_sha256,instrument_sha256,valid=None,reference=None):
         import torch
@@ -156,9 +177,11 @@ class Ranker:
         support=dict(status='within_empirical_synthetic_support' if inside else 'outside_prepared_support',
             nearest_training_rms=distance,validation_maximum_rms=self.support_limit,statistical_coverage_qualified=False)
         scores=None;available=False;reason='This pattern is outside the prepared simulations; retain all families for native refinement'
+        embeddings=[]
         if inside:
             from .structural_readout_health import forward
-            with torch.no_grad():logits,active=forward(self.model,torch.from_numpy(feature[None]))
+            with torch.no_grad():logits,active=forward(self.model,torch.from_numpy(feature[None]),
+                _embedding_sink=embeddings.append if self.mode_spec is not None else None)
             available=bool(active.any())
             if available:
                 scores=logits.softmax(1)[0].numpy()
@@ -181,4 +204,11 @@ class Ranker:
             calibration=self.metadata['adaptive_calibration']
             result['adaptive_work_set']=select(logits.numpy() if scores is not None else np.zeros((1,len(families))),
                 calibration,identities=calibration['identities'],within_support=bool(inside and available))
+        if self.mode_spec is not None:
+            from .structural_joint_modes import infer,unavailable
+            if available:
+                groups=[row['space_group'] for row in families]
+                with torch.no_grad():result['mode_estimates']=infer(self.model,embeddings[0],self.mode_spec,space_groups=groups)
+            else:
+                result['mode_estimates']=unavailable(reason)
         return result

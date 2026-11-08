@@ -3,6 +3,7 @@ import copy
 import hashlib
 import io
 import json
+import math
 from pathlib import Path
 import time
 
@@ -103,8 +104,15 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
     from .structural_calibration_partition import reserve
     reservation=reserve(cohort['groups'],split,clean,targets)
     split=reservation.split
-    cohort=dict(cohort,calibration_partition=reservation.metadata,training_objective=OBJECTIVE,
-        checkpoint_selection=SELECTION)
+    from . import structural_joint_modes as joint
+    modes=joint.prepare(cohort,split)
+    objective=OBJECTIVE if modes is None else joint.OBJECTIVE
+    selection=SELECTION if modes is None else joint.SELECTION
+    architecture=weights.ARCHITECTURE if modes is None else weights.MODE_ARCHITECTURE
+    network_options={} if modes is None else dict(architecture=architecture,family_count=len(modes.spec['families']))
+    cohort=dict(cohort,calibration_partition=reservation.metadata,training_objective=objective,
+        checkpoint_selection=selection)
+    if modes is not None:cohort['mode_readout']=modes.spec
     row_layout=rows.row_layout if len(rows)>MAX_ROWS else None
     dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
         generated_pairs=cohort['original_examples'],
@@ -137,11 +145,11 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
         clean_epochs=min(10,epochs//4);best=None;best_key=None;selected_epoch=None
         warmup_steps=200
         with torch.random.fork_rng(devices=[]),engine.random_state(seed):
-            torch.manual_seed(seed);model=network(len(classes))
+            torch.manual_seed(seed);model=network(len(classes),**network_options)
             # Keep convolution/readout initialization independent of how many
             # attention parameters consume the random stream. This is the same
             # controlled initialization used in the attention/CNN pilot.
-            torch.manual_seed(seed);control=network(len(classes),attention=False)
+            torch.manual_seed(seed);control=network(len(classes),attention=False,**network_options)
             model.local.load_state_dict(control.local.state_dict())
             model.head.load_state_dict(control.head.state_dict());del control
             model=engine.place(model)
@@ -187,11 +195,14 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             if recovered is None:save_checkpoint(0,0)
 
             def update(selected,values):
-                model.train();logits=backend.forward(model,torch.from_numpy((values-mean)/scale))
+                model.train();inputs=torch.from_numpy((values-mean)/scale)
+                if modes is None:logits=backend.forward(model,inputs)
+                else:logits,embedding=joint.shared(model,inputs)
                 allowed=torch.from_numpy(targets[selected])
-                objective=terms(logits,allowed)[0].mean()
-                if not torch.isfinite(objective):raise ValueError('Nonfinite attention training objective; no model was published')
-                optimizer.zero_grad(set_to_none=True);objective.backward()
+                batch_objective=terms(logits,allowed)[0].mean()
+                if modes is not None:batch_objective=batch_objective/math.log(len(classes))+modes.objective(model,embedding,selected)
+                if not torch.isfinite(batch_objective):raise ValueError('Nonfinite attention training objective; no model was published')
+                optimizer.zero_grad(set_to_none=True);batch_objective.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(),1.,error_if_nonfinite=True);optimizer.step()
                 visited[selected]=True
 
@@ -229,7 +240,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
                     evaluate(model,rows,targets,representatives,mean,scale,classes).items()
                     if key!='per_class'}
                 strong_recall['representatives']=len(representatives)
-                metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes,clean=clean)
+                metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes,clean=clean,_mode_context=modes)
                 eligible=epoch>=clean_epochs and visited[train_rows].all()
                 key=checkpoint_key(metrics)
                 if eligible and (best_key is None or key<best_key):
@@ -253,7 +264,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
             model.load_state_dict(best);model.eval()
             health=require_readout()
-            portable,transport=engine.portable_model(model,rows,representatives,mean,scale)
+            portable,transport=engine.portable_model(model,rows,representatives,mean,scale,**({} if modes is None else dict(mode_context=modes)))
             progress('calibrating_training_support',selected_epoch=selected_epoch)
             support=fit_support(rows,train_rows,validation_rows,targets,mean,scale,seed=seed)
             progress('packing_frozen_model',selected_epoch=selected_epoch)
@@ -261,6 +272,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
                 normalization=np.r_[mean.ravel().astype(np.float64),scale.ravel().astype(np.float64),support['limit']],
                 classes=classes,reference_features=cohort['reference_features'],support_prototypes=support['prototypes'])
+            if modes is not None:arrays[joint.ARRAY]=joint.encode(modes.spec)
             stream=io.BytesIO();np.savez_compressed(stream,**arrays);raw=stream.getvalue()
             validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
             adaptive_calibration=adaptive_test=None;test_capture=None
@@ -276,14 +288,14 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             # sampling, prototypes, stopping or checkpoint selection.
             progress('scoring_holdout',selected_epoch=selected_epoch)
             test=evaluate(portable,rows,targets,test_rows,mean,scale,classes,clean=clean,
-                _logits_sink=None if test_capture is None else test_capture.add)
+                _logits_sink=None if test_capture is None else test_capture.add,_mode_context=modes)
             if test_capture is not None:
                 from .structural_adaptive_sets import evaluate as evaluate_adaptive
                 adaptive_test=evaluate_adaptive(test_capture.finish(),targets[test_rows],
                     [cohort['groups'][i] for i in test_rows],adaptive_calibration,identities=identities)
             prior=evaluate(portable,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0),clean=clean)
         progress('packing_model',selected_epoch=selected_epoch)
-        metadata=dict(schema=weights.SCHEMA,architecture=weights.ARCHITECTURE,representation=weights.REPRESENTATION,
+        metadata=dict(schema=weights.SCHEMA,architecture=architecture,representation=weights.REPRESENTATION,
             channels=3,reference_kind=weights.REFERENCE_KIND,normalization_method=weights.NORMALIZATION,
             parent_sha256=cohort['parent_sha256'],instrument_sha256=cohort['instrument_sha256'],
             input_sha256=cohort['input_sha256'],candidates=cohort['candidates'],candidate_groups=cohort['candidate_groups'],
@@ -292,7 +304,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             counts={name:targets[split==code].sum(0).tolist() for code,name in enumerate(partitions)},
             partition_rows=[int(np.count_nonzero(split==code)) for code in range(len(partitions))],dataset=dataset,test=test,prior_only_test=prior,
             calibration_partition=reservation.metadata,adaptive_calibration=adaptive_calibration,adaptive_test=adaptive_test,
-            selected_epoch=selected_epoch,training_objective=OBJECTIVE,checkpoint_selection=SELECTION,
+            selected_epoch=selected_epoch,training_objective=objective,checkpoint_selection=selection,
             readout_health=health,
             curriculum=dict(warmup_steps=warmup_steps,clean_epochs=clean_epochs,gradient_norm_limit=1.,
                 initialization='shared-convolution-and-readout/independent-attention-parameters/v1',
@@ -318,7 +330,8 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
         if 'mode_projection_coverage' in cohort:metadata['mode_projection_coverage']=cohort['mode_projection_coverage']
         if 'additive_pair_inventory' in cohort:metadata['additive_pair_inventory']=cohort['additive_pair_inventory']
         if 'mode_family_supervision' in cohort:
-            metadata.update(mode_family_supervision=cohort['mode_family_supervision'],mode_head_trained=False)
+            metadata.update(mode_family_supervision=cohort['mode_family_supervision'],mode_head_trained=modes is not None)
+        if modes is not None:metadata['mode_readout']=modes.spec
         encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
         if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
         (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)

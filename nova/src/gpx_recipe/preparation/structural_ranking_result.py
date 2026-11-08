@@ -8,6 +8,8 @@ SCHEMA='radar-structural-ranking-evidence/v1'
 SNAPSHOT_SCHEMA='radar-structural-snapshot-ranking-evidence/v1'
 ADAPTIVE_SCHEMA='radar-structural-ranking-evidence/v2'
 ADAPTIVE_SNAPSHOT_SCHEMA='radar-structural-snapshot-ranking-evidence/v2'
+MODE_SCHEMA='radar-structural-ranking-evidence/v3'
+MODE_SNAPSHOT_SCHEMA='radar-structural-snapshot-ranking-evidence/v3'
 
 
 def _hash(value):return isinstance(value,str) and re.fullmatch('[a-f0-9]{64}',value) is not None
@@ -36,8 +38,17 @@ def attach_adaptive(value,work_set):
     from .structural_adaptive_sets import validate_work_set
     validate_work_set(work_set,[r['space_group'] for r in value['families']])
     if not value['ranking_available']:raise ValueError('Unavailable ranking cannot attach an adaptive priority')
-    return dict(value,schema=ADAPTIVE_SNAPSHOT_SCHEMA if 'observation' in value else ADAPTIVE_SCHEMA,
-        adaptive_work_set=work_set)
+    result=dict(value,schema=ADAPTIVE_SNAPSHOT_SCHEMA if 'observation' in value else ADAPTIVE_SCHEMA,adaptive_work_set=work_set)
+    if 'mode_estimates' in result:result['schema']=MODE_SNAPSHOT_SCHEMA if 'observation' in value else MODE_SCHEMA
+    return result
+
+
+def attach_modes(value,estimates):
+    from .structural_joint_modes import validate_estimates
+    validate_estimates(estimates,space_groups=[r['space_group'] for r in value['families']])
+    if not value['ranking_available'] or not estimates['available']:
+        raise ValueError('Unavailable ranking cannot attach conditional learned modes')
+    return dict(value,schema=MODE_SNAPSHOT_SCHEMA if 'observation' in value else MODE_SCHEMA,mode_estimates=estimates)
 
 
 def validate(value,protocol,*,snapshot=None,observation=None):
@@ -52,6 +63,9 @@ def validate(value,protocol,*,snapshot=None,observation=None):
     adaptive=isinstance(value,dict) and 'adaptive_work_set' in value
     if adaptive:
         required.add('adaptive_work_set');schema=ADAPTIVE_SNAPSHOT_SCHEMA if observation is not None else ADAPTIVE_SCHEMA
+    modes=isinstance(value,dict) and 'mode_estimates' in value
+    if modes:
+        required.add('mode_estimates');schema=MODE_SNAPSHOT_SCHEMA if observation is not None else MODE_SCHEMA
     candidates=[c['id'] for c in protocol['candidates']]
     if (protocol['kind']!='structural' or not isinstance(value,dict) or set(value)!=required
             or value['schema']!=schema or value['protocol_sha256']!=digest(protocol)
@@ -112,9 +126,14 @@ def validate(value,protocol,*,snapshot=None,observation=None):
         if adaptive:
             from .structural_adaptive_sets import validate_work_set
             validate_work_set(value['adaptive_work_set'],[r['space_group'] for r in families])
+        if modes:
+            from .structural_joint_modes import validate_estimates
+            validate_estimates(value['mode_estimates'],space_groups=[r['space_group'] for r in families])
+            if not value['mode_estimates']['available']:raise ValueError('A mode receipt must contain its learned conditional estimates')
     elif (families or value['entry_id'] is not None or value['bank'] is not None or value['candidate_order']!=candidates):
         raise ValueError('Unavailable structural ranking must preserve the complete declared order')
     elif adaptive:raise ValueError('Unavailable structural ranking cannot acquire an adaptive work set')
+    elif modes:raise ValueError('Unavailable structural ranking cannot acquire learned modes')
     return value
 
 

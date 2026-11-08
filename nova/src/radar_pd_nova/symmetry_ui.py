@@ -81,6 +81,10 @@ def model_exploration(app):
             with html.Div(v_for='entry in sx_structural_priority_rows',key='entry.id'):
                 html.Strong('{{ entry.scan }}')
                 html.P('{{ entry.summary }}',classes='rf-notice')
+                with html.Details(v_if='entry.mode_rows && entry.mode_rows.length',classes='mb-3'):
+                    html.Summary('Conditional mode estimates')
+                    html.P('Learned amplitude ranges from the prepared simulations (Å RMS in the recorded native gauge). These are not refined values or calibrated confidence intervals. Native confirmation is required; missing fitting support remains unresolved.',classes='rf-notice')
+                    v.VDataTable(items=('entry.mode_rows',),headers=("[{title:'Symmetry',key:'space_group'},{title:'Distortion family',key:'family'},{title:'k',key:'k'},{title:'Learned range (Å RMS)',key:'amplitude'},{title:'Evidence',key:'status'}]",),items_per_page=8,density='compact')
             html.P('These are model priorities, not probabilities of phase presence. Native refinement checks the structural hypotheses.',classes='rf-notice')
         html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='!sx_setup && sx_groups.length',classes='rf-notice')
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):

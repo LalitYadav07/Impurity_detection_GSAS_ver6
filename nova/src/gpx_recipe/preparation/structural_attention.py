@@ -6,11 +6,11 @@ Candidate pruning requires separate scientific qualification.
 """
 
 
-def network(class_count, *, attention=True, tokens=128, architecture=None):
+def network(class_count, *, attention=True, tokens=128, architecture=None,family_count=None):
     import torch
     from torch import nn
     from .structural_attention_pool import adaptive
-    from .structural_attention_weights import ARCHITECTURE,ARCHITECTURES,NORMALIZED_ARCHITECTURE
+    from .structural_attention_weights import ARCHITECTURE,ARCHITECTURES,NORMALIZED_ARCHITECTURE,MODE_ARCHITECTURE
     architecture=ARCHITECTURE if architecture is None else architecture
     # One class is meaningful for a mode-only isostructural control. The
     # published class ranker still requires multiple supported SG classes.
@@ -18,6 +18,12 @@ def network(class_count, *, attention=True, tokens=128, architecture=None):
             or type(attention) is not bool or tokens not in (64, 128, 256)
             or not isinstance(architecture,str) or architecture not in ARCHITECTURES):
         raise ValueError('Explicit bounded three-curve attention architecture required')
+    if architecture==MODE_ARCHITECTURE:
+        from .structural_mode_readout import network as conditional
+        model=network(class_count,attention=attention,tokens=tokens,architecture=ARCHITECTURE)
+        model.mode_head=conditional(class_count,family_count)
+        return model
+    if family_count is not None:raise ValueError('Conditional mode tensors require their explicit shared architecture')
     if architecture==ARCHITECTURE:
         if tokens!=128:
             raise ValueError('The portable full-local attention readout has exactly 128 tokens')

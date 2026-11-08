@@ -6,17 +6,24 @@ from .structural_training_backend import forward
 from .structural_compatible_objective import OBJECTIVE,terms
 
 
-def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None,_logits_sink=None):
+def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None,_logits_sink=None,_mode_context=None):
     import torch
     from .structural_observation_metrics import ObservationMetrics
     observations=None if clean is None else ObservationMetrics(clean,len(rows),len(classes))
     counts=np.zeros(len(classes),np.int64);one=np.zeros(len(classes));five=one.copy()
     total=correct_one=correct_five=0;loss_sum=0.;class_nll=np.zeros(len(classes),np.float64)
+    modes=None if _mode_context is None else _mode_context.metrics()
+    if modes is not None and prior is not None:raise ValueError('A class prior has no learned mode readout')
     for selected,values in batches(rows,indices):
         allowed=targets[selected]
         if prior is None:
             with torch.no_grad():
-                logits=forward(model,torch.from_numpy((values-mean)/scale))
+                inputs=torch.from_numpy((values-mean)/scale)
+                if modes is None:logits=forward(model,inputs)
+                else:
+                    from .structural_joint_modes import shared
+                    logits,embedding=shared(model,inputs)
+                    modes.add(model,embedding,selected)
                 permitted=torch.from_numpy(allowed)
                 loss,negative=terms(logits,permitted)
             if not torch.isfinite(logits).all() or not torch.isfinite(loss).all():
@@ -40,4 +47,5 @@ def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=No
         result.update(loss_method=OBJECTIVE,macro_compatible_nll=float(np.mean(class_nll/counts)),
             worst_class_compatible_nll=float(np.max(class_nll/counts)))
     if observations is not None:result['observation_metrics']=observations.finish()
+    if modes is not None:result['mode_validation']=modes.finish()
     return result
