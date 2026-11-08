@@ -94,7 +94,7 @@ def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change)
         with pytest.raises(ValueError):require_compatible(parent,h,r.phase(0),r.histogram(0),maximum_metric=.001)
 
 
-@pytest.mark.parametrize('change',['same','profile','no_model','constraint'])
+@pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain'])
 def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_path,monkeypatch,change):
     """Inference is a controlled stub here; native input admission is real."""
     from gpx_recipe.preparation import structural_hints,structural_ranking_hints as hints
@@ -107,6 +107,9 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
     source,p,_=pair(tmp_path/'control','PNT');root=source.parent
     if change=='profile':p.histogram(0).InstrumentParameters['X'][1]+=.1;p.save()
     elif change=='constraint':p.data['Constraints']['data']['Hist']=[['opaque unprepared mapping']];p.save()
+    elif change.startswith('paired_'):
+        p.phase(0).data['General']['Cell'][1]*=1.01 if change=='paired_parent_outside' else 1.0001
+        p.save()
     child=Path(__file__).with_name('data')/'synthetic-ersi-cmcm-isodistort.cif'
     shutil.copyfile(child,root/'child.cif')
     candidate=validate_candidate(dict(id='public-ersi',modes=['fixture-admission-only'],
@@ -122,7 +125,12 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
         candidates=[candidate],seeds=[dict(id='admission-control')],sites=[],policy=dict(cycles=3,timeout_seconds=60,
             maximum_trials=1,maximum_cell_multiplier=8,maximum_moment=6.,fit_band_percent=.25,
             maximum_mode=.5,adequate_rwp_percent=12.)))
-    model=tmp_path/'model.json';write_json(model,dict(training_domain=envelope(.001)))
+    metadata=dict(training_domain=envelope(.001))
+    if change.startswith('paired_'):
+        from gpx_recipe.preparation.structural_attention_weights import SCHEMA
+        metadata['schema']=SCHEMA
+        metadata['training_domain']=envelope(.001,parent_references=change!='paired_legacy_domain')
+    model=tmp_path/'model.json';write_json(model,metadata)
     row=dict(entry='d'*24,bank='bank 1',grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1),
         files=dict(parent=dict(sha256=file_sha(tmp_path/'control/parent.cif')),
                    instrument=dict(sha256=file_sha(root/'profile.instprm'))))
@@ -133,6 +141,7 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
     calls=[]
     def inference(*args,**kwargs):
         calls.append(kwargs)
+        assert ('reference' in kwargs)==change.startswith('paired_')
         return dict(ranking_available=True,candidate_order=['public-ersi'],
             families=[dict(space_group=63,model_score=1.,candidate_ids=['public-ersi'])],
             support=dict(status='within_empirical_synthetic_support',nearest_training_rms=.1,
@@ -140,6 +149,7 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
     monkeypatch.setattr(hints,'rank',inference)
     destination=tmp_path/'ranking';result=rank_gpx(root,protocol,destination)
     assert result==json.loads((destination/'ranking.json').read_text())
-    assert result['ranking_available']==(change=='same') and len(calls)==int(change=='same')
+    expected=change in {'same','paired_parent_within'}
+    assert result['ranking_available']==expected and len(calls)==int(expected)
     assert result['candidate_order']==['public-ersi'] and result['candidate_pruning_authorized'] is False
     assert result['preparation_snapshot_sha256']=='e'*64

@@ -203,6 +203,10 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         if block_index >= len(metadata) or d != metadata[block_index]:
             raise ValueError('Structural inputs changed while building the feature cache')
         seen += 1
+        if paired:
+            from .structural_domain import parent_reference_norms
+            metric_norms=parent_reference_norms(a['parent_a'])
+        else:metric_norms=a['relative_metric_norm']
         for index, curve in enumerate(a['theory_intensity']):
             group = d['groups'][index]; parents.setdefault(group, group)
             def feature_for(values,background):
@@ -217,11 +221,11 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
                 previous = clean_origins[key]
                 union(previous['group'], group)
                 previous['labels'].update(labels); previous['references'].append(ref)
-                previous['metric_norm']=max(previous['metric_norm'],float(a['relative_metric_norm'][index]))
+                previous['metric_norm']=max(previous['metric_norm'],float(metric_norms[index]))
                 # The shared clean origin carries every alias label and source
                 # to all its noisy siblings, even aliases found in later blocks.
                 continue
-            origin = dict(labels=labels, group=group, references=[ref],metric_norm=float(a['relative_metric_norm'][index]))
+            origin = dict(labels=labels, group=group, references=[ref],metric_norm=float(metric_norms[index]))
             clean_origins[key] = origin
             put(feature, origin, dict(kind='clean_native'))
             if augmenter is not None:
@@ -247,7 +251,8 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
     if not np.all(targets[split == 0].any(axis=0)):
         raise ValueError('Every prepared symmetry class needs independent training trajectories')
     from .structural_domain import envelope
-    domain=envelope(max(o['metric_norm'] for i,r in enumerate(records) if split[i]==0 for o in r['origins']))
+    domain=envelope(max(o['metric_norm'] for i,r in enumerate(records) if split[i]==0 for o in r['origins']),
+        parent_references=paired)
     return dict(features=sink.finish(len(records)), compatible_labels=targets,
         classes=np.asarray(classes, np.int32), split=split, q_edges=edges,
         groups=[find(r['group']) for r in records],

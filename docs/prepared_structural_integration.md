@@ -1265,3 +1265,21 @@ Status polling publishes each completed view once. It does not rehash every
 completed artifact or redraw the unchanged selected fit on every other job's
 queue update. Selection, coordinate, intensity and zoom changes retain the
 normal publication-integrity checks before drawing.
+
+## Parent-reference coverage is separate from child distortion
+
+The three-curve classifier's native parent admission uses a versioned envelope
+computed only from its actual training parent-reference reciprocal metrics.
+Symmetry-breaking child strain cannot enlarge that envelope. Validation and
+test reference cells cannot enlarge it either. The native current-cell check
+uses the same basis-invariant metric norm, including anisotropic and shear
+terms. The previous generic envelope remains unchanged for legacy models.
+Older paired models with only that generic envelope retain exact-parent use;
+they do not claim sampled thermal-cell coverage from their child distortions.
+
+The current paired default parent-reference range remains 0.0001–0.001 in
+relative reciprocal-metric norm. This is a narrow synthetic domain, not a
+claim of full experimental temperature coverage. Actual cells outside its
+training-only envelope retain the complete native search. Broader nuisance
+sampling requires new physical trajectories and qualification, rather than
+relaxing the inference guard after inspecting experimental data.

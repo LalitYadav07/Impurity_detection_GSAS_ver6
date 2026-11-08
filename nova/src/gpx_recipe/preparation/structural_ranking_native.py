@@ -138,7 +138,7 @@ def rank_gpx(input_root,protocol,destination):
     from .structural_hints import read
     from . import structural_ranking_hints as hints
     from .reference import create_reference
-    from .structural_domain import validate as validate_domain
+    from .structural_domain import maximum_parent_metric
     from ..structural_live.native import modules,require_nuclear_runtime
     from ..symmetry.worker import require_runtime,runtime_identity
     from gsas_magnetic_preflight import setting_fingerprint
@@ -169,8 +169,7 @@ def rank_gpx(input_root,protocol,destination):
         for row in entries:
             try:
                 files=hints.checked_files(input_root,row,protocol)
-                metadata=json.loads(files['model'].read_text());domain=metadata.get('training_domain')
-                maximum=0. if domain is None else validate_domain(domain)['maximum_relative_reciprocal_metric_norm']
+                metadata=json.loads(files['model'].read_text());maximum=maximum_parent_metric(metadata)
                 prepared=create_reference(files['parent'],files['instrument'],out/'reference'/row['entry'],**row['grid'])
                 reference=G.G2Project(gpxfile=prepared['path'])
                 require_compatible(parent,histogram,reference.phase(prepared['parent_phase']),
