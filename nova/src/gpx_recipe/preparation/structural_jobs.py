@@ -6,15 +6,17 @@ Neither operation qualifies a classifier to remove refinement candidates.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import asdict
 import copy
+import hashlib
 import json
 from pathlib import Path
 import time
 
 from ..execution import write_json
 from ..symmetry.compiler import file_sha, package_signature
-from ..symmetry.contracts import fields, number
+from ..symmetry.contracts import digest, fields, number
 from .batch import relative
 from .structural_augmentation import Controls, ObservationAugmenter
 from .tof_kernel_arrays import checksum, read_bounded
@@ -235,6 +237,40 @@ def execute_examples(request):
     return publish_result('structural-examples',request,receipt,['examples.json','examples.npz'])
 
 
+def _completed_training(request,out,plan_sha):
+    """Recover immutable published files without rebuilding or retraining."""
+    path=out/'entry.json'
+    if not path.exists() and not path.is_symlink():return None
+    entry_raw=read_bounded(path,MAX_PLAN_BYTES);entry=json.loads(entry_raw)
+    names=['model/model.json','model/weights.npz','training.json']
+    if (not isinstance(entry,dict) or entry.get('schema')!='radar-experiment-preparation-entry/v1'
+            or entry.get('kind')!='structural-training' or entry.get('settings')!=request['settings']
+            or entry.get('grid')!=request['grid'] or entry.get('implementation_sha256')!=package_signature()
+            or entry.get('input_sha256')!=[file_sha(request[k]) for k in ('source','instrument')]
+            or not isinstance(entry.get('artifacts'),dict) or set(entry['artifacts'])!=set(names)
+            or entry.get('observations_included') is not False or entry.get('scientific_result') is not False):
+        raise ValueError('Published training recovery receipt changed')
+    for name in names:
+        raw=read_bounded(out/name,32*1024**2)
+        if hashlib.sha256(raw).hexdigest()!=entry['artifacts'][name]:
+            raise ValueError('Published training artifact changed; refusing to overwrite it')
+    detail=json.loads(read_bounded(out/'training.json',MAX_PLAN_BYTES))
+    if (detail!=entry.get('detail') or detail.get('plan_sha256')!=plan_sha
+            or detail.get('status')!='trained' or detail.get('screening_qualified') is not False
+            or detail.get('candidate_pruning_authorized') is not False):
+        raise ValueError('Published training result differs from its captured plan')
+    from .structural_ranker import Ranker
+    model=Ranker(out/'model').metadata
+    if (model.get('weights_sha256')!=detail.get('weights_sha256')
+            or model.get('parent_sha256')!=detail.get('parent_sha256')
+            or model.get('instrument_sha256')!=detail.get('instrument_sha256')):
+        raise ValueError('Published training model differs from its worker receipt')
+    return dict(schema='radar-experiment-preparation-worker/v1',kind='structural-training',status='prepared',
+        output=str(out),artifacts=names+['entry.json'],entry_sha256=hashlib.sha256(entry_raw).hexdigest(),
+        observations_included=False,scientific_result=False,screening_qualified=False,
+        candidate_pruning_authorized=False,seconds=detail['seconds'])
+
+
 def execute_training(request):
     from .structural_ranker import train
     request = validate_training(request); settings = request['settings']
@@ -243,7 +279,7 @@ def execute_training(request):
         raise ValueError('Training settings differ from the captured example representation')
     paired=plan.get('representation')==REPRESENTATION
     if paired:
-        from .structural_paired_store import build
+        from .structural_paired_store import build,load
     else:
         from .structural_store import build
     source = Path(request['source'])
@@ -259,39 +295,62 @@ def execute_training(request):
     if any(json.loads(read_bounded(p/'examples.json',MAX_PLAN_BYTES)).get('grid')!=request['grid']
            for p in directories):
         raise ValueError('Training examples differ from the captured physical bank grid')
-    out = Path(request['destination']).resolve(); out.mkdir(parents=True, exist_ok=False)
-    began = time.monotonic()
-    write_json(out/'progress.json', dict(state='assembling_examples', blocks=len(directories)))
-    controls = settings['augmentation']
-    augmenter = (None if controls is None else ObservationAugmenter(Controls(**controls),
-                 instrument_sha256=plan['instrument_sha256']))
-    cohort = build(directories, out/'working-features', bins=settings['bins'],
-                   split_seed=settings['split_seed'], augmenter=augmenter,
-                   **({'names':'examples'} if paired else {}))
-    try:
-        write_json(out/'progress.json', dict(state='training', examples=len(cohort['features']),
-                                            independent_groups=len(set(cohort['groups']))))
-        model = train(cohort, out/'model', epochs=settings['epochs'], seed=settings['seed'],
-                      threads=settings['workers'])
-    finally:
-        cohort['features'].close()
-    if (file_sha(plan_path) != plan_sha or file_sha(source) != plan['parent_sha256']
-            or file_sha(instrument)!=plan['instrument_sha256']):
-        raise ValueError('Training source or declared plan changed during the job')
-    checked_blocks(plan_path, plan)
-    receipt = dict(schema='radar-structural-training-worker/v1', status='trained',
-        plan_sha256=plan_sha, settings=copy.deepcopy(settings),
-        parent_sha256=plan['parent_sha256'], instrument_sha256=plan['instrument_sha256'],
-        implementation_sha256=package_signature(), examples=model['examples'],
-        independent_groups=model['independent_groups'], classes=model['classes'],
-        allocation=model['allocation'], test=model['test'],
-        output=str(out), artifacts=['model/model.json', 'model/weights.npz', 'training.json'],
-        weights_sha256=model['weights_sha256'], observations_included=False,
-        screening_qualified=False, candidate_pruning_authorized=False, scientific_result=False,
-        seconds=time.monotonic()-began)
-    if paired:receipt['dataset']=model['dataset']
-    write_json(out/'training.json', receipt)
-    write_json(out/'progress.json', dict(state='complete', examples=model['examples'],
-                                       screening_qualified=False))
-    return publish_result('structural-training',request,receipt,
-        ['model/model.json','model/weights.npz','training.json'])
+    out = Path(request['destination'])
+    if out.is_symlink():raise ValueError('Training recovery needs an owned regular directory')
+    out=out.resolve()
+    if paired:
+        from .structural_training_checkpoint import owned_run
+        run_identity=digest(dict(plan_sha256=plan_sha,parent_sha256=plan['parent_sha256'],
+            instrument_sha256=plan['instrument_sha256'],grid=request['grid'],settings=settings,
+            implementation_sha256=package_signature()))
+        owner=owned_run(out,run_identity)
+    else:
+        out.mkdir(parents=True,exist_ok=False);owner=nullcontext(out)
+    with owner:
+        if paired:
+            completed=_completed_training(request,out,plan_sha)
+            if completed is not None:return completed
+        began = time.monotonic()
+        write_json(out/'progress.json', dict(state='assembling_examples', blocks=len(directories)))
+        controls = settings['augmentation']
+        augmenter = (None if controls is None else ObservationAugmenter(Controls(**controls),
+                     instrument_sha256=plan['instrument_sha256']))
+        cache=out/'working-features'
+        if paired and (cache/'store.json').exists():
+            cohort=load(cache)
+            if (cohort['input_sha256']!=[row['examples_sha256'] for row in plan['blocks']]
+                    or cohort['parent_sha256']!=plan['parent_sha256']
+                    or cohort['instrument_sha256']!=plan['instrument_sha256']):
+                cohort['features'].close()
+                raise ValueError('Recovered feature cache differs from the captured native inputs')
+        else:
+            cohort = build(directories, cache, bins=settings['bins'],
+                           split_seed=settings['split_seed'], augmenter=augmenter,
+                           **({'names':'examples'} if paired else {}))
+        try:
+            write_json(out/'progress.json', dict(state='training', examples=len(cohort['features']),
+                                                independent_groups=len(set(cohort['groups']))))
+            model = train(cohort, out/'model', epochs=settings['epochs'], seed=settings['seed'],
+                          threads=settings['workers'])
+        finally:
+            cohort['features'].close()
+        if (file_sha(plan_path) != plan_sha or file_sha(source) != plan['parent_sha256']
+                or file_sha(instrument)!=plan['instrument_sha256']):
+            raise ValueError('Training source or declared plan changed during the job')
+        checked_blocks(plan_path, plan)
+        receipt = dict(schema='radar-structural-training-worker/v1', status='trained',
+            plan_sha256=plan_sha, settings=copy.deepcopy(settings),
+            parent_sha256=plan['parent_sha256'], instrument_sha256=plan['instrument_sha256'],
+            implementation_sha256=package_signature(), examples=model['examples'],
+            independent_groups=model['independent_groups'], classes=model['classes'],
+            allocation=model['allocation'], test=model['test'],
+            output=str(out), artifacts=['model/model.json', 'model/weights.npz', 'training.json'],
+            weights_sha256=model['weights_sha256'], observations_included=False,
+            screening_qualified=False, candidate_pruning_authorized=False, scientific_result=False,
+            seconds=time.monotonic()-began)
+        if paired:receipt['dataset']=model['dataset']
+        write_json(out/'training.json', receipt)
+        write_json(out/'progress.json', dict(state='complete', examples=model['examples'],
+                                           screening_qualified=False))
+        return publish_result('structural-training',request,receipt,
+            ['model/model.json','model/weights.npz','training.json'])

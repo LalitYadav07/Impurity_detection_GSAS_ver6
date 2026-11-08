@@ -56,6 +56,7 @@ on:
       - tests/gpx_recipe/test_structural_attention_metrics_native.py
       - tests/gpx_recipe/test_structural_paired_training_native.py
       - tests/gpx_recipe/test_structural_training_counts.py
+      - tests/gpx_recipe/test_structural_training_checkpoint*.py
       - tests/gpx_recipe/test_structural_candidate_routing.py
       - tests/gpx_recipe/test_structural_pair_packing.py
       - tests/gpx_recipe/test_structural_paired_preparation.py
@@ -151,7 +152,7 @@ jobs:
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
           python -m pip install --quiet pytest &&
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
-          python -c "import GSASII.GSASIIscriptable" &&
+          python -c "import GSASII.GSASIIscriptable, torch" &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_model_campaign_worker.py \
             /validation/tests/gpx_recipe/test_native_protocol.py \
@@ -169,6 +170,8 @@ jobs:
             /validation/tests/gpx_recipe/test_tof_profile_arrays.py \
             /validation/tests/gpx_recipe/test_structural_candidate_routing.py \
             /validation/tests/gpx_recipe/test_structural_training_counts.py \
+            /validation/tests/gpx_recipe/test_structural_training_checkpoint.py \
+            /validation/tests/gpx_recipe/test_structural_training_checkpoint_native.py \
             /validation/tests/gpx_recipe/test_native_peak_batch.py \
             /validation/tests/gpx_recipe/test_native_peak_groups.py \
             /validation/tests/gpx_recipe/test_native_window_response.py \

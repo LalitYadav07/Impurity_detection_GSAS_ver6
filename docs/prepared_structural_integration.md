@@ -33,6 +33,17 @@ An infeasible parent-only control or an exhausted trajectory scope still fails
 the block. This sampling change does not widen an existing model's verified
 parent-reference envelope; that requires new native curves and held-out tests.
 
+CPU attention training now saves owned, atomic numerical checkpoints during
+warmup and after complete epochs. Repeating the identical training request in
+the same surviving worker directory verifies the feature cache and restores
+the parameters, AdamW moments, learning-rate schedule, random streams, visited
+rows and validation-selected incumbent. Changes to data, partitions, numerical
+allocation or implementation require a new run. Completed published outputs
+are verified and returned unchanged; damaged published files are not silently
+replaced. These worker-local checkpoints and feature caches are excluded from
+downloadable libraries. This does not yet provide portable optimizer recovery
+after an NDIP worker directory is lost, or structural fit-optimizer recovery.
+
 Structural Model and Live acquisition receipts separate the current worker's
 preparation from fitting and independent GPX checks. The displayed combined
 service time is a subtotal of native worker time; other worker tasks, Galaxy
