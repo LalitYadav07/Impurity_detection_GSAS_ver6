@@ -1902,3 +1902,65 @@ about 2.5 hours on its 64-CPU allocation. Native child rendering accounts for
 about 93% of summed unit time. Cheap mode-map recovery does not solve that
 bottleneck, and the one-hour generation target remains unmet. Optimizations
 must retain every original point, complete mode coverage and native checks.
+
+### Adaptive candidate sets and native mode-coordinate handoffs
+
+New paired preparation now captures a closed data-only native mode projection
+alongside the original curve arrays. The projection retains every native label,
+normalization, physical-to-native map, demonstrated gauge direction and physical
+Gram matrix. Its exact parent/profile/child, child basis/origin, native module
+hashes and producer implementation remain bound. These files are coordinates,
+not experimental evidence or an absence certificate. Lossless packing preserves
+every original curve and parameter byte; older paired formats remain readable
+without fabricated mode targets.
+
+The v3 paired format carries these two fixed projection files through example
+publication, library export/import, v6/v7 training plans, multipart Galaxy
+transport and replay source-mutation checks. Mixed old/new inputs retain an
+explicit partial map inventory. Both files join the existing input count/byte
+limits and native output reservation; no generic transport bound is increased.
+Training provenance records the coverage, with `mode_targets_inferred=false`.
+This does not yet train a mode head or admit recovered maps to every historical
+mixed point.
+
+`structural_adaptive_sets` implements a separate, currently unqualified
+selection/evaluation primitive. It uses the worst required logit gap across
+every compatible label and observation variant within each independent
+calibration trajectory. A finite-sample upper quantile sets the candidate-set
+width. Calibration groups must be disjoint from all fitting, normalization,
+prototype, checkpoint-selection and test groups. Repeated noisy observations
+cannot enlarge the independent calibration denominator. Classes without target
+support, too few independent groups and out-of-support inputs retain all classes.
+Exact ties stay together; a conservative expansion also keeps adjacent classes
+whose relative softmax scores differ by no more than the declared 0.8 ratio.
+That expansion is a work-prioritization heuristic, not a probability claim.
+
+The evaluator reports any-compatible and all-compatible retention, whole-group
+retention, excluded compatible targets, per-class coverage and retained-set
+sizes. It rejects evaluation on its own calibration groups. Model scores are
+not probabilities of a physical phase being present. Every deferred class
+remains available, and saved flags cannot authorize experimental pruning.
+This helper is not yet connected to a newly calibrated production classifier;
+the existing ranker still orders the complete native work inventory.
+
+Mode evidence will require a multi-label output because several irreps and
+secondary distortions may coexist within the same space group. The intended
+scientific states are supported, conditionally bounded-small at tested
+sensitivity, unresolved, and forbidden under a specific complete symmetry
+model. Low ML score is insufficient for the latter two exclusion-like claims.
+Gauge-only directions, unobserved families, indistinguishable powder patterns,
+different embeddings and untested mixtures cannot acquire artificial absence
+labels. Independently grouped calibration and untouched experimental tests
+remain required before claiming reliable mode presence or smallness bounds.
+
+The native handoff suite passed 211 tests with no failures, errors or skips
+(223.794 seconds). Four initial failures were old v2-format assertions; the
+corrected suite checks the explicit v3 paired format and projected native-size
+receipts, including unchanged native points, signed rays and per-shard controls.
+The final package `ddffc43adfc722418fa4623b4a747c53eb34c5b258e71929c2fe57a0d28ee547`
+then passed 58 focused Linux checks (70.057 seconds), including mapped and
+legacy training through the actual Galaxy wrapper, plus 186 and 94 overlapping
+host checks. The final host suite also proves that changing only mode geometry
+identity invalidates a training checkpoint despite identical curve bytes.
+These overlapping suites are not additive, and none is an NDIP deployment or
+new classifier-accuracy result.

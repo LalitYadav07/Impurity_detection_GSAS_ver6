@@ -18,6 +18,8 @@ from .tof_kernel_arrays import read_bounded
 
 SCHEMA = 'radar-preparation-native-size/v1'
 MODE_SCHEMA = 'radar-preparation-native-size/v2'
+PROJECTED_SCHEMA = 'radar-preparation-native-size/v3'
+PROJECTED_MODE_SCHEMA = 'radar-preparation-native-size/v4'
 NAME = 'native-size.json'
 MAX_RECORD_BYTES = 4096
 EXAMPLE_RESERVE = 184*1024**2
@@ -47,7 +49,7 @@ def _context(request):
     return request
 
 
-def _dimensions(request, rows, bins, mode_dimensions, cell_dimensions,mode_coverage_rows=None):
+def _dimensions(request, rows, bins, mode_dimensions, cell_dimensions,mode_coverage_rows=None,native_mode_dimensions=None):
     settings = request['settings']; first, last = settings['trajectory_slice']
     size = paired_array_bytes(rows, bins, mode_dimensions, cell_dimensions)
     expected=1+(last-first)*(settings['steps']+1)
@@ -71,19 +73,34 @@ def _dimensions(request, rows, bins, mode_dimensions, cell_dimensions,mode_cover
     if (type(rows)is not int or rows != expected
             or type(bins) is not int or bins > request['grid']['bins']+1):
         raise ValueError('Native dimensions differ from the complete declared trajectory/grid scope')
-    return size, min(EXAMPLE_RESERVE, size+OVERHEAD)
+    projection_bytes=0
+    if native_mode_dimensions is not None:
+        from .structural_mode_projection import MAX_NATIVE,MAX_BYTES as MAX_PROJECTION_BYTES
+        n=native_mode_dimensions;m=mode_dimensions
+        if type(n)is not int or not m<=n<=MAX_NATIVE:
+            raise ValueError('A projected reservation needs every native and physical coordinate')
+        projection_bytes=8*(n*n+m*m)
+        if projection_bytes>MAX_PROJECTION_BYTES:
+            raise ValueError('Native coordinate arrays exceed their portable byte bound')
+    # Keep the existing aggregate artifact cap. Projection bytes join the
+    # reservation; NPZ/header/JSON overhead is already covered by OVERHEAD.
+    return size, min(EXAMPLE_RESERVE, size+projection_bytes+OVERHEAD)
 
 
-def publish(request, *, rows, bins, mode_dimensions, cell_dimensions, numeric_bytes,mode_coverage_rows=None):
+def publish(request, *, rows, bins, mode_dimensions, cell_dimensions, numeric_bytes,mode_coverage_rows=None,native_mode_dimensions=None):
     request = _context(request)
-    size, reserve = _dimensions(request, rows, bins, mode_dimensions, cell_dimensions,mode_coverage_rows)
+    size, reserve = _dimensions(request, rows, bins, mode_dimensions, cell_dimensions,mode_coverage_rows,native_mode_dimensions)
     if type(numeric_bytes) is not int or numeric_bytes != size:
         raise ValueError('The native array inventory differs from its dimensional reservation')
     path = Path(request['destination'])/NAME
     if path.exists() or path.is_symlink():
         raise ValueError('Native size records belong to one fresh task attempt')
     extra={} if mode_coverage_rows is None else dict(mode_coverage_rows=mode_coverage_rows)
-    write_json(path, dict(schema=MODE_SCHEMA if extra else SCHEMA, request_sha256=digest(request),
+    schema=MODE_SCHEMA if extra else SCHEMA
+    if native_mode_dimensions is not None:
+        extra['native_mode_dimensions']=native_mode_dimensions
+        schema=PROJECTED_MODE_SCHEMA if mode_coverage_rows is not None else PROJECTED_SCHEMA
+    write_json(path, dict(schema=schema, request_sha256=digest(request),
         implementation_sha256=package_signature(), rows=rows, bins=bins,
         mode_dimensions=mode_dimensions, cell_dimensions=cell_dimensions,
         numeric_bytes=size, reservation_bytes=reserve,**extra))
@@ -103,12 +120,15 @@ def read(request, implementation_sha256):
               'mode_dimensions', 'cell_dimensions', 'numeric_bytes', 'reservation_bytes'}
     named='mode_coverage' in request['settings']
     if named:fields.add('mode_coverage_rows')
-    if (not isinstance(value, dict) or set(value) != fields or value['schema'] != (MODE_SCHEMA if named else SCHEMA)
+    projected=isinstance(value,dict) and 'native_mode_dimensions' in value
+    if projected:fields.add('native_mode_dimensions')
+    schema=(PROJECTED_MODE_SCHEMA if named else PROJECTED_SCHEMA) if projected else (MODE_SCHEMA if named else SCHEMA)
+    if (not isinstance(value, dict) or set(value) != fields or value['schema'] != schema
             or value['request_sha256'] != digest(request)
             or value['implementation_sha256'] != implementation_sha256):
         raise ValueError('Native sizing record differs from its owned task or worker implementation')
     size, reserve = _dimensions(request, value['rows'], value['bins'],
-                                value['mode_dimensions'], value['cell_dimensions'],value.get('mode_coverage_rows'))
+                                value['mode_dimensions'], value['cell_dimensions'],value.get('mode_coverage_rows'),value.get('native_mode_dimensions'))
     if (type(value['numeric_bytes']) is not int or value['numeric_bytes'] != size
             or type(value['reservation_bytes']) is not int or value['reservation_bytes'] != reserve):
         raise ValueError('Native sizing byte counts differ from their dimensions')

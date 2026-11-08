@@ -1,5 +1,6 @@
 """Finite example/training dependencies inside the existing preparation queue."""
 import copy
+import json
 from pathlib import Path
 import shutil
 
@@ -158,7 +159,9 @@ def dependencies(library, model):
                 or other['grid']!=model['grid']):
             raise ValueError('Complete the exact bank’s structural example dependencies before training')
         assets={Path(name).name:path for name,path in library.prepared_assets(key).items()}
-        if set(assets)!={'entry.json','examples.json','examples.npz'}:
+        from .structural_mode_projection import FILES
+        base={'entry.json','examples.json','examples.npz'}
+        if set(assets) not in (base,base|set(FILES)):
             raise ValueError('A training dependency has an incomplete example inventory')
         document=metadata(assets['examples.json'].parent)
         if (representation(document)!=model['settings'].get('representation')
@@ -181,7 +184,8 @@ def stage(library, model, payload, directory, *, resume=None):
     directory=Path(directory);paths=[]
     for key,assets in dependencies(library,model):
         target=directory/'blocks'/key;target.mkdir(parents=True,exist_ok=True)
-        for name in ('examples.json','examples.npz'):
+        from .structural_mode_projection import FILES
+        for name in ('examples.json','examples.npz')+tuple(n for n in FILES if n in assets):
             path=target/name;expected=file_sha(assets[name])
             if path.is_symlink() or (path.exists() and file_sha(path)!=expected):
                 raise ValueError('A captured training dependency changed')
@@ -196,11 +200,19 @@ def stage(library, model, payload, directory, *, resume=None):
 
 def verify(library, model, request):
     """Publication must still refer to every declared dependency, after recovery."""
-    from .structural_jobs import read_plan,resume_directory
+    from .structural_jobs import read_plan,resume_directory,PROJECTED_PLAN_SCHEMAS
     plan=read_plan(request['plan'])
     resume_directory(Path(request['plan']),plan)
-    expected=[dict(directory='blocks/'+key,manifest_sha256=file_sha(assets['examples.json']),
-                   examples_sha256=file_sha(assets['examples.npz'])) for key,assets in dependencies(library,model)]
+    expected=[]
+    for key,assets in dependencies(library,model):
+        row=dict(directory='blocks/'+key,manifest_sha256=file_sha(assets['examples.json']),
+                 examples_sha256=file_sha(assets['examples.npz']))
+        d=json.loads(assets['examples.json'].read_text())
+        stamp=d.get('mode_projection')
+        if stamp is not None and plan['schema'] not in PROJECTED_PLAN_SCHEMAS:
+            raise ValueError('The training plan omitted its native mode coordinates')
+        if plan['schema'] in PROJECTED_PLAN_SCHEMAS:row['mode_projection']=stamp
+        expected.append(row)
     if (plan['blocks']!=expected or plan['parent_sha256']!=file_sha(request['source'])
             or plan['instrument_sha256']!=file_sha(request['instrument'])
             or plan.get('representation')!=model['settings'].get('representation')):

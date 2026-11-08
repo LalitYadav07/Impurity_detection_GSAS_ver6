@@ -23,7 +23,8 @@ PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
             'structural-examples':{'examples.json','examples.npz'},
             'structural-training':{'model/model.json','model/weights.npz','training.json'}}
 CHILD_KINDS={'structural','structural-examples'}
-OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'},'reference':{'profile.npz','profile.json'}}
+OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'},'reference':{'profile.npz','profile.json'},
+                     'structural-examples':{'mode-projection.json','mode-projection.npz'}}
 
 
 def portable_artifacts(kind, names):
@@ -38,6 +39,10 @@ def portable_artifacts(kind, names):
         raise ValueError('Unexpected portable preparation artifact inventory')
     if kind=='reference' and inventory not in (set(),{'profile.npz','profile.json'}):
         raise ValueError('TOF reference preparation requires both profile arrays and metadata')
+    if kind=='structural-examples':
+        from .structural_mode_projection import FILES
+        if inventory.intersection(FILES) and not set(FILES)<=inventory:
+            raise ValueError('Native mode coordinates require both metadata and numerical projection files')
     return inventory
 
 
@@ -46,6 +51,15 @@ def portable_entry_artifacts(kind, manifest):
     if not isinstance(manifest,dict) or not isinstance(manifest.get('artifacts'),dict):
         raise ValueError('A preparation needs its declared portable artifacts')
     names=portable_artifacts(kind,manifest['artifacts'])
+    if 'mode-projection.json' in names:
+        from .structural_mode_projection import marker
+        detail=manifest.get('detail');projection=detail.get('mode_projection') if isinstance(detail,dict) else None
+        if not isinstance(projection,dict):
+            raise ValueError('Portable native mode coordinates need their explicit projection identity')
+        stamp=marker(projection.get('stamp'))
+        if (stamp['metadata_sha256']!=manifest['artifacts']['mode-projection.json']
+                or stamp['arrays_sha256']!=manifest['artifacts']['mode-projection.npz']):
+            raise ValueError('The native mode identity differs from its portable files')
     if 'profile.npz' in names:
         from .tof_kernel_arrays import checksum
         detail=manifest.get('detail');profile=detail.get('profile_table') if isinstance(detail,dict) else None
@@ -302,6 +316,18 @@ def publish_entry(library, identifier, attempt, request, result):
     for name, checksum in manifest['artifacts'].items():
         if file_sha(confined(output, name)) != checksum:
             raise ValueError('A prepared numeric artifact changed before publication')
+    if kind=='structural-examples' and 'mode-projection.json' in numeric:
+        from .structural_paired_blocks import read
+        block=read(output,names='examples')
+        if block.mode_projection is None:
+            raise ValueError('Portable mode coordinates need their explicit checked paired block')
+        expected=dict(source_sha256=checksums[0],instrument_sha256=checksums[1],child_sha256=checksums[2],
+            candidate=model['settings']['candidate'],mode_dimensions=block.manifest['mode_dimensions'])
+        from .structural_mode_projection import read as read_projection
+        read_projection(output,expected=expected,stamp=block.manifest['mode_projection'])
+        from .structural_mode_projection import descriptor
+        if manifest['detail']['mode_projection']!=descriptor(block.mode_projection):
+            raise ValueError('The published native mode identity differs from its complete coordinates')
     target = library.root/'entries'/identifier/('attempt-'+str(attempt))
     target.mkdir(parents=True, exist_ok=True)
     # A recovered attempt can encounter already copied immutable files after

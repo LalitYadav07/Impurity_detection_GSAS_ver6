@@ -17,6 +17,7 @@ from ..symmetry.contracts import validate_candidate
 from .tof_kernel_arrays import read_bounded
 from . import structural_pair_arrays as packed
 from . import structural_mode_layout as named
+from . import structural_mode_projection as projection
 
 SCHEMA='radar-structural-ranking-paired-pilot/v1'
 MAX_BYTES=160*1024**2
@@ -30,6 +31,7 @@ ARRAYS={'q','theory_intensity','background','parent_intensity','parent_backgroun
 class PairedBlock:
     manifest:dict
     arrays:dict
+    mode_projection:projection.Projection|None=None
 
 
 def checksum(value):
@@ -43,12 +45,20 @@ def filenames(names):
     return names+'.json',names+'.npz'
 
 
+def source_paths(directory, *, names='pairs'):
+    """Fixed complete input inventory, including optional native coordinates."""
+    directory=Path(directory);primary=filenames(names)
+    document=json.loads(read_bounded(directory/primary[0],8*1024**2))
+    extra=projection.FILES if isinstance(document,dict) and document.get('schema') in projection.PAIR_SCHEMAS else ()
+    return tuple(directory/name for name in primary+extra)
+
+
 def read(directory,*,names='pairs'):
     directory=Path(directory)
     manifest_name,array_name=filenames(names)
     document=json.loads(read_bounded(directory/manifest_name,8*1024**2))
     raw=read_bounded(directory/array_name,MAX_BYTES)
-    if (not isinstance(document,dict) or document.get('schema') not in {SCHEMA,packed.SCHEMA}|named.SCHEMAS
+    if (not isinstance(document,dict) or document.get('schema') not in {SCHEMA,packed.SCHEMA}|named.SCHEMAS|projection.PAIR_SCHEMAS
             or document.get('observations_included') is not False
             or document.get('scientific_result') is not False
             or document.get('pairs_sha256')!=hashlib.sha256(raw).hexdigest()
@@ -56,7 +66,7 @@ def read(directory,*,names='pairs'):
             or any(type(document.get(k)) is not int or not 0<=document[k]<2**32 for k in ('seed','parent_seed'))):
         raise ValueError('A bound observation-free paired structural block is required')
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
-    is_packed=document['schema'] in {packed.SCHEMA,named.PACKED_SCHEMA}
+    is_packed=document['schema'] in {packed.SCHEMA,named.PACKED_SCHEMA,projection.PACKED_SCHEMA}
     with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
         expected=(ARRAYS-set(packed.CURVES))|{k+'_byte_planes' for k in packed.CURVES} if is_packed else ARRAYS
         if set(archive.files)!=expected:raise ValueError('Unexpected paired structural array inventory')
@@ -89,7 +99,7 @@ def read(directory,*,names='pairs'):
             or not isinstance(interval,list) or len(interval)!=2 or any(type(i) is not int for i in interval)
             or count*steps>32768 or not 0<=interval[0]<interval[1]<=count):
         raise ValueError('A complete declared paired trajectory slice is required')
-    if document['schema'] in named.SCHEMAS:
+    if document['schema'] in named.SCHEMAS or (document['schema'] in projection.PAIR_SCHEMAS and 'mode_coverage' in document):
         expected,roles,_,_=named.rows(document,count,steps,interval)
     else:
         if 'mode_coverage' in document:
@@ -128,8 +138,15 @@ def read(directory,*,names='pairs'):
     if not isinstance(declared,dict) or type(declared.get('number')) is not int or not 1<=declared['number']<=230:
         raise ValueError('Paired examples must retain the declared native child group')
     document['candidate']=candidate
+    mode_map=None
+    if document['schema'] in projection.PAIR_SCHEMAS:
+        mode_map=projection.read(directory,expected=document,stamp=projection.marker(document.get('mode_projection')))
+        if 'mode_coverage' in document and document['mode_coverage']['labels']!=mode_map.metadata['native_mode_labels']:
+            raise ValueError('Named-mode coverage differs from its complete native coordinate map')
+    elif 'mode_projection' in document:
+        raise ValueError('Native mode projection requires its explicit paired schema')
     owned={k:np.frombuffer(a.tobytes(),dtype=a.dtype).reshape(a.shape) for k,a in arrays.items()}
-    return PairedBlock(document,owned)
+    return PairedBlock(document,owned,mode_map)
 
 
 def pack_block(source,destination,*,source_names='pairs',names='pairs'):
@@ -146,7 +163,10 @@ def pack_block(source,destination,*,source_names='pairs',names='pairs'):
     np.savez_compressed(destination/array_name,**arrays)
     raw=read_bounded(destination/array_name,MAX_BYTES)
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
-    schema=named.PACKED_SCHEMA if block.manifest['schema'] in named.SCHEMAS else packed.SCHEMA
+    schema=(projection.PACKED_SCHEMA if block.mode_projection is not None else
+            named.PACKED_SCHEMA if block.manifest['schema'] in named.SCHEMAS else packed.SCHEMA)
+    if block.mode_projection is not None:
+        projection.copy(source,destination,expected=block.manifest,stamp=block.mode_projection.stamp)
     document=dict(block.manifest,schema=schema,array_encoding=packed.ENCODING,
         original_pairs_sha256=block.manifest['pairs_sha256'],pairs_sha256=hashlib.sha256(raw).hexdigest())
     write_json(destination/manifest_name,document)

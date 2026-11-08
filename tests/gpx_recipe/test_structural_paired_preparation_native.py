@@ -52,15 +52,21 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
     assert paired.manifest['parent_controls_shape_qualified']
     assert paired.manifest['trajectory_admission']=='whole-child-rejection-at-fixed-shared-parent-context/v1'
     for name in original.arrays:assert original.arrays[name].tobytes()==paired.arrays[name].tobytes()
-    assert set(result['artifacts'])=={'examples.json','examples.npz','entry.json'}
+    assert set(result['artifacts'])=={'examples.json','examples.npz','entry.json','mode-projection.json','mode-projection.npz'}
+    assert paired.mode_projection is not None
+    assert size['native_mode_dimensions']==paired.mode_projection.metadata['native_dimensions']
     pack(root,tmp_path/'portable.zip',result['artifacts']);restored=unpack(tmp_path/'portable.zip',tmp_path/'restored')
     assert not list(restored.rglob('*.gpx'))
     assert read(restored,names='examples').manifest==paired.manifest
 
 
 @pytest.mark.parametrize('multipart',[False,True])
-def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart):
+@pytest.mark.parametrize('native_maps',[False,True])
+def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart,native_maps):
     root=tmp_path/'capture';example,directory=inputs(root)
+    if native_maps:
+        from test_structural_mode_projection import attach
+        attach(directory,names='examples')
     create_plan(example['source'],[directory],root/'plan.json')
     request=dict(source=example['source'],instrument=example['instrument'],plan=str(root/'plan.json'),
         grid=example['grid'],destination=str(root/'trained'),
@@ -83,7 +89,7 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
             __import__('shutil').copyfile(path,target);captured[key]=target;return key
         refs=parts.prepare(root,message,tmp_path/'input-work',publish)
         input_archive=captured[refs['primary']];more=[captured[key] for key in refs['parts']]
-        assert len(more)==2
+        assert len(more)>=2 if native_maps else len(more)==2
     else:input_archive=tmp_path/'inputs.zip'
     script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     spec=importlib.util.spec_from_file_location('paired_preparation_galaxy_control',script)
@@ -95,6 +101,9 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3
     assert model.metadata['architecture']==ARCHITECTURE and model.metadata['readout_health']['readout_active']
     assert model.metadata['classes']==[12,166]
+    if native_maps:
+        assert model.metadata['mode_projection_coverage']['complete']
+        assert model.metadata['mode_projection_coverage']['mode_targets_inferred'] is False
     assert model.metadata['feature_storage']=='native_pair_replay'
     entry=json.loads((collected/'native/trained/entry.json').read_text())
     assert entry['detail']['dataset']==model.metadata['dataset']

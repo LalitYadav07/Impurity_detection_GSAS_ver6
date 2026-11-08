@@ -121,7 +121,8 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
                 contexts=contexts,rays=len(coverage.rays),
                 selected_rays=sum(interval[0]<=ray['parent']<interval[1] for ray in coverage.rays))
         report_size(rows=len(points),bins=len(source.fast.x),mode_dimensions=source.mode_dimensions,
-                    cell_dimensions=source.cell_dimensions,numeric_bytes=numeric_bytes,**extra)
+                    cell_dimensions=source.cell_dimensions,numeric_bytes=numeric_bytes,
+                    native_mode_dimensions=len(source.fast.meta['inventory']['native_mode_labels']),**extra)
     mark('conditioning_and_selecting_whole_trajectories')
     checks = set(np.flatnonzero(role != 2)) | set(np.flatnonzero(np.r_[trajectory[:-1] != trajectory[1:], True]))
     if coverage is not None:checks.update(map(int,endpoints))
@@ -153,6 +154,8 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     if hashes != [file_sha(p) for p in inputs]:
         raise ValueError('A paired-pattern input changed during native calculation')
     mark('checking_parent_controls')
+    from . import structural_mode_projection as mode_projection
+    mode_stamp=mode_projection.write(source,request,out)
     destination = out/'pairs.npz'
     np.savez_compressed(destination, q=rendered['q'], theory_intensity=rendered['curves'],
         background=rendered['background'], parent_intensity=reference_curves,
@@ -161,7 +164,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         ambiguous_geometry=rendered['labels'][:, 0] != rendered['labels'][:, 1],
         displacement_rms=paired.displacement_rms[selected], relative_metric_norm=paired.relative_metric_norm[selected])
     mark('writing_native_arrays')
-    manifest = dict(schema='radar-structural-ranking-paired-pilot/v1',
+    manifest = dict(schema=mode_projection.RAW_SCHEMA,mode_projection=mode_stamp,
         source_sha256=hashes[0], instrument_sha256=hashes[1], child_sha256=hashes[2],
         candidate=candidate, declared_child_group=child_group, grid=request['grid'],
         seed=seed, parent_seed=parent_seed, parent_relative_metric_range=list(parent_relative_range),
@@ -183,6 +186,6 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     manifest['timing']=dict(stages_seconds=stages,child_rendering_seconds=rendered['timing_seconds'],
         scope='Worker wall time; native forward includes its own mandatory anchor; independent checks and regeneration are separate')
     if coverage is not None:
-        manifest.update(schema=named.RAW_SCHEMA,mode_coverage=coverage_record)
+        manifest.update(mode_coverage=coverage_record)
     write_json(out/'pairs.json', manifest); progress('complete', len(points))
     return manifest

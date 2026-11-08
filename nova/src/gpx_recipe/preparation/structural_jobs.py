@@ -33,14 +33,18 @@ PAIRED_PLAN_SCHEMA = 'radar-structural-training-plan/v2'
 CONTINUED_PLAN_SCHEMA = 'radar-structural-training-plan/v3'
 STRATIFIED_PLAN_SCHEMA = 'radar-structural-training-plan/v4'
 STRATIFIED_CONTINUED_PLAN_SCHEMA = 'radar-structural-training-plan/v5'
-CONTINUED_PLAN_SCHEMAS = {CONTINUED_PLAN_SCHEMA, STRATIFIED_CONTINUED_PLAN_SCHEMA}
-STRATIFIED_PLAN_SCHEMAS = {STRATIFIED_PLAN_SCHEMA, STRATIFIED_CONTINUED_PLAN_SCHEMA}
+PROJECTED_PLAN_SCHEMA = 'radar-structural-training-plan/v6'
+PROJECTED_CONTINUED_PLAN_SCHEMA = 'radar-structural-training-plan/v7'
+PROJECTED_PLAN_SCHEMAS = {PROJECTED_PLAN_SCHEMA,PROJECTED_CONTINUED_PLAN_SCHEMA}
+CONTINUED_PLAN_SCHEMAS = {CONTINUED_PLAN_SCHEMA, STRATIFIED_CONTINUED_PLAN_SCHEMA,PROJECTED_CONTINUED_PLAN_SCHEMA}
+STRATIFIED_PLAN_SCHEMAS = {STRATIFIED_PLAN_SCHEMA, STRATIFIED_CONTINUED_PLAN_SCHEMA,*PROJECTED_PLAN_SCHEMAS}
 PAIRED_PLAN_SCHEMAS = {PAIRED_PLAN_SCHEMA, *CONTINUED_PLAN_SCHEMAS, *STRATIFIED_PLAN_SCHEMAS}
 MAX_PLAN_BYTES = 8*1024**2
 MAX_INPUT_BYTES = 480*1024**2
 # Only typed three-curve training may span several separately bounded packets.
 # Ordinary model archives and legacy feature plans keep their original limits.
 MAX_PAIRED_INPUT_BYTES = 8*1024**3
+MAX_INPUT_FILES=10000
 # The shared packet admits parent, profile, plan, and two files per block.
 MAX_BLOCKS = (10000-3)//2
 
@@ -134,6 +138,7 @@ def read_plan(path):
     continued=isinstance(value,dict) and value.get('schema') in CONTINUED_PLAN_SCHEMAS
     paired=isinstance(value,dict) and value.get('schema') in PAIRED_PLAN_SCHEMAS
     stratified=isinstance(value,dict) and value.get('schema') in STRATIFIED_PLAN_SCHEMAS
+    projected=isinstance(value,dict) and value.get('schema') in PROJECTED_PLAN_SCHEMAS
     value = fields(value, ['schema', 'parent_sha256', 'instrument_sha256', 'blocks']+
                    (['representation'] if paired else [])+(['resume_state'] if continued else [])+
                    (['parent_strata'] if stratified else []))
@@ -144,12 +149,17 @@ def read_plan(path):
         raise ValueError('Training requires a bounded parent/profile example inventory')
     seen = set()
     for row in value['blocks']:
-        fields(row, ['directory', 'manifest_sha256', 'examples_sha256'])
+        fields(row, ['directory', 'manifest_sha256', 'examples_sha256']+(['mode_projection'] if projected else []))
         name = relative(row['directory'])
         if name in seen or any(not checksum(row[k]) for k in ('manifest_sha256', 'examples_sha256')):
             raise ValueError('Training blocks need unique directories and exact content identities')
         seen.add(name)
-    if stratified:
+        if projected and row['mode_projection'] is not None:
+            from .structural_mode_projection import marker
+            marker(row['mode_projection'])
+    if projected and not any(row['mode_projection'] is not None for row in value['blocks']):
+        raise ValueError('A projected training plan needs its captured native mode coordinates')
+    if stratified and (not projected or value['parent_strata'] is not None):
         from .structural_training_strata import validate
         validate(value['parent_strata'], seen)
     if continued:
@@ -157,14 +167,17 @@ def read_plan(path):
         if (resume['directory']!='resume' or not checksum(resume['state_sha256'])
                 or not checksum(resume['receipt_sha256']) or len(value['blocks'])>MAX_BLOCKS-1):
             raise ValueError('A training continuation needs its bounded numerical resume inventory')
+    if 3+sum(2+2*bool(row.get('mode_projection')) for row in value['blocks'])+2*continued>MAX_INPUT_FILES:
+        raise ValueError('Training inputs exceed the complete packet file inventory')
     return value
 
 
 def plan_inputs(path):
     """One packet inventory for NOVA capture and worker-side verification."""
     plan = read_plan(path)
+    from .structural_mode_projection import FILES
     result=[str(Path(row['directory'])/name) for row in plan['blocks']
-            for name in ('examples.json', 'examples.npz')]
+            for name in ('examples.json', 'examples.npz')+(FILES if row.get('mode_projection') is not None else ())]
     if plan['schema'] in CONTINUED_PLAN_SCHEMAS:
         from .structural_training_transfer import STATE,RECEIPT
         result.extend(str(Path('resume')/name) for name in (STATE,RECEIPT))
@@ -190,7 +203,8 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
     if source.is_symlink() or not source.is_file() or not 0 < source.stat().st_size <= 10*1024**2:
         raise ValueError('Training requires a bounded regular parent CIF')
     from .structural_training_strata import Inventory
-    parent = file_sha(source); rows = []; profile = None; total = 0; formats=set(); strata=Inventory()
+    from . import structural_mode_projection as projection
+    parent = file_sha(source); rows = []; profile = None; total = 0; formats=set(); strata=Inventory();mode_stamps=[]
     directories = list(directories)
     if not 1 <= len(directories) <= MAX_BLOCKS:
         raise ValueError('Declare a bounded structural training inventory')
@@ -198,8 +212,9 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         directory = Path(directory).resolve()
         name = str(directory.relative_to(destination.parent))
         relative(name)
-        total += sum((directory/name).stat().st_size for name in ('examples.json','examples.npz'))
         metadata=block_metadata(directory)
+        names=('examples.json','examples.npz')+(projection.FILES if metadata['schema'] in projection.PAIR_SCHEMAS else ())
+        total += sum((directory/name).stat().st_size for name in names)
         formats.add(block_representation(metadata))
         if len(formats)!=1:
             raise ValueError('Training blocks must share one representation and parent trajectory context')
@@ -207,6 +222,7 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         if total > limit:
             raise ValueError('Training input arrays exceed their typed byte budget')
         block = read_training_block(directory)
+        mode_stamps.append(None if getattr(block,'mode_projection',None) is None else block.mode_projection.stamp)
         if block_representation(metadata)==REPRESENTATION:strata.add(name,block.manifest)
         if block.manifest['source_sha256'] != parent:
             raise ValueError('A training block belongs to another parent CIF')
@@ -222,6 +238,9 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         parent_strata=strata.describe()
         if parent_strata is not None:
             value.update(schema=STRATIFIED_PLAN_SCHEMA,parent_strata=parent_strata)
+        if any(stamp is not None for stamp in mode_stamps):
+            value.update(schema=PROJECTED_PLAN_SCHEMA,parent_strata=parent_strata)
+            for row,stamp in zip(rows,mode_stamps):row['mode_projection']=stamp
     if resume is not None:
         from .structural_training_transfer import STATE,RECEIPT,read
         if formats!={REPRESENTATION} or len(directories)>MAX_BLOCKS-1:
@@ -237,10 +256,13 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
             if path.is_symlink() or (path.exists() and path.read_bytes()!=data):
                 raise ValueError('An immutable training resume input changed')
             if not path.exists():path.write_bytes(data)
-        value.update(schema=STRATIFIED_CONTINUED_PLAN_SCHEMA if 'parent_strata' in value else CONTINUED_PLAN_SCHEMA,
+        value.update(schema=PROJECTED_CONTINUED_PLAN_SCHEMA if value['schema']==PROJECTED_PLAN_SCHEMA else
+            STRATIFIED_CONTINUED_PLAN_SCHEMA if 'parent_strata' in value else CONTINUED_PLAN_SCHEMA,
             resume_state=dict(directory='resume',
             state_sha256=file_sha(target/STATE),receipt_sha256=file_sha(target/RECEIPT)))
     # Validate before publishing, including duplicate logical block paths.
+    if 3+sum(2+2*bool(row.get('mode_projection')) for row in rows)+2*(resume is not None)>MAX_INPUT_FILES:
+        raise ValueError('Training inputs exceed the complete packet file inventory')
     if len((json.dumps(value, indent=2)+'\n').encode()) > MAX_PLAN_BYTES:
         raise ValueError('Training plan exceeds its metadata budget')
     if len({row['directory'] for row in rows}) != len(rows):
@@ -256,15 +278,20 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
 def checked_blocks(plan_path, plan, *, validate_arrays=True,grid=None):
     from ..symmetry.compiler import confined
     from .structural_training_strata import Inventory
+    from . import structural_mode_projection as projection
+    uses_strata=plan.get('parent_strata') is not None
+    projected=plan['schema'] in PROJECTED_PLAN_SCHEMAS
     total = 0; directories = [];contexts=set();strata=Inventory()
     for row in plan['blocks']:
-        paths = [confined(Path(plan_path).parent, str(Path(row['directory'])/name))
-                 for name in ('examples.json', 'examples.npz')]
+        names=('examples.json','examples.npz')+(projection.FILES if row.get('mode_projection') is not None else ())
+        paths = [confined(Path(plan_path).parent, str(Path(row['directory'])/name)) for name in names]
         total += sum(path.stat().st_size for path in paths)
         limit=MAX_PAIRED_INPUT_BYTES if plan.get('representation')==REPRESENTATION else MAX_INPUT_BYTES
         if total > limit:
             raise ValueError('Training input arrays exceed their typed byte budget')
-        if [file_sha(path) for path in paths] != [row['manifest_sha256'], row['examples_sha256']]:
+        hashes=[row['manifest_sha256'],row['examples_sha256']]+([] if row.get('mode_projection') is None else
+            [row['mode_projection']['metadata_sha256'],row['mode_projection']['arrays_sha256']])
+        if [file_sha(path) for path in paths] != hashes:
             raise ValueError('A captured structural training block changed')
         metadata = (read_training_block(paths[0].parent).manifest if validate_arrays else
                     block_metadata(paths[0].parent))
@@ -273,13 +300,18 @@ def checked_blocks(plan_path, plan, *, validate_arrays=True,grid=None):
             raise ValueError('Training block has a different parent or profile context')
         contexts.add(block_context(metadata))
         if (block_representation(metadata)!=plan.get('representation')
-                or (plan['schema'] not in STRATIFIED_PLAN_SCHEMAS and len(contexts)!=1)):
+                or (not uses_strata and len(contexts)!=1)):
             raise ValueError('Training block representation or parent trajectory context differs from its plan')
-        if plan['schema'] in STRATIFIED_PLAN_SCHEMAS:strata.add(row['directory'],metadata)
+        has_map=metadata['schema'] in projection.PAIR_SCHEMAS
+        if has_map and (not projected or projection.marker(metadata.get('mode_projection'))!=row['mode_projection']):
+            raise ValueError('Paired native mode coordinates differ from their captured training plan')
+        if not has_map and row.get('mode_projection') is not None:
+            raise ValueError('A legacy block cannot acquire an unbound native mode projection')
+        if uses_strata:strata.add(row['directory'],metadata)
         if grid is not None and metadata.get('grid')!=grid:
             raise ValueError('Training examples differ from the captured physical bank grid')
         directories.append(paths[0].parent)
-    if plan['schema'] in STRATIFIED_PLAN_SCHEMAS and strata.describe()!=plan['parent_strata']:
+    if uses_strata and strata.describe()!=plan['parent_strata']:
         raise ValueError('Training blocks differ from their complete captured parent-range strata')
     resumed=resume_directory(plan_path,plan)
     if resumed is not None:
@@ -305,12 +337,15 @@ def execute_examples(request):
             parent_seed=settings['parent_seed'],parent_relative_range=settings['parent_relative_metric_range'],
             report_size=lambda **dimensions:publish_size(request,**dimensions),**options)
         packed=pack_block(out/'working-native',out/'portable',names='examples')
-        for name in ('examples.json','examples.npz'):(out/'portable'/name).replace(out/name)
+        from .structural_mode_projection import FILES as PROJECTION_FILES,descriptor
+        names=('examples.json','examples.npz')+(PROJECTION_FILES if packed.mode_projection is not None else ())
+        for name in names:(out/'portable'/name).replace(out/name)
         examples_sha256=packed.manifest['pairs_sha256']
     else:
         from .structural_examples import generate
         detail=generate(base,**options)
         examples_sha256=detail['examples_sha256']
+        names=('examples.json','examples.npz')
     receipt=dict(examples=detail['examples'],
         candidate_id=detail['candidate']['id'],trajectory_slice=detail['trajectory_slice'],
         mode_dimensions=detail['mode_dimensions'],cell_dimensions=detail['cell_dimensions'],
@@ -319,7 +354,8 @@ def execute_examples(request):
         receipt.update(representation=REPRESENTATION,parent_seed=settings['parent_seed'],
             parent_relative_metric_range=settings['parent_relative_metric_range'],timing=detail['timing'])
         if 'mode_coverage' in settings:receipt['mode_coverage']=settings['mode_coverage']
-    return publish_result('structural-examples',request,receipt,['examples.json','examples.npz'])
+        if packed.mode_projection is not None:receipt['mode_projection']=descriptor(packed.mode_projection)
+    return publish_result('structural-examples',request,receipt,list(names))
 
 
 def _completed_training(request,out,plan_sha):

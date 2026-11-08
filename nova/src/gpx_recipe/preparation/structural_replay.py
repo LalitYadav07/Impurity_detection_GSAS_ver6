@@ -20,7 +20,7 @@ import numpy as np
 from .structural_augmentation import Controls, ObservationAugmenter
 from .structural_cohort import assemble_into
 from .structural_features import ThreeCurveProjector
-from .structural_paired_blocks import read, filenames
+from .structural_paired_blocks import read, source_paths
 from .structural_training_data import FeatureRows, MAX_BATCH_ROWS, MAX_STORE_BYTES, _PERMIT
 from . import structural_replay_limits as limits
 from .structural_moments import Moments
@@ -135,12 +135,12 @@ class ReplayRows(FeatureRows):
     bounded seekable data file. Archive decompression happens at assembly,
     never once per random minibatch. Changed files/values fail.
     """
-    def __init__(self, directories, names, cohort, hashes, states, augmenter, bank, feature_sha, moments, *, _permit=None):
+    def __init__(self, paths, cohort, hashes, states, augmenter, bank, feature_sha, moments, *, _permit=None):
         if _permit is not _PERMIT:
             raise TypeError('Build replay rows from a checked paired cohort')
         super().__init__(None, len(hashes), storage='native_pair_replay',
                          bins=len(cohort['q_edges'])-1, channels=3, _permit=_PERMIT)
-        self._paths = tuple(tuple(p/name for name in filenames(names)) for p in directories)
+        self._paths = tuple(paths)
         self._states = tuple(states)
         self._feature_sha = feature_sha
         self._moments = moments; self._statistics_hits = 0; self._statistics_fallbacks = 0
@@ -266,10 +266,10 @@ def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pa
     format. All aliases, simulation provenance and every class holdout are
     retained by the shared assembler. No model prediction is evaluated here.
     """
-    directories = tuple(Path(p) for p in directories); native_names = filenames(names)
+    directories = tuple(Path(p) for p in directories)
     if not 1 <= len(directories) <= 5000:
         raise ValueError('A bounded paired native catalog is required')
-    paths = [tuple(p/name for name in native_names) for p in directories]
+    paths = [source_paths(p,names=names) for p in directories]
     states = tuple(_file_state(p) for p in paths)
     if augmenter is not None:
         if not isinstance(augmenter, ObservationAugmenter):
@@ -296,10 +296,11 @@ def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pa
     try:
         cohort = assemble_into(blocks, sink, bins=bins, split_seed=split_seed, augmenter=augmenter,
                                paired=True,subset_factory=blocks)
-        if tuple(_file_state(p) for p in paths) != states:
+        if ([source_paths(p,names=names) for p in directories]!=paths
+                or tuple(_file_state(p) for p in paths) != states):
             raise ValueError('Native replay sources changed during cohort assembly')
         bank.seal()
-        cohort['features'] = ReplayRows(directories, names, cohort, sink.hashes, states,
+        cohort['features'] = ReplayRows(paths, cohort, sink.hashes, states,
                                       augmenter, bank, sink.digest.hexdigest(), sink.moments, _permit=_PERMIT)
     except BaseException:
         bank.close(); raise

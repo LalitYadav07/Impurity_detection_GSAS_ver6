@@ -128,7 +128,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         raise ValueError('A bounded structural feature grid is required')
     sources = set(); profiles = set(); metadata = []; count = 0
     lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None
-    definitions = {}; candidate_groups = {}; generated_groups = {}
+    definitions = {}; candidate_groups = {}; generated_groups = {};mode_maps={};mode_references=[]
     if paired:
         from .structural_training_strata import Inventory
         strata=Inventory();unknown_sampling=False
@@ -136,6 +136,12 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         if not isinstance(block, PairedBlock if paired else ExampleBlock):
             raise TypeError('Validated structural example blocks are required')
         d, a = block.manifest, block.arrays
+        mode_map=getattr(block,'mode_projection',None)
+        if mode_map is not None:
+            from .structural_mode_projection import descriptor
+            entry=descriptor(mode_map);mode_maps[entry['identity']]=entry
+            mode_references.append(entry['identity'])
+        else:mode_references.append(None)
         metadata.append(copy.deepcopy(d))
         if paired:
             if 'parent_relative_metric_range' in d:strata.add(str(len(metadata)-1),d)
@@ -311,6 +317,12 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         original_examples=count, unique_examples=len(records),
         ambiguous_examples=int(np.count_nonzero(targets.sum(axis=1) > 1)),
         training_domain=domain,screening_qualified=False,
+        **(dict(mode_projection_inventory=[mode_maps[key] for key in sorted(mode_maps)],
+            mode_projection_references=mode_references,
+            mode_projection_coverage=dict(mapped_blocks=sum(v is not None for v in mode_references),
+                total_blocks=len(metadata),mapped_candidates=len({v['candidate_id'] for v in mode_maps.values()}),
+                total_candidates=len(definitions),complete=all(v is not None for v in mode_references),
+                mode_targets_inferred=False)) if mode_maps else {}),
         **(dict(partition_anchor=anchor['trace']) if anchor is not None else {}),
         **(dict(channels=3,representation='reference-current-signed-difference/shared-Q-asinh/v1',
             reference_kind='calculated_parent_at_shared_parent_compatible_cell',

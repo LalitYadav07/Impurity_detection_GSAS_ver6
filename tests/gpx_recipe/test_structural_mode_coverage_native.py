@@ -69,7 +69,7 @@ def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_or
     from gpx_recipe.preparation.structural_pairs import generate
     from gpx_recipe.preparation.structural_mode_coverage import SCHEMA
     from gpx_recipe.preparation.structural_paired_blocks import read,pack_block
-    from gpx_recipe.preparation import structural_mode_layout as layout
+    from gpx_recipe.preparation import structural_mode_projection as projection
     from gpx_recipe.symmetry.compiler import file_sha
     original,_=native_source(tmp_path/'input',kind)
     parent=tmp_path/'parent.cif';G.G2Project(gpxfile=str(original)).phase(0).export_CIF(str(parent))
@@ -84,7 +84,8 @@ def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_or
     old=read(tmp_path/'old')
     detail=generate(dict(request,destination=str(tmp_path/'new')),mode_coverage=policy,**options)
     new=read(tmp_path/'new');packed=pack_block(tmp_path/'new',tmp_path/'packed')
-    assert detail['schema']==layout.RAW_SCHEMA and packed.manifest['schema']==layout.PACKED_SCHEMA
+    assert detail['schema']==projection.RAW_SCHEMA and packed.manifest['schema']==projection.PACKED_SCHEMA
+    assert packed.mode_projection is not None
     assert detail['mode_coverage']['rays'] and detail['parent_controls_shape_qualified']
     for parent_id in range(4):
         before=np.flatnonzero(old.arrays['trajectory']==parent_id)
@@ -105,7 +106,7 @@ def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_or
     # with exact row accounting before the scheduler releases result space.
     from gpx_recipe.preparation.worker import execute
     from gpx_recipe.preparation.structural_training_blocks import REPRESENTATION
-    from gpx_recipe.preparation.native_size import read as read_size,MODE_SCHEMA
+    from gpx_recipe.preparation.native_size import read as read_size,PROJECTED_MODE_SCHEMA
     from gpx_recipe.symmetry.compiler import package_signature
     settings=dict(request['settings'],seed=options['seed'],parent_seed=options['parent_seed'],
         parent_relative_metric_range=list(options['parent_relative_range']),representation=REPRESENTATION,
@@ -113,6 +114,6 @@ def test_native_mode_producer_packs_complete_rays_and_shards_without_changing_or
     worker=dict(request,settings=settings,destination=str(tmp_path/'worker'))
     result=execute('structural-examples',worker)
     published=read(Path(result['output']),names='examples');size=read_size(worker,package_signature())
-    assert size['schema']==MODE_SCHEMA and size['rows']==len(fragment.arrays['role'])
+    assert size['schema']==PROJECTED_MODE_SCHEMA and size['rows']==len(fragment.arrays['role'])
     assert size['numeric_bytes']==sum(a.nbytes for a in published.arrays.values())
     for name in fragment.arrays:np.testing.assert_array_equal(published.arrays[name],fragment.arrays[name])
