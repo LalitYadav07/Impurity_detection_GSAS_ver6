@@ -1755,6 +1755,26 @@ copies have a separate at-most-two-plane transient footprint of 160 MiB.
 Source-file and owned native-bank mutation checks still run before and after
 summary use. Closing the row reader releases its moments. Existing dense/file
 readers, portable formats, features, folds, curriculum and scientific checks
-remain unchanged. Local adversarial and complete small-model tests are
-necessary; actual large native-corpus equality and cold-worker timing are
-still required before claiming measured acceleration at that scale.
+remain unchanged. The summation enclosures use the standard floating-point
+error model; see [Higham, The Accuracy of Floating Point Summation](https://nhigham.com/wp-content/uploads/2023/10/high93s.pdf).
+
+One complete 381-block native snapshot contains 50,251 native rows and 173,964
+unique three-curve training/holdout rows. For its 121,580 selected training rows,
+normalization plus strong-representative selection took 0.0646 seconds using
+captured summaries versus 299.74 seconds by the original reconstruction path.
+Every normalization float32 byte and prototype index matched. Assembly itself
+changed from 255.17 to 260.17 seconds. A fresh actual worker rebuilding all inputs
+and resuming optimizer updates 20 through 40 took 312.71 seconds, versus 615.81
+seconds before summary reuse. Same-owner continuation changed from 309.59 to
+5.17 seconds. Every numerical checkpoint array matched both the original
+implementation and a fresh-worker continuation. Implementation-bound checkpoint
+identities remained distinct when the source changed; no identity guard was
+bypassed to import an old checkpoint under new code.
+
+The final committed package also passed 60 installed-source numerical/training
+controls and the three actual native wrapper entry-point controls; those suites
+overlap. These measurements concern this exact setup/recovery workload, not a
+complete training epoch, classifier accuracy, NDIP queue/staging latency or a
+scientifically qualified shortlist. No held-out predictions were scored by this
+lifecycle benchmark. Full-cohort training, calibration and live handoffs remain
+separate acceptance requirements.
