@@ -61,13 +61,17 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
 
 
 @pytest.mark.parametrize('multipart',[False,True])
-@pytest.mark.parametrize('native_maps',[False,True])
-def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart,native_maps):
+@pytest.mark.parametrize('native_maps,additive',[(False,False),(True,False),(True,True)])
+def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart,native_maps,additive):
     root=tmp_path/'capture';example,directory=inputs(root)
-    if native_maps:
+    if native_maps or additive:
         from test_structural_mode_projection import attach
         attach(directory,names='examples')
-    create_plan(example['source'],[directory],root/'plan.json')
+    directories=[directory]
+    if additive:
+        from test_structural_supplement_pairs import addition
+        addition(directory,root/'added');directories.append(root/'added')
+    create_plan(example['source'],directories,root/'plan.json')
     request=dict(source=example['source'],instrument=example['instrument'],plan=str(root/'plan.json'),
         grid=example['grid'],destination=str(root/'trained'),
         settings=dict(representation=REPRESENTATION,bins=128,epochs=1,workers=1,augmentation=None))
@@ -89,7 +93,7 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
             __import__('shutil').copyfile(path,target);captured[key]=target;return key
         refs=parts.prepare(root,message,tmp_path/'input-work',publish)
         input_archive=captured[refs['primary']];more=[captured[key] for key in refs['parts']]
-        assert len(more)>=2 if native_maps else len(more)==2
+        assert len(more)>=2 if native_maps or additive else len(more)==2
     else:input_archive=tmp_path/'inputs.zip'
     script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     spec=importlib.util.spec_from_file_location('paired_preparation_galaxy_control',script)
@@ -98,18 +102,22 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
         tmp_path/'job',tmp_path/'result.zip',asset_parts=more)
     assert result['result']['status']=='prepared'
     collected=unpack(tmp_path/'result.zip',tmp_path/'collected');model=Ranker(collected/'native/trained/model')
-    if native_maps:
+    if native_maps or additive:
         supervision=model.metadata['mode_family_supervision']
-        assert supervision['mapped_blocks']==supervision['total_blocks']==1
+        assert supervision['mapped_blocks']==supervision['total_blocks']==len(directories)
         assert supervision['rows']==model.metadata['examples'] and supervision['intervals']==0
         assert model.metadata['mode_head_trained'] is False
     else:assert 'mode_family_supervision' not in model.metadata
     assert model.metadata['schema']==SCHEMA and model.metadata['channels']==3
     assert model.metadata['architecture']==ARCHITECTURE and model.metadata['readout_health']['readout_active']
     assert model.metadata['classes']==[12,166]
-    if native_maps:
+    if native_maps or additive:
         assert model.metadata['mode_projection_coverage']['complete']
         assert model.metadata['mode_projection_coverage']['mode_targets_inferred'] is False
+    if additive:
+        assert set(model.metadata['additive_pair_inventory'])=={'1'}
+        assert model.metadata['partition_anchor']['schema']=='radar-owned-original-additive-partition/v1'
+        assert model.metadata['mode_head_trained'] is False
     assert model.metadata['feature_storage']=='native_pair_replay'
     entry=json.loads((collected/'native/trained/entry.json').read_text())
     assert entry['detail']['dataset']==model.metadata['dataset']

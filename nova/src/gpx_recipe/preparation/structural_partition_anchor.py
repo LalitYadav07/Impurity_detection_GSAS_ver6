@@ -24,7 +24,7 @@ class PartitionOnly:
         return None
 
 
-def capture(cohort, metadata, *, interval, split_seed):
+def capture(cohort, metadata, *, interval, split_seed,additive=False):
     assignments={}
     for code,references in zip(cohort['split'],cohort['references']):
         for block,row in references:
@@ -35,7 +35,7 @@ def capture(cohort, metadata, *, interval, split_seed):
         raise ValueError('The original partition must retain every native physical group')
     return dict(assignments=assignments,q_edges=cohort['q_edges'],
         reference_features=cohort['reference_features'],
-        trace=dict(schema='radar-owned-original-range-partition/v1',
+        trace=dict(schema='radar-owned-original-additive-partition/v1' if additive else 'radar-owned-original-range-partition/v1',
             original_relative_metric_range=interval,split_seed=split_seed,
             original_input_sha256=cohort['input_sha256'],physical_groups=len(assignments),
             group_assignment_sha256=digest(sorted(assignments.items()))))

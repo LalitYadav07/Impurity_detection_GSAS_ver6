@@ -316,6 +316,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
         if transport is not None:metadata['training_device_transport']=transport
         if 'partition_anchor' in cohort:metadata['partition_anchor']=cohort['partition_anchor']
         if 'mode_projection_coverage' in cohort:metadata['mode_projection_coverage']=cohort['mode_projection_coverage']
+        if 'additive_pair_inventory' in cohort:metadata['additive_pair_inventory']=cohort['additive_pair_inventory']
         if 'mode_family_supervision' in cohort:
             metadata.update(mode_family_supervision=cohort['mode_family_supervision'],mode_head_trained=False)
         encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()

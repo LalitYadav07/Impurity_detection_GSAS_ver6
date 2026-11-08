@@ -23,7 +23,8 @@ from .tof_kernel_arrays import checksum,read_bounded
 SCHEMA='radar-native-structural-mode-projection/v1'
 RAW_SCHEMA='radar-structural-ranking-paired-pilot/v3'
 PACKED_SCHEMA='radar-structural-ranking-pairs/v3'
-PAIR_SCHEMAS={RAW_SCHEMA,PACKED_SCHEMA}
+from .structural_supplement_pairs import SCHEMAS as ADDITIVE_SCHEMAS
+PAIR_SCHEMAS={RAW_SCHEMA,PACKED_SCHEMA}|ADDITIVE_SCHEMAS
 METADATA='mode-projection.json'
 ARRAY_FILE='mode-projection.npz'
 FILES=(METADATA,ARRAY_FILE)

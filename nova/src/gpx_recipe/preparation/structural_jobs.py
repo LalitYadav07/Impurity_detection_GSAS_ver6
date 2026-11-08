@@ -35,8 +35,11 @@ STRATIFIED_PLAN_SCHEMA = 'radar-structural-training-plan/v4'
 STRATIFIED_CONTINUED_PLAN_SCHEMA = 'radar-structural-training-plan/v5'
 PROJECTED_PLAN_SCHEMA = 'radar-structural-training-plan/v6'
 PROJECTED_CONTINUED_PLAN_SCHEMA = 'radar-structural-training-plan/v7'
-PROJECTED_PLAN_SCHEMAS = {PROJECTED_PLAN_SCHEMA,PROJECTED_CONTINUED_PLAN_SCHEMA}
-CONTINUED_PLAN_SCHEMAS = {CONTINUED_PLAN_SCHEMA, STRATIFIED_CONTINUED_PLAN_SCHEMA,PROJECTED_CONTINUED_PLAN_SCHEMA}
+ADDITIVE_PLAN_SCHEMA='radar-structural-training-plan/v8'
+ADDITIVE_CONTINUED_PLAN_SCHEMA='radar-structural-training-plan/v9'
+ADDITIVE_PLAN_SCHEMAS={ADDITIVE_PLAN_SCHEMA,ADDITIVE_CONTINUED_PLAN_SCHEMA}
+PROJECTED_PLAN_SCHEMAS = {PROJECTED_PLAN_SCHEMA,PROJECTED_CONTINUED_PLAN_SCHEMA,*ADDITIVE_PLAN_SCHEMAS}
+CONTINUED_PLAN_SCHEMAS = {CONTINUED_PLAN_SCHEMA, STRATIFIED_CONTINUED_PLAN_SCHEMA,PROJECTED_CONTINUED_PLAN_SCHEMA,ADDITIVE_CONTINUED_PLAN_SCHEMA}
 STRATIFIED_PLAN_SCHEMAS = {STRATIFIED_PLAN_SCHEMA, STRATIFIED_CONTINUED_PLAN_SCHEMA,*PROJECTED_PLAN_SCHEMAS}
 PAIRED_PLAN_SCHEMAS = {PAIRED_PLAN_SCHEMA, *CONTINUED_PLAN_SCHEMAS, *STRATIFIED_PLAN_SCHEMAS}
 MAX_PLAN_BYTES = 8*1024**2
@@ -139,9 +142,10 @@ def read_plan(path):
     paired=isinstance(value,dict) and value.get('schema') in PAIRED_PLAN_SCHEMAS
     stratified=isinstance(value,dict) and value.get('schema') in STRATIFIED_PLAN_SCHEMAS
     projected=isinstance(value,dict) and value.get('schema') in PROJECTED_PLAN_SCHEMAS
+    additive=isinstance(value,dict) and value.get('schema') in ADDITIVE_PLAN_SCHEMAS
     value = fields(value, ['schema', 'parent_sha256', 'instrument_sha256', 'blocks']+
                    (['representation'] if paired else [])+(['resume_state'] if continued else [])+
-                   (['parent_strata'] if stratified else []))
+                   (['parent_strata'] if stratified else [])+(['additive_sources'] if additive else []))
     if paired:validate_representation(value)
     if (value['schema'] not in {PLAN_SCHEMA, *PAIRED_PLAN_SCHEMAS} or not checksum(value['parent_sha256'])
             or not checksum(value['instrument_sha256']) or not isinstance(value['blocks'], list)
@@ -159,9 +163,12 @@ def read_plan(path):
             marker(row['mode_projection'])
     if projected and not any(row['mode_projection'] is not None for row in value['blocks']):
         raise ValueError('A projected training plan needs its captured native mode coordinates')
+    if additive:
+        from .structural_supplement_pairs import validate_inventory
+        validate_inventory(value['additive_sources'],{row['directory']:row for row in value['blocks']})
     if stratified and (not projected or value['parent_strata'] is not None):
         from .structural_training_strata import validate
-        validate(value['parent_strata'], seen)
+        validate(value['parent_strata'], seen-set(value.get('additive_sources',{})))
     if continued:
         resume=fields(value['resume_state'],['directory','state_sha256','receipt_sha256'])
         if (resume['directory']!='resume' or not checksum(resume['state_sha256'])
@@ -204,7 +211,9 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         raise ValueError('Training requires a bounded regular parent CIF')
     from .structural_training_strata import Inventory
     from . import structural_mode_projection as projection
+    from . import structural_supplement_pairs as additive
     parent = file_sha(source); rows = []; profile = None; total = 0; formats=set(); strata=Inventory();mode_stamps=[]
+    additions=additive.Catalog(arrays=False);documents=[]
     directories = list(directories)
     if not 1 <= len(directories) <= MAX_BLOCKS:
         raise ValueError('Declare a bounded structural training inventory')
@@ -222,8 +231,11 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         if total > limit:
             raise ValueError('Training input arrays exceed their typed byte budget')
         block = read_training_block(directory)
+        documents.append(block.manifest)
         mode_stamps.append(None if getattr(block,'mode_projection',None) is None else block.mode_projection.stamp)
-        if block_representation(metadata)==REPRESENTATION:strata.add(name,block.manifest)
+        if block_representation(metadata)==REPRESENTATION:
+            additions.add(block.manifest,name=name,arrays=block.arrays,projection=getattr(block,'mode_projection',None))
+            if not additive.present(block.manifest):strata.add(name,block.manifest)
         if block.manifest['source_sha256'] != parent:
             raise ValueError('A training block belongs to another parent CIF')
         current = block.manifest['instrument_sha256']
@@ -234,6 +246,11 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
                          examples_sha256=file_sha(directory/'examples.npz')))
     value = dict(schema=PLAN_SCHEMA, parent_sha256=parent, instrument_sha256=profile, blocks=rows)
     if formats=={REPRESENTATION}:
+        added_inventory=additions.finish()
+        if added_inventory!=additive.verify_context(documents,lambda:(),
+                subset_factory=lambda indices:(read_training_block(directories[i]) for i in indices),
+                names=[r['directory'] for r in rows]):
+            raise ValueError('Sparse original contexts differ from their captured plan inventory')
         value.update(schema=PAIRED_PLAN_SCHEMA,representation=REPRESENTATION)
         parent_strata=strata.describe()
         if parent_strata is not None:
@@ -241,6 +258,8 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
         if any(stamp is not None for stamp in mode_stamps):
             value.update(schema=PROJECTED_PLAN_SCHEMA,parent_strata=parent_strata)
             for row,stamp in zip(rows,mode_stamps):row['mode_projection']=stamp
+        if added_inventory:
+            value.update(schema=ADDITIVE_PLAN_SCHEMA,additive_sources=added_inventory)
     if resume is not None:
         from .structural_training_transfer import STATE,RECEIPT,read
         if formats!={REPRESENTATION} or len(directories)>MAX_BLOCKS-1:
@@ -256,7 +275,8 @@ def create_plan(source, directories, destination, *, recover_identical=False,res
             if path.is_symlink() or (path.exists() and path.read_bytes()!=data):
                 raise ValueError('An immutable training resume input changed')
             if not path.exists():path.write_bytes(data)
-        value.update(schema=PROJECTED_CONTINUED_PLAN_SCHEMA if value['schema']==PROJECTED_PLAN_SCHEMA else
+        value.update(schema=ADDITIVE_CONTINUED_PLAN_SCHEMA if value['schema']==ADDITIVE_PLAN_SCHEMA else
+            PROJECTED_CONTINUED_PLAN_SCHEMA if value['schema']==PROJECTED_PLAN_SCHEMA else
             STRATIFIED_CONTINUED_PLAN_SCHEMA if 'parent_strata' in value else CONTINUED_PLAN_SCHEMA,
             resume_state=dict(directory='resume',
             state_sha256=file_sha(target/STATE),receipt_sha256=file_sha(target/RECEIPT)))
@@ -279,9 +299,11 @@ def checked_blocks(plan_path, plan, *, validate_arrays=True,grid=None):
     from ..symmetry.compiler import confined
     from .structural_training_strata import Inventory
     from . import structural_mode_projection as projection
+    from . import structural_supplement_pairs as additive
     uses_strata=plan.get('parent_strata') is not None
     projected=plan['schema'] in PROJECTED_PLAN_SCHEMAS
     total = 0; directories = [];contexts=set();strata=Inventory()
+    additions=additive.Catalog(arrays=False);documents=[]
     for row in plan['blocks']:
         names=('examples.json','examples.npz')+(projection.FILES if row.get('mode_projection') is not None else ())
         paths = [confined(Path(plan_path).parent, str(Path(row['directory'])/name)) for name in names]
@@ -293,8 +315,12 @@ def checked_blocks(plan_path, plan, *, validate_arrays=True,grid=None):
             [row['mode_projection']['metadata_sha256'],row['mode_projection']['arrays_sha256']])
         if [file_sha(path) for path in paths] != hashes:
             raise ValueError('A captured structural training block changed')
-        metadata = (read_training_block(paths[0].parent).manifest if validate_arrays else
-                    block_metadata(paths[0].parent))
+        block=read_training_block(paths[0].parent) if validate_arrays else None
+        metadata=block.manifest if block is not None else block_metadata(paths[0].parent)
+        documents.append(metadata)
+        if block_representation(metadata)==REPRESENTATION:
+            additions.add(metadata,name=row['directory'],arrays=None if block is None else block.arrays,
+                projection=None if block is None else getattr(block,'mode_projection',None))
         if (metadata['source_sha256'] != plan['parent_sha256']
                 or metadata['instrument_sha256'] != plan['instrument_sha256']):
             raise ValueError('Training block has a different parent or profile context')
@@ -307,12 +333,18 @@ def checked_blocks(plan_path, plan, *, validate_arrays=True,grid=None):
             raise ValueError('Paired native mode coordinates differ from their captured training plan')
         if not has_map and row.get('mode_projection') is not None:
             raise ValueError('A legacy block cannot acquire an unbound native mode projection')
-        if uses_strata:strata.add(row['directory'],metadata)
+        if uses_strata and not additive.present(metadata):strata.add(row['directory'],metadata)
         if grid is not None and metadata.get('grid')!=grid:
             raise ValueError('Training examples differ from the captured physical bank grid')
         directories.append(paths[0].parent)
     if uses_strata and strata.describe()!=plan['parent_strata']:
         raise ValueError('Training blocks differ from their complete captured parent-range strata')
+    if additions.finish()!=plan.get('additive_sources',{}):
+        raise ValueError('Sparse additions differ from their explicit captured training plan')
+    if validate_arrays and additions.finish()!=additive.verify_context(documents,lambda:(),
+            subset_factory=lambda indices:(read_training_block(directories[i]) for i in indices),
+            names=[r['directory'] for r in plan['blocks']]):
+        raise ValueError('Sparse original contexts differ from their captured plan arrays')
     resumed=resume_directory(plan_path,plan)
     if resumed is not None:
         from .structural_training_transfer import STATE,RECEIPT

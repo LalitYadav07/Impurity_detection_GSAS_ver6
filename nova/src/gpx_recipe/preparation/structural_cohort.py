@@ -131,6 +131,8 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
     definitions = {}; candidate_groups = {}; generated_groups = {};mode_maps={};mode_references=[]
     if paired:
         from .structural_training_strata import Inventory
+        from . import structural_supplement_pairs as additive
+        additions=additive.Catalog(arrays=False)
         strata=Inventory();unknown_sampling=False
     for block in block_factory():
         if not isinstance(block, PairedBlock if paired else ExampleBlock):
@@ -144,7 +146,9 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         else:mode_references.append(None)
         metadata.append(copy.deepcopy(d))
         if paired:
-            if 'parent_relative_metric_range' in d:strata.add(str(len(metadata)-1),d)
+            additions.add(d,name=str(len(metadata)-1),arrays=a,projection=mode_map)
+            if additive.present(d):pass
+            elif 'parent_relative_metric_range' in d:strata.add(str(len(metadata)-1),d)
             else:unknown_sampling=True  # Saved pre-range pilot readers remain valid.
         if len(metadata) > 5000:
             raise ValueError('The structural preparation block catalog is bounded')
@@ -182,21 +186,27 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
     edges = np.linspace(lower, upper, bins+1)
     anchor=None
     if paired:
+        added_inventory=additions.finish()
+        del additions  # Context admission need not remain resident during feature assembly.
+        if added_inventory!=additive.verify_context(metadata,block_factory,subset_factory=subset_factory):
+            raise ValueError('Sparse original contexts differ from their captured metadata inventory')
         ranges=strata.describe()
-        if ranges is not None:
+        if ranges is not None or added_inventory:
             if unknown_sampling:
-                raise ValueError('Cannot expand ranges without every original parent sampling identity')
+                if ranges is not None:raise ValueError('Cannot expand ranges without every original parent sampling identity')
             from .structural_partition_anchor import PartitionOnly,capture
             from .structural_training_strata import reference_range
-            original_range=reference_range(ranges)
-            indices=sorted(map(int,original_range['blocks']))
+            original_range=None if ranges is None else reference_range(ranges)
+            indices=(sorted(map(int,original_range['blocks'])) if original_range is not None else
+                [i for i,d in enumerate(metadata) if not additive.present(d)])
             selected_indices=set(indices)
             original_factory=(lambda:subset_factory(indices)) if subset_factory is not None else (
                 lambda:(block for i,block in enumerate(block_factory()) if i in selected_indices))
             original=assemble_into(original_factory,PartitionOnly(),bins=bins,split_seed=split_seed,
                                    augmenter=augmenter,paired=True)
             anchor=capture(original,[metadata[i] for i in indices],
-                interval=original_range['parent_relative_metric_range'],split_seed=split_seed)
+                interval=None if original_range is None else original_range['parent_relative_metric_range'],
+                split_seed=split_seed,additive=bool(added_inventory))
             del original
             if not np.array_equal(edges,anchor['q_edges']):
                 raise ValueError('New parent ranges changed the original shared feature grid')
@@ -324,6 +334,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
                 total_candidates=len(definitions),complete=all(v is not None for v in mode_references),
                 mode_targets_inferred=False)) if mode_maps else {}),
         **(dict(partition_anchor=anchor['trace']) if anchor is not None else {}),
+        **(dict(additive_pair_inventory=added_inventory) if paired and added_inventory else {}),
         **(dict(channels=3,representation='reference-current-signed-difference/shared-Q-asinh/v1',
             reference_kind='calculated_parent_at_shared_parent_compatible_cell',
             partition_method='class-supported-whole-trajectories/v1') if paired else {}))

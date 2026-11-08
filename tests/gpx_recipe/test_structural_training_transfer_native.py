@@ -56,11 +56,20 @@ def test_invalid_internal_budget_is_refused_before_work(tmp_path,seconds):
     assert not (tmp_path/'output').exists()
 
 
-def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_model(tmp_path,monkeypatch):
+@pytest.mark.parametrize('additive',[False,True])
+def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_model(tmp_path,monkeypatch,additive):
     from gpx_recipe.preparation import structural_jobs as jobs
     from gpx_recipe.preparation import structural_training_segments as segments
     from test_structural_training_continuation import request
     payload,directory=request(tmp_path/'inputs')
+    directories=[directory]
+    if additive:
+        from test_structural_mode_projection import attach
+        from test_structural_supplement_pairs import addition
+        attach(directory,names='examples')
+        added=directory.parent/'added';addition(directory,added);directories.append(added)
+        plan=directory.parent/'additive-plan.json'
+        jobs.create_plan(payload['source'],directories,plan);payload['plan']=str(plan)
     payload['settings'].update(epochs=1,workers=1,bins=128,augmentation=None)
     monkeypatch.setattr(segments,'SEGMENT_SECONDS',None)
     reference=jobs.execute_training(dict(payload,destination=str(tmp_path/'reference')))
@@ -73,9 +82,11 @@ def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_mo
         job=tmp_path/('job-'+str(index));job.mkdir()
         # Native input packets restore the original exact example arrays.
         import shutil
-        shutil.copytree(directory,job/'examples')
+        for source in directories:shutil.copytree(source,job/source.name)
         plan=job/'training-plan.json'
-        jobs.create_plan(payload['source'],[job/'examples'],plan,resume=resume)
+        captured=jobs.create_plan(payload['source'],[job/p.name for p in directories],plan,resume=resume)
+        if additive:
+            assert captured['schema']==(jobs.ADDITIVE_PLAN_SCHEMA if resume is None else jobs.ADDITIVE_CONTINUED_PLAN_SCHEMA)
         current=dict(payload,plan=str(plan),destination=str(job/'compiled'))
         result=jobs.execute_training(current)
         assert not list((job/'compiled').rglob('features.npy'))
@@ -98,6 +109,10 @@ def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_mo
     for key in ('weights_sha256','history','test','prior_only_test','selected_epoch','curriculum','dataset'):
         assert final[key]==reference_model[key]
     assert result['candidate_pruning_authorized'] is False
+    if additive:
+        assert final['additive_pair_inventory']==reference_model['additive_pair_inventory']
+        assert final['partition_anchor']==reference_model['partition_anchor']
+        assert final['mode_head_trained'] is False
     assert jobs.execute_training(current)==result
 
 

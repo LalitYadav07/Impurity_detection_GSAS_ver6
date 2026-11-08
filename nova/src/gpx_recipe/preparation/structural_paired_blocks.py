@@ -18,6 +18,7 @@ from .tof_kernel_arrays import read_bounded
 from . import structural_pair_arrays as packed
 from . import structural_mode_layout as named
 from . import structural_mode_projection as projection
+from . import structural_supplement_pairs as additive
 
 SCHEMA='radar-structural-ranking-paired-pilot/v1'
 MAX_BYTES=160*1024**2
@@ -66,9 +67,11 @@ def read(directory,*,names='pairs'):
             or any(type(document.get(k)) is not int or not 0<=document[k]<2**32 for k in ('seed','parent_seed'))):
         raise ValueError('A bound observation-free paired structural block is required')
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
-    is_packed=document['schema'] in {packed.SCHEMA,named.PACKED_SCHEMA,projection.PACKED_SCHEMA}
+    sparse=additive.present(document)
+    inventory=ARRAYS-additive.OMITTED_SUMMARIES if sparse else ARRAYS
+    is_packed=document['schema'] in {packed.SCHEMA,named.PACKED_SCHEMA,projection.PACKED_SCHEMA,additive.PACKED_SCHEMA}
     with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
-        expected=(ARRAYS-set(packed.CURVES))|{k+'_byte_planes' for k in packed.CURVES} if is_packed else ARRAYS
+        expected=(inventory-set(packed.CURVES))|{k+'_byte_planes' for k in packed.CURVES} if is_packed else inventory
         if set(archive.files)!=expected:raise ValueError('Unexpected paired structural array inventory')
         arrays={k:archive[k] for k in archive.files}
     if is_packed:
@@ -86,20 +89,24 @@ def read(directory,*,names='pairs'):
             or arrays['trajectory'].shape!=(n,) or arrays['trajectory'].dtype.kind not in 'iu'
             or arrays['role'].shape!=(n,) or arrays['role'].dtype.kind not in 'iu'
             or arrays['ambiguous_geometry'].shape!=(n,) or arrays['ambiguous_geometry'].dtype!=bool
-            or any(arrays[k].shape!=(n,) for k in ('displacement_rms','relative_metric_norm'))
+            or any(arrays[k].shape!=(n,) for k in additive.OMITTED_SUMMARIES if not sparse)
             or any(a.dtype.kind not in 'fiub' or a.dtype.itemsize>8 or not np.isfinite(a).all() for a in arrays.values())
             or np.any(q<=0) or np.any(np.diff(q)<=0) or np.any(arrays['parameters'][0]!=0)
             or np.any(arrays['geometry_groups']<1) or np.any(arrays['geometry_groups']>230)
             or not np.array_equal(arrays['ambiguous_geometry'],arrays['geometry_groups'][:,0]!=arrays['geometry_groups'][:,1])
-            or any(np.any(arrays[k]<0) for k in ('displacement_rms','relative_metric_norm'))
+            or any(np.any(arrays[k]<0) for k in additive.OMITTED_SUMMARIES if not sparse)
             or document.get('examples')!=n or document.get('bins')!=len(q)):
         raise ValueError('Invalid physical paired structural dimensions or labels')
     count=document.get('trajectories');steps=document.get('steps');interval=document.get('trajectory_slice')
     if (type(count) is not int or not 1<=count<=4096 or type(steps) is not int or not 1<=steps<=32
-            or not isinstance(interval,list) or len(interval)!=2 or any(type(i) is not int for i in interval)
-            or count*steps>32768 or not 0<=interval[0]<interval[1]<=count):
+            or count*steps>32768 or (not sparse and (not isinstance(interval,list) or len(interval)!=2
+                or any(type(i) is not int for i in interval) or not 0<=interval[0]<interval[1]<=count))):
         raise ValueError('A complete declared paired trajectory slice is required')
-    if document['schema'] in named.SCHEMAS or (document['schema'] in projection.PAIR_SCHEMAS and 'mode_coverage' in document):
+    if sparse:
+        expected,roles=additive.layout(document)
+    elif 'supplement' in document:
+        raise ValueError('Sparse additions require their explicit paired schema')
+    elif document['schema'] in named.SCHEMAS or (document['schema'] in projection.PAIR_SCHEMAS and 'mode_coverage' in document):
         expected,roles,_,_=named.rows(document,count,steps,interval)
     else:
         if 'mode_coverage' in document:
@@ -115,7 +122,7 @@ def read(directory,*,names='pairs'):
     metric[:,0,1]=metric[:,1,0]=a[:,3]/2;metric[:,0,2]=metric[:,2,0]=a[:,4]/2
     metric[:,1,2]=metric[:,2,1]=a[:,5]/2
     if np.any(np.linalg.eigvalsh(metric)<=0):raise ValueError('Paired parent cells must remain positive definite')
-    for trajectory in range(*interval):
+    for trajectory in sorted(set(map(int,expected))-{-1}):
         rows=np.flatnonzero(expected==trajectory)
         for name in ('parent_a','parent_intensity','parent_background'):
             if not np.array_equal(arrays[name][rows],np.broadcast_to(arrays[name][rows[0]],arrays[name][rows].shape)):
@@ -145,6 +152,7 @@ def read(directory,*,names='pairs'):
             raise ValueError('Named-mode coverage differs from its complete native coordinate map')
     elif 'mode_projection' in document:
         raise ValueError('Native mode projection requires its explicit paired schema')
+    if sparse:additive.validate_arrays(document,arrays,mode_map)
     owned={k:np.frombuffer(a.tobytes(),dtype=a.dtype).reshape(a.shape) for k,a in arrays.items()}
     return PairedBlock(document,owned,mode_map)
 
@@ -163,7 +171,8 @@ def pack_block(source,destination,*,source_names='pairs',names='pairs'):
     np.savez_compressed(destination/array_name,**arrays)
     raw=read_bounded(destination/array_name,MAX_BYTES)
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
-    schema=(projection.PACKED_SCHEMA if block.mode_projection is not None else
+    schema=(additive.PACKED_SCHEMA if additive.present(block.manifest) else
+            projection.PACKED_SCHEMA if block.mode_projection is not None else
             named.PACKED_SCHEMA if block.manifest['schema'] in named.SCHEMAS else packed.SCHEMA)
     if block.mode_projection is not None:
         projection.copy(source,destination,expected=block.manifest,stamp=block.mode_projection.stamp)
