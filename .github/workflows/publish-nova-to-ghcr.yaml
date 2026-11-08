@@ -173,6 +173,7 @@ jobs:
         shell: bash
         run: |
           docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
           python -m pip install --quiet pytest==8.4.2 &&
           mkdir -p /tmp/model-recovery-tests &&
@@ -184,7 +185,7 @@ jobs:
              /validation-tests/test_live_restore.py /validation-tests/test_nomad.py /validation-tests/test_snap.py \
              /validation-tests/test_powgen_controller.py /tmp/model-recovery-tests/ &&
           cd /tmp/model-recovery-tests &&
-          PYTHONPATH=/src/src python -m pytest -q test_model_preparation_retry.py test_model_runtime.py \
+          PYTHONPATH=/src/src:/scientific-test-support python -m pytest -q test_model_preparation_retry.py test_model_runtime.py \
             test_model_checkpoint_coalescing.py test_model_enrollment.py test_checkpoint_uploads.py \
             test_model_checkpoint.py test_native_job_admission.py test_restored_display_inputs.py \
             test_live_admission_guard.py test_restricted_watch_retention.py'
@@ -193,11 +194,12 @@ jobs:
         shell: bash
         run: |
           docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
             -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
           python -m pip install --quiet pytest==8.4.2 &&
           cd /tmp &&
-          PYTHONPATH=/src/src:/validation-tests python -m pytest -q \
+          PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
             /validation-tests/test_preparation_registry.py \
             /validation-tests/test_preparation_queue.py \
             /validation-tests/test_preparation_batch_queue.py \
