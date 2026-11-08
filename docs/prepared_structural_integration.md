@@ -1535,6 +1535,20 @@ qualification must be demonstrated first. Supporting the producer and its
 handoff is not evidence that the larger dataset trains successfully or that
 its classifier can discard candidates.
 
+Worker-local `structural_replay` can reconstruct the same three-channel cohort
+without storing every expanded noisy feature plane. The shared assembler still
+computes and hashes every row, merges exact aliases and assigns class-supported
+whole-trajectory folds. A seekable temporary native-array bank retains original
+dtypes and bytes, deduplicates only byte-identical arrays, and uses the existing
+8 GiB working-store bound plus a 64 MiB resident array cache. Shuffled batches
+read individual native rows rather than decompressing whole candidate archives.
+Reconstruction uses the same observation generator and Q projection; each row
+must reproduce its assembled hash and observation provenance. Changed source or
+captured bytes fail. This owns worker-local data, not an uploaded program or a
+qualification certificate. The existing feature-cache readers and row limits
+remain unchanged. Automatic worker selection still awaits the complete larger
+cohort, restart/transport and lifecycle measurements.
+
 ## Structural size and pattern detectability are different diagnostics
 
 `structural_neighbor_change` reports changes in the fixed parent nearest-distance

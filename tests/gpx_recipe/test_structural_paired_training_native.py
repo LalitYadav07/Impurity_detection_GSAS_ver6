@@ -74,10 +74,14 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
     assert {row['space_group'] for row in ranked['families']}=={12,166}
 
 
-def test_file_backed_and_dense_training_have_identical_parameters_and_holdout_scores(tmp_path):
+@pytest.mark.parametrize('storage', ['file_backed', 'native_pair_replay'])
+def test_bounded_and_dense_training_have_identical_parameters_and_holdout_scores(tmp_path, storage):
     path,cohort=data(tmp_path/'pairs')
-    disk=build([path],tmp_path/'cache',bins=128,
-        augmenter=ObservationAugmenter(Controls(variants=1),instrument_sha256='b'*64))
+    kwargs=dict(bins=128,augmenter=ObservationAugmenter(Controls(variants=1),instrument_sha256='b'*64))
+    if storage=='file_backed':disk=build([path],tmp_path/'cache',**kwargs)
+    else:
+        from gpx_recipe.preparation.structural_replay import build as replay
+        disk=replay([path],**kwargs)
     try:
         first=train(cohort,tmp_path/'dense-model',epochs=1,threads=1)
         second=train(disk,tmp_path/'disk-model',epochs=1,threads=1)
@@ -85,7 +89,7 @@ def test_file_backed_and_dense_training_have_identical_parameters_and_holdout_sc
     assert first['weights_sha256']==second['weights_sha256']
     assert first['test']==second['test'] and first['prior_only_test']==second['prior_only_test']
     assert first['curriculum']==second['curriculum']
-    assert second['feature_storage']=='file_backed'
+    assert second['feature_storage']==storage
     assert first['dataset']==second['dataset']
 
 
