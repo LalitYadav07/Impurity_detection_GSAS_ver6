@@ -26,6 +26,7 @@ def test_restored_watch_caption_and_actions_use_saved_beamline(app, instrument, 
     assert state.live_beamline == "PG3"
     assert conditions in state.powgen_dashboard_notice
     assert state.powgen_dashboard_title.startswith(name + " ·")
+    assert state.powgen_dashboard_instrument == instrument
     assert state.powgen_scan_options[0]["value"].startswith(instrument + "_")
     app.stop_powgen_monitoring()
     assert state.powgen_message.startswith(name + " monitoring stopped.")

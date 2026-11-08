@@ -363,7 +363,7 @@ class SymmetryMixin(KSearchMixin):
                     s.sx_progress='';s.sx_execution_detail='';s.sx_scope_progress='';s.sx_resumable=False;s.sx_following=False
                     self._symmetry_publish_source()
                     if not getattr(s,'sx_has_context',False) and not getattr(s,'sx_error',''):
-                        s.sx_message='Select a completed RADAR-PD GPX above, then prepare model exploration.'
+                        s.sx_message='Choose a starting GPX in the model exploration card below.'
                     return
                 s.sx_error=''
                 root=next(p.parent for p in roots if p.parent.name==s.sx_campaign)

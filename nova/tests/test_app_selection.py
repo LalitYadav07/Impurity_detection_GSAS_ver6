@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
-from radar_pd_nova.app import RadarPdNovaApp
+from radar_pd_nova.app import RadarPdNovaApp, _run_display_name
 from radar_pd_nova.galaxy_service import GSASII_INTERACTIVE_TOOL_ID
 from radar_pd_nova.models import (
     AnalysisConfig,
@@ -58,7 +58,10 @@ def test_live_results_keep_monitor_provenance_when_new_experiment_is_entered():
         wavelength_angstrom="",database_dataset_id="old-library"))
     app._sync_powgen_dashboard_provenance()
     assert state.powgen_dashboard_title == "POWGEN · IPTS-32378"
+    assert state.powgen_dashboard_instrument == "PG3"
     assert not state.powgen_dashboard_scope_changed
+
+
     state.powgen_ipts = "38845"
     state.powgen_configuration_label = "Alloy settings"
     state.powgen_database_label = "Alloy library"
@@ -75,6 +78,16 @@ def test_live_results_keep_monitor_provenance_when_new_experiment_is_entered():
     state.powgen_source_subfolder = "shared/autoreduce"
     app._powgen_processing_changed()
     assert not state.powgen_dashboard_scope_changed
+
+
+@pytest.mark.parametrize("name,display", [
+    ("IPTS-28749_HB2A_EXP853_SCAN0033_026e0158107c7bbc", "HB-2A · IPTS-28749 · Exp 853 · Scan 33"),
+    ("IPTS-38000_PG3_63764", "POWGEN · IPTS-38000 · Run 63764"),
+    ("IPTS-34537_NOM_208518_BANK2_f7539ed36c037c34", "NOMAD · IPTS-34537 · Run 208518"),
+    ("Custom sample result", "Custom sample result"),
+])
+def test_generated_live_run_names_have_readable_headings(name, display):
+    assert _run_display_name(name) == display
 
 
 def test_nomad_source_and_wavelength_labels_follow_the_selected_reduction_family():

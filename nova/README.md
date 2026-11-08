@@ -420,7 +420,7 @@ trees must remain read-only.
 
 ## Transition tracking (0.4.11)
 
-In 0.6.60, **Full-Q U-Net (experimental)** is the default transition evidence
+In 0.6.61, **Full-Q U-Net (experimental)** is the default transition evidence
 view. Each compatible measured pair is transformed with its checksum-verified
 instrument profile, rebinned once onto 1,024 Q bins from 0.25 to 12 Å⁻¹,
 and evaluated in one pass. The before, after and signed-difference curves use
@@ -430,19 +430,23 @@ coordinates; missing Q coverage and unverified profiles are disclosed instead
 of being silently inferred. The heatmap, scan cursor, linked raw curves and fit
 panels remain. These synthetic-trained scores are uncalibrated on measured data.
 **Boundary indicators (legacy)** remains selectable for comparison.
-The transition tab hides the setup rail and centers the map when opened. Its
+The transition tab hides the setup rail and brings the comparison and map into view. Its
 inline chart uses less height for short series, while **Expand map** retains a
 larger inspection view. **Show setup** restores the rail; **Focus plots** hides
-it and centers the map again. Monitor and fit qualifications remain available
+it and brings the map back into view. Monitor and fit qualifications remain available
 from the Results tab and fit note.
 
 Live experiments open on **Results**, with the familiar phase-fraction,
 refinement-quality and composition plots, completed-scan selector and full-result
 link immediately available. The original individual-run Results, Interactive
-Plots, Run Monitor and File Browser pages remain. **Transition tracking** is the
-only additional experiment tab. Its linked pattern-symbol timeline,
+Plots, Run Monitor and File Browser pages remain. **Transition tracking** adds
+a linked pattern history to the experiment workspace. Its
 diffraction intensity map and selected-scan inspector share the existing live
 watch and Galaxy results; display actions do not submit or repeat refinements.
+In 0.6.61, the saved watch controls which beamline-specific tabs are visible,
+the scan inspector sits beside the phase overview, and generated run IDs have
+readable headings while their exact IDs remain available. Refinement puts
+service details behind an expandable note and disables empty queue actions.
 
 The separate Compare scans and Experiment trends tabs, nested evidence tabs and
 uncalibrated shape-threshold control are retired from the live interface. The

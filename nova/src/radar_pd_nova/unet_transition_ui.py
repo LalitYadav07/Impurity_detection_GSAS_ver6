@@ -709,6 +709,7 @@ class UnetTransitionMixin:
         self._unet_transition_color_signature = None
         self._unet_transition_fit_cache = {}
         self._unet_transition_fit_signature = None
+        self._unet_transition_overlay_edited = False
         state = self.server.state
         for name, value in {
             "transition_evidence_mode": "unet",
@@ -826,7 +827,7 @@ class UnetTransitionMixin:
             with html.Div(classes="radar-tracker-header"):
                 html.H3("U-Net feature review", classes="radar-card-title")
                 vuetify.VBtn(text=("setup_collapsed ? 'Show setup' : 'Focus plots'",),
-                             click="setup_collapsed = !setup_collapsed; $nextTick(() => window.setTimeout(() => { window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && window.Plotly && window.Plotly.Plots.resize(el)); if (setup_collapsed) window.document.querySelector('.radar-tracker-map-shell')?.scrollIntoView({block:'center'}); }, 80))",
+                             click="setup_collapsed = !setup_collapsed; $nextTick(() => window.setTimeout(() => { window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && window.Plotly && window.Plotly.Plots.resize(el)); if (setup_collapsed) window.document.querySelector('.radar-tracker-map-actions')?.scrollIntoView({block:'start'}); }, 80))",
                              variant="text", size="small")
                 vuetify.VBtn(text=("unet_transition_follow ? 'Following latest' : 'Return to latest'",),
                              click=self.follow_unet_transition_latest, variant="tonal", size="small",
@@ -904,9 +905,11 @@ class UnetTransitionMixin:
                                 update_modelValue=(self.select_unet_transition_map_window, "[$event]"),
                                 density="compact", variant="outlined", hide_details=True)
             with html.Div(classes="radar-tracker-map-actions", v_show="!unet_transition_loading"):
-                html.Span("{{ unet_transition_overlay_summary }}", classes="radar-section-help")
+                with html.Div(classes="radar-tracker-map-context"):
+                    html.Strong("Comparison: {{ unet_transition_pair_label }}")
+                    html.Span("{{ unet_transition_overlay_summary }}")
                 with html.Div(classes="radar-tracker-scan-arrows"):
-                    vuetify.VBtn("All overlays", click=self.show_all_unet_transition_overlays,
+                    vuetify.VBtn("Show all types", click=self.show_all_unet_transition_overlays,
                                  variant="text", size="small")
                     vuetify.VBtn("Clear", click=self.clear_unet_transition_overlays,
                                  variant="text", size="small")
@@ -1529,6 +1532,10 @@ class UnetTransitionMixin:
              "value": name}
             for name in [*_FEATURE_COLORS, "uncertain"]
         ]
+        if not self._unet_transition_overlay_edited:
+            state.unet_transition_overlay_types = [
+                name for name in _DEFAULT_OVERLAYS if counts[name]
+            ]
         width = min(max(1, int(state.unet_transition_map_window)), 100)
         max_start = max(0, len(rows) - width)
         if state.unet_transition_map_manual_scroll:
@@ -1598,7 +1605,7 @@ class UnetTransitionMixin:
             span = (f" · map rows {start + 1}–{start + len(view_rows)} of {len(rows)}"
                     if len(view_rows) < len(rows) else "")
             state.unet_transition_overlay_summary = (
-                f"Showing {shown} of {total} model regions{span}."
+                f"Showing {shown} of {total} suggested regions highlighted{span}."
                 + (f" {saturated} heat-map cells exceed the locked color range."
                    if saturated else "")
             )
@@ -1770,6 +1777,7 @@ class UnetTransitionMixin:
 
     def select_unet_transition_overlay_types(self, values, **_):
         allowed = {*_FEATURE_COLORS, "uncertain"}
+        self._unet_transition_overlay_edited = True
         self.server.state.unet_transition_overlay_types = [
             name for name in (values or []) if name in allowed
         ]
@@ -1777,7 +1785,10 @@ class UnetTransitionMixin:
         self._render_unet_transition_tracking()
 
     def show_all_unet_transition_overlays(self, **_):
-        self.select_unet_transition_overlay_types([*_FEATURE_COLORS, "uncertain"])
+        self.select_unet_transition_overlay_types([
+            option["value"] for option in self.server.state.unet_transition_overlay_options
+            if not option["title"].endswith("(0)")
+        ])
 
     def clear_unet_transition_overlays(self, **_):
         self.select_unet_transition_overlay_types([])
