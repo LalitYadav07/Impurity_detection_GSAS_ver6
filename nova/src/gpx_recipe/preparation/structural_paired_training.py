@@ -67,8 +67,11 @@ def _representatives(rows,clean,targets,classes):
     # Training examples alone select strong clean prototypes. No validation
     # curve, test curve or held-out score chooses a warmup example.
     best=np.full(len(classes),-np.inf);chosen=np.full(len(classes),-1,np.int64)
-    for selected,values in batches(rows,clean):
-        signal=np.linalg.norm(values[:,2],axis=1)
+    from .structural_replay import ReplayRows
+    captured=rows.residual_strengths(clean) if isinstance(rows,ReplayRows) else None
+    signals=((clean[start:start+64],captured[start:start+64]) for start in range(0,len(clean),64)) if captured is not None else (
+        (selected,np.linalg.norm(values[:,2],axis=1)) for selected,values in batches(rows,clean))
+    for selected,signal in signals:
         for c in range(len(classes)):
             allowed=np.flatnonzero(targets[selected,c])
             if len(allowed):

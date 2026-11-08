@@ -23,6 +23,7 @@ from .structural_features import ThreeCurveProjector
 from .structural_paired_blocks import read, filenames
 from .structural_training_data import FeatureRows, MAX_BATCH_ROWS, MAX_STORE_BYTES, _PERMIT
 from . import structural_replay_limits as limits
+from .structural_moments import Moments
 
 MAX_NATIVE_CACHE_BYTES = 64*1024**2
 
@@ -42,6 +43,7 @@ class _RowHashes:
         if not 1 <= count <= limits.MAX_ROWS or count*limits.INDEX_BYTES_PER_ROW > limits.MAX_INDEX_BYTES:
             raise ValueError('Replay rows exceed the bounded seekable index inventory')
         self.capacity = count; self.bins = bins; self.hashes = []; self.digest = hashlib.sha256()
+        self.moments = Moments(count, bins)
 
     def append(self, feature):
         if (feature.shape != (3, self.bins) or feature.dtype != np.float32
@@ -49,10 +51,12 @@ class _RowHashes:
             raise ValueError('Invalid or excess replay feature row')
         raw=feature.tobytes()
         self.hashes.append(hashlib.sha256(raw).digest()); self.digest.update(raw)
+        self.moments.append(feature)
 
     def finish(self, rows):
         if rows != len(self.hashes):
             raise ValueError('Replay feature inventory is incomplete')
+        self.moments.seal()
 
 
 class _NativeArrays:
@@ -131,7 +135,7 @@ class ReplayRows(FeatureRows):
     bounded seekable data file. Archive decompression happens at assembly,
     never once per random minibatch. Changed files/values fail.
     """
-    def __init__(self, directories, names, cohort, hashes, states, augmenter, bank, feature_sha, *, _permit=None):
+    def __init__(self, directories, names, cohort, hashes, states, augmenter, bank, feature_sha, moments, *, _permit=None):
         if _permit is not _PERMIT:
             raise TypeError('Build replay rows from a checked paired cohort')
         super().__init__(None, len(hashes), storage='native_pair_replay',
@@ -139,6 +143,7 @@ class ReplayRows(FeatureRows):
         self._paths = tuple(tuple(p/name for name in filenames(names)) for p in directories)
         self._states = tuple(states)
         self._feature_sha = feature_sha
+        self._moments = moments; self._statistics_hits = 0; self._statistics_fallbacks = 0
         self._edges = np.frombuffer(cohort['q_edges'].tobytes(), dtype=np.float64)
         self._hashes = np.frombuffer(b''.join(hashes), dtype=np.uint8).reshape(len(hashes), 32)
         selectors = np.empty((len(hashes), 3), np.int32)
@@ -215,7 +220,27 @@ class ReplayRows(FeatureRows):
             retained_native_bytes=self._bank.cache_bytes, native_cache_byte_limit=MAX_NATIVE_CACHE_BYTES,
             retained_clean_rows=len(self._clean), retained_grid_plans=len(self._projectors),
             source_blocks_captured=len(self._bank.blocks), native_array_reads=self._bank.reads,
-            reconstructed_rows=self._regenerated, screening_qualified=False)
+            reconstructed_rows=self._regenerated, owned_moment_bytes=self._moments.nbytes if self._moments is not None else 0,
+            certified_statistics_queries=self._statistics_hits,
+            original_statistics_fallbacks=self._statistics_fallbacks, screening_qualified=False)
+
+    def certified_statistics(self, indices, *, minimum_scale, center):
+        self.feature_sha256()  # The immutable summary cannot bypass changed sources.
+        from .structural_moments import MAX_BYTES, BYTES_PER_ROW
+        if len(indices)*BYTES_PER_ROW > MAX_BYTES:
+            self._statistics_fallbacks += 1
+            return None
+        result = self._moments.statistics(indices, minimum_scale=minimum_scale, center=center)
+        self.feature_sha256()
+        if result is None: self._statistics_fallbacks += 1
+        else: self._statistics_hits += 1
+        return result
+
+    def residual_strengths(self, indices):
+        self.feature_sha256()
+        result = self._moments.strengths(indices)
+        self.feature_sha256()
+        return result
 
     def feature_sha256(self):
         if self._closed:raise ValueError('The native replay training rows are closed')
@@ -231,7 +256,7 @@ class ReplayRows(FeatureRows):
 
     def close(self):
         if not self._closed: self._bank.close()
-        self._projectors.clear(); self._clean.clear(); self._closed = True
+        self._projectors.clear(); self._clean.clear(); self._moments = None; self._closed = True
 
 
 def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pairs', destination=None):
@@ -272,7 +297,7 @@ def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pa
             raise ValueError('Native replay sources changed during cohort assembly')
         bank.seal()
         cohort['features'] = ReplayRows(directories, names, cohort, sink.hashes, states,
-                                      augmenter, bank, sink.digest.hexdigest(), _permit=_PERMIT)
+                                      augmenter, bank, sink.digest.hexdigest(), sink.moments, _permit=_PERMIT)
     except BaseException:
         bank.close(); raise
     return cohort

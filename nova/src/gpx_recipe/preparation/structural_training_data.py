@@ -134,6 +134,11 @@ def channel_statistics(rows, indices, *, minimum_scale=.02, center=True):
         raise ValueError('Finite bounded channel normalization controls required')
     if not len(indices):
         raise ValueError('Normalization needs independent training rows')
+    from .structural_replay import ReplayRows
+    if isinstance(rows, ReplayRows):
+        result = rows.certified_statistics(indices, minimum_scale=minimum_scale, center=center)
+        if result is not None:
+            return result
     channels=rows.shape[1]
     total = np.zeros(channels, np.float64); count = 0
     for _, values in batches(rows, indices):

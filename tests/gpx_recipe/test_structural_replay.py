@@ -127,3 +127,35 @@ def test_captured_stream_digest_needs_no_rendering_but_still_rejects_source_muta
         with (path/'pairs.npz').open('ab') as stream:stream.write(b'changed')
         with pytest.raises(ValueError,match='sources changed'):feature_digest(rows)
     finally:rows.close()
+
+
+def test_owned_statistics_and_prototypes_avoid_replay_without_bypassing_source_checks(tmp_path,monkeypatch):
+    from gpx_recipe.preparation.structural_paired_training import _representatives
+    path=block(tmp_path/'source');cohort=build([path],bins=128);rows=cohort['features']
+    dense=assemble_pairs([read(path)],bins=128);order=np.flatnonzero(cohort['split']==0)
+    targets=cohort['compatible_labels'];classes=cohort['classes']
+    expected=channel_statistics(feature_rows(dense['features']),order)
+    prototypes=_representatives(feature_rows(dense['features']),order,targets,classes)
+    try:
+        monkeypatch.setattr(rows,'take',lambda *a:pytest.fail('A certified summary must not reconstruct features'))
+        actual=channel_statistics(rows,order)
+        assert all(a.tobytes()==b.tobytes() for a,b in zip(actual,expected))
+        np.testing.assert_array_equal(_representatives(rows,order,targets,classes),prototypes)
+        assert rows.diagnostics()['certified_statistics_queries']==1
+        with (path/'pairs.npz').open('ab') as stream:stream.write(b'changed')
+        with pytest.raises(ValueError,match='sources changed'):channel_statistics(rows,order)
+        with pytest.raises(ValueError,match='sources changed'):_representatives(rows,order,targets,classes)
+    finally:rows.close()
+
+
+def test_uncertified_summary_replays_the_unchanged_two_pass_path(tmp_path,monkeypatch):
+    path=block(tmp_path/'source');rows=build([path],bins=128)['features']
+    order=np.arange(len(rows));expected=channel_statistics(rows,order)
+    try:
+        monkeypatch.setattr(rows._moments,'statistics',lambda *a,**k:None)
+        actual=channel_statistics(rows,order)
+        assert all(a.tobytes()==b.tobytes() for a,b in zip(actual,expected))
+        report=rows.diagnostics()
+        assert report['original_statistics_fallbacks']==1
+        assert report['reconstructed_rows']==2*len(rows)
+    finally:rows.close()

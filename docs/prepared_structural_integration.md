@@ -1718,3 +1718,43 @@ capacity or turn a previously viable batch into a workspace fallback. This
 is one automatic optimization of the existing engine, not a separate fitting
 method, an interpolation table or a user-selected accuracy setting. Independent
 native verification remains in the generation workflow.
+
+### Owned normalization summaries: exact rounding certificate
+
+Cold native-pair training currently reconstructs all clean training rows for
+representative selection and all training rows twice for normalization. The
+assembler already computed those exact float32 features before alias closure
+and whole-trajectory partitioning. It now captures bounded internal row sums,
+squares, absolute sums and the identical contiguous residual-norm reduction.
+Only the final selected training indices are queried; no holdout statistic
+contributes. These summaries are not uploaded or exported library assets.
+
+For each channel, let S, R and A denote the exact sum, sum of squares and sum
+of absolute values over the selected float32 entries. Summary reduction error
+is enclosed with gamma(2*bins + 2*rows + 16), where gamma(n)=n*epsilon/(1-n*epsilon),
+epsilon is binary64 epsilon (twice unit roundoff), and the bound arithmetic
+is rounded outward. The two reduction levels are within each row and across
+rows. Finite float32 inputs, bounded dimensions and binary64 accumulation keep
+all nonzero exact sums/products away from binary64 underflow or overflow.
+The original first-pass batch reduction, ordered batch-total additions and
+division are enclosed separately with gamma(64*bins + batches + 16), giving
+an interval for the mean actually used by the original second pass.
+
+For any such mean m, the exact centered sum is R - 2*m*S + count*m*m. Outward
+interval arithmetic retains cancellation uncertainty. The original centering,
+squaring, einsum and batch additions are enclosed with the conservative bound
+gamma(4*64*bins + 4*batches + 32), followed by outward division and square root.
+The minimum-scale floor is applied identically. A query succeeds only if both
+ends of every required mean/scale interval round to identical float32 bytes,
+including signed zero. Otherwise the unchanged original two-pass routine runs.
+Unknown rounding/flush settings also use the original calculation. These are
+rounding certificates, not approximate normalizers or model-confidence bounds.
+
+Captured moments use 80 bytes per admitted row, at most 80 MiB. Sealing/query
+copies have a separate at-most-two-plane transient footprint of 160 MiB.
+Source-file and owned native-bank mutation checks still run before and after
+summary use. Closing the row reader releases its moments. Existing dense/file
+readers, portable formats, features, folds, curriculum and scientific checks
+remain unchanged. Local adversarial and complete small-model tests are
+necessary; actual large native-corpus equality and cold-worker timing are
+still required before claiming measured acceleration at that scale.
