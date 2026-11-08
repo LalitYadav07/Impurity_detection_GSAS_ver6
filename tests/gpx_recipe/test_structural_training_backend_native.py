@@ -70,7 +70,11 @@ def test_real_mps_pooling_handles_nondivisible_lengths_and_tie_derivatives(lengt
 def test_execution_placement_does_not_change_portable_parameter_layout():
     torch.manual_seed(8);model=network(4)
     original=copy.deepcopy(model)
-    original.pool=torch.nn.AdaptiveAvgPool1d(128)
+    class NativePool(torch.nn.Module):
+        def forward(self,values):
+            return .5*(torch.nn.functional.adaptive_avg_pool1d(values,128)+
+                       torch.nn.functional.adaptive_max_pool1d(values,128))
+    original.pool=NativePool()
     plane,layout=weights.pack(model);before,previous=weights.pack(original)
     assert layout==previous and np.array_equal(plane,before)
     values=torch.randn(2,3,129);model.eval();original.eval()

@@ -10,12 +10,20 @@ def network(class_count, *, attention=True, tokens=128, architecture=None):
     import torch
     from torch import nn
     from .structural_attention_pool import adaptive
-    from .structural_attention_weights import ARCHITECTURE,ARCHITECTURES
+    from .structural_attention_weights import ARCHITECTURE,ARCHITECTURES,NORMALIZED_ARCHITECTURE
     architecture=ARCHITECTURE if architecture is None else architecture
     if (type(class_count) is not int or not 2 <= class_count <= 230
             or type(attention) is not bool or tokens not in (64, 128, 256)
             or not isinstance(architecture,str) or architecture not in ARCHITECTURES):
         raise ValueError('Explicit bounded three-curve attention architecture required')
+    if architecture==ARCHITECTURE:
+        if tokens!=128:
+            raise ValueError('The portable full-local attention readout has exactly 128 tokens')
+        from .structural_linear_attention import full_local
+        # Reuse the installed convolution/readout and its controlled initial
+        # random stream. Legacy model tensors retain their exact old layouts.
+        base=network(class_count,attention=False,tokens=128,architecture=NORMALIZED_ARCHITECTURE)
+        return full_local(base,attention=attention)
 
     class AveragePool(nn.Module):
         def forward(self,values):return adaptive(values,tokens)
@@ -38,7 +46,7 @@ def network(class_count, *, attention=True, tokens=128, architecture=None):
                 self.attention = nn.TransformerEncoder(layer, num_layers=1,
                     enable_nested_tensor=False)
             layers=[nn.Flatten(),nn.Linear(32*tokens,64)]
-            if architecture==ARCHITECTURE:
+            if architecture==NORMALIZED_ARCHITECTURE:
                 # The unnormalized hidden layer can become entirely negative
                 # on a many-family curriculum, saturating GELU to exact zero.
                 # Normalize before that nonlinearity, preserving all three

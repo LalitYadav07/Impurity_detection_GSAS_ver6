@@ -1822,3 +1822,33 @@ training and fresh-worker numerical continuation. In particular, an adversarial
 added-label fixture reproduced the old holdout reshuffling and now verifies
 that original physical trajectories retain their folds. This gate does not
 substitute for the complete native-corpus comparison or scientific evaluation.
+
+### Shared full-local attention and portable compatibility
+
+The installed three-curve trainer now uses a separately typed v3 architecture:
+convolutions preserve the local grid, and four-head ELU+1 kernel attention acts
+on every convolution location before a fixed 128-location average/maximum
+readout. A 4096-bin input therefore has 1024 attention locations, rather than
+being averaged to 128 before attention. Per-curve RMS normalization has a
+reference-based floor for null differences; a learned log-RMS branch retains
+amplitude information without adding input channels. This is a distinct kernel
+architecture, not a numerical equivalence claim about softmax attention.
+
+The shared implementation exactly reproduced the owned pilot's initial tensor
+plane and 24 CPU forward queries, including masked inputs; checked parameter
+gradients also matched. An independent explicit dense-kernel oracle verifies
+the associative kernel values and gradients. Portable random-weight controls
+cover grids through 8192 bins and the 230-class parameter bound. Both older v1
+and v2 readers remain available, with unchanged parameter layouts, logits and
+gradients across six independently initialized legacy models and 24 queries.
+Relabeling a numeric plane as another architecture is rejected.
+
+The first focused suite passed 68 CPU tests. The recovery suite passed 67
+tests initially; two checks hit local disk exhaustion and both passed after
+removing only terminal synthetic-test scratch. The suites overlap. All 24
+selected real-MPS checks passed outside the restricted process, including exact
+owned recovery and CPU weight export. A sandboxed process could not detect the
+device and skipped those checks; that skipped run is not counted as hardware
+verification. Numerical controls do not establish classifier accuracy. Complete
+corpus retraining, independently grouped adaptive-set calibration, mode evidence
+and deployed NDIP handoffs remain open.
