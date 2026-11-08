@@ -31,6 +31,7 @@ COPY pyproject.toml README.md /src/
 COPY src /src/src
 RUN python -m pip install --no-cache-dir --no-deps /src \
     && python -c 'from radar_pd_nova.unet_core.production import FocusTransitionPredictor; FocusTransitionPredictor()._load()' \
+    && python -c 'from radar_pd_nova.unet_core.full_q_production import FullQTransitionPredictor; FullQTransitionPredictor()._load()' \
     && python -m compileall -q /src/src/radar_pd_nova /src/src/gpx_recipe
 
 # Documentation-only updates must not reinstall the scientific/ML runtime.

@@ -20,6 +20,7 @@ from .scan_interpretation import _time
 from .scan_conditions import _unit
 from .transition_input import digest, load_observation
 from .unet_core.production import FocusTransitionPredictor
+from .unet_core.full_q_production import FullQTransitionPredictor
 
 SCHEMA = "radar-pd-unet-transition-history/v1"
 RAW_CACHE_BYTES = 96 * 1024 * 1024
@@ -50,7 +51,7 @@ def source_signature(scan):
                   if key not in {"ycalc", "fit_valid", "phase_ticks", "phase_order"}}
     fields = ("run_id", "source_path", "metadata", "bank", "instrument", "ipts", "source_family",
               "comparison_setup_id", "transition_source_root", "scientific_warnings",
-              "warnings", "notices")
+              "warnings", "notices", "transition_profile_dataset_id")
     if raw_available:
         stamps[1] = None
     else:
@@ -274,24 +275,31 @@ class UnetTransitionEngine:
                 self._summaries.popitem(last=False)
         return summary
 
-    def _pair_key(self, before_fingerprint, after_fingerprint):
+    def _pair_context(self, before_scan, after_scan):
+        return None
+
+    def _pair_key(self, before_fingerprint, after_fingerprint, context=None):
+        profile_key = tuple(getattr((context or {}).get(name), "profile_sha256", None)
+                            for name in ("calibration_before", "calibration_after"))
         return (before_fingerprint, after_fingerprint,
                 self.predictor.metadata["checkpoint_sha256"],
-                self.predictor.metadata.get("postprocessing_sha256"))
+                self.predictor.metadata.get("postprocessing_sha256"), profile_key)
 
-    def _compare(self, before, after):
-        key = self._pair_key(before.fingerprint, after.fingerprint)
+    def _compare(self, before, after, context=None):
+        key = self._pair_key(before.fingerprint, after.fingerprint, context)
         with self._cache_lock:
             if key in self._pairs:
                 self._pairs.move_to_end(key)
                 return self._pairs[key]
-        result = self.predictor.predict_pair(before, after)
+        result = self.predictor.predict_pair(before, after, **context) if context is not None \
+            else self.predictor.predict_pair(before, after)
         # The full inference receipt contains every tile. Keep its counts and
         # timing, but do not retain thousands of tile dictionaries per pair.
         inference = result.get("inference") or {}
         compact = {name: result[name] for name in (
             "schema", "status", "attention", "events", "reasons",
-            "coverage_fraction", "supported_intervals", "postprocessing",
+            "coverage_fraction", "supported_intervals", "q_coverage_intervals",
+            "causes", "profiles", "postprocessing",
         ) if name in result}
         compact["inference"] = {name: value for name, value in inference.items()
                                 if name not in {"inferred_windows", "skipped_windows"}}
@@ -367,7 +375,8 @@ class UnetTransitionEngine:
                     before_scan, before_row = entries[reference_index]
                     before_id = before_row["run_id"]
                     try:
-                        key = self._pair_key(before_row["pattern_sha256"], row["pattern_sha256"])
+                        context = self._pair_context(before_scan, _scan)
+                        key = self._pair_key(before_row["pattern_sha256"], row["pattern_sha256"], context)
                         with self._cache_lock:
                             comparison = self._pairs.get(key)
                             if comparison is not None:
@@ -378,7 +387,7 @@ class UnetTransitionEngine:
                             if (before.fingerprint != before_row["pattern_sha256"] or
                                     item.fingerprint != row["pattern_sha256"]):
                                 raise ValueError("Measured source changed while comparisons were prepared")
-                            comparison = self._compare(before, item)
+                            comparison = self._compare(before, item, context)
                         row.update(previous=before_id, status=comparison["status"],
                                    reference_steps=index - reference_index,
                                    attention=comparison["attention"],
@@ -404,3 +413,32 @@ class UnetTransitionEngine:
                 "records": records, "groups": list(groups.values()),
                 "order_by": order_by, "descending": descending,
                 "reference_gap": reference_gap}
+
+
+class FullQTransitionEngine(UnetTransitionEngine):
+    """Use one checked profile for each measured scan before whole-Q inference."""
+
+    def __init__(self, *, calibration_resolver, loader=None,
+                 raw_cache_bytes=RAW_CACHE_BYTES):
+        super().__init__(loader=loader, predictor=FullQTransitionPredictor(),
+                         raw_cache_bytes=raw_cache_bytes)
+        self.calibration_resolver = calibration_resolver
+        self._calibrations = {}
+
+    def _pair_context(self, before_scan, after_scan):
+        def calibration(scan):
+            coordinate = self.load(scan).pattern.scope.coordinate
+            if coordinate in {"d_angstrom", "q_inv_angstrom"}:
+                return None
+            key = self._source_key(scan)
+            with self._cache_lock:
+                if key in self._calibrations:
+                    return self._calibrations[key]
+            value = self.calibration_resolver(scan)
+            with self._cache_lock:
+                if len(self._calibrations) >= 5000:
+                    self._calibrations.clear()
+                self._calibrations[key] = value
+            return value
+        return {"calibration_before": calibration(before_scan),
+                "calibration_after": calibration(after_scan)}

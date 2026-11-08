@@ -2918,14 +2918,14 @@ class RadarPdNovaApp(PreparationMixin, FeedbackMixin, WebmonMixin, BatteryMixin,
         with html.Div(v_if="workspace_view === 'experiment' && experiment_result_view === 'transitions'"):
             vuetify.VSelect(
                 label="Transition evidence", v_model=("transition_evidence_mode",),
-                items=("[{title:'Boundary indicators',value:'indicators'},{title:'U-Net local features (experimental)',value:'unet'}]",),
+                items=("[{title:'Full-Q U-Net (experimental)',value:'unet'},{title:'Boundary indicators (legacy)',value:'indicators'}]",),
                 density="compact", variant="outlined", hide_details=True,
                 classes="mt-3 mb-2",
             )
             with html.Div(v_if="transition_evidence_mode === 'indicators'"):
                 self._transition_tracking_dashboard()
             with html.Div(v_if="transition_evidence_mode === 'unet'"):
-                html.P("Local feature suggestions supplement the boundary indicators. They do not change pattern groups or identify the physical cause of a transition.", classes="radar-section-help")
+                html.P("Whole-Q measured-curve comparisons suggest local changes and possible whole-pair causes. Scores are uncalibrated; the tracker does not change refinements or phase assignments.", classes="radar-section-help")
                 self._unet_transition_tracking_dashboard()
         with html.Section(v_if="!['refinement', 'webmon'].includes(experiment_result_view) && powgen_rows.some(row => row.status !== 'Completed')", classes="radar-result-card radar-experiment-queue-card"):
             with html.Div(classes="radar-card-heading"):
@@ -9165,6 +9165,9 @@ class RadarPdNovaApp(PreparationMixin, FeedbackMixin, WebmonMixin, BatteryMixin,
         .radar-tracker-attention.clear, .radar-tracker-scan-result.clear { background:#eaf5ee; color:#216943; }
         .radar-tracker-attention.baseline, .radar-tracker-scan-result.baseline { background:#eef1f0; color:#485b54; }
         .radar-tracker-attention.pending, .radar-tracker-scan-result.pending { background:#fff2d8; color:#805717; }
+        .radar-tracker-causes { display:flex; flex-wrap:wrap; gap:6px; margin:3px 0 5px; }
+        .radar-tracker-cause { display:inline-flex; border-radius:999px; padding:4px 9px; font-size:11px; font-weight:650; background:#eef2f1; color:#54645e; }
+        .radar-tracker-cause.selected { background:#e6f3ed; color:#146346; border:1px solid #9bceb4; }
         .radar-tracker-selectors { display:grid; grid-template-columns:minmax(230px,1.4fr) minmax(210px,1fr) auto; align-items:center; gap:12px; margin:18px 0 8px; }
         .radar-tracker-order-controls { display:grid; grid-template-columns:repeat(3,minmax(170px,1fr)); gap:10px; margin:10px 0 14px; }
         .radar-tracker-order-controls > .v-input { min-width:0; }

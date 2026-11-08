@@ -130,6 +130,8 @@ jobs:
             /validation-tests/test_webmon_cancelled_job.py \
             /validation-tests/test_unet_core_audit_regressions.py \
             /validation-tests/test_unet_engine_audit_regressions.py \
+            /validation-tests/test_full_q_transition.py \
+            /validation-tests/test_full_q_transition_ui.py \
             /validation-tests/test_unet_transition_ui_state.py \
             /validation-tests/test_result_collection_recovery.py \
             /validation-tests/test_result_background_repair.py \

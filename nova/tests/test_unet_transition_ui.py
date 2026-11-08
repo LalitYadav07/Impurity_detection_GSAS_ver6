@@ -14,8 +14,16 @@ from unittest.mock import Mock
 
 from radar_pd_nova.app import RadarPdNovaApp as BaseApp
 from radar_pd_nova.unet_transition_ui import UnetTransitionMixin
+from radar_pd_nova.unet_transition_engine import UnetTransitionEngine
 
 RadarPdNovaApp = BaseApp
+
+
+@pytest.fixture(autouse=True)
+def established_focus_view_regressions(monkeypatch):
+    """Keep established layout tests on their original fixture predictor."""
+    monkeypatch.setattr(UnetTransitionMixin, "_new_unet_transition_engine",
+                        lambda self: UnetTransitionEngine())
 
 from radar_pd_nova.unet_transition_ui import (
     _acquired_label, _condition_label, _display_scale, _fit_figure_for_scan, _map_display_values,
@@ -49,7 +57,7 @@ def test_optional_view_preserves_existing_indicator_policy():
     assert app._transition_engine is not app._unet_transition_engine
     assert app.server.state.unet_transition_model_version == CHECKPOINT_SHA256[:16]
     assert "Boundary indicators" in app.layout.html
-    assert "U-Net local features (experimental)" in app.layout.html
+    assert "Full-Q U-Net (experimental)" in app.layout.html
     assert "U-Net feature review" in app.layout.html
 
 
@@ -537,6 +545,7 @@ def test_long_series_map_uses_bounded_window_around_selected_scan():
 
 def test_app_computes_unet_only_when_optional_view_is_visible(monkeypatch):
     app = RadarPdNovaApp()
+    app.server.state.transition_evidence_mode = "indicators"
     rows = scans()[:3]
     from radar_pd_nova.unet_transition_engine import UnetTransitionEngine
     calls = []
@@ -572,7 +581,7 @@ def test_reset_discards_optional_observations_and_restores_default():
     app._init_unet_transition_tracking()
     assert app._optional_unet_sources == ([], [])
     assert app._unet_transition_generation > generation
-    assert app.server.state.transition_evidence_mode == "indicators"
+    assert app.server.state.transition_evidence_mode == "unet"
     assert not app._unet_transition_report["records"]
 
 
