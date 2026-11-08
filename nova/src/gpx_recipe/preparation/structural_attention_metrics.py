@@ -4,8 +4,10 @@ import numpy as np
 from .structural_training_data import batches
 
 
-def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None):
+def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None):
     import torch
+    from .structural_observation_metrics import ObservationMetrics
+    observations=None if clean is None else ObservationMetrics(clean,len(rows),len(classes))
     counts=np.zeros(len(classes),np.int64);one=np.zeros(len(classes));five=one.copy()
     total=correct_one=correct_five=0;loss_sum=0.
     for selected,values in batches(rows,indices):
@@ -23,8 +25,11 @@ def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None):
         hit_one=hits[:,0];hit_five=hits[:,:min(5,len(classes))].any(1)
         total+=len(selected);correct_one+=int(hit_one.sum());correct_five+=int(hit_five.sum())
         counts+=allowed.sum(0);one+=(allowed&hit_one[:,None]).sum(0);five+=(allowed&hit_five[:,None]).sum(0)
+        if observations is not None:observations.add(selected,allowed,hit_one,hit_five)
     if not total or not counts.all():raise ValueError('Every scored family needs independent held-out rows')
     per_class={str(int(group)):dict(rows=int(counts[i]),top1=float(one[i]/counts[i]),top5=float(five[i]/counts[i]))
         for i,group in enumerate(classes)}
-    return dict(top1=correct_one/total,top5=correct_five/total,macro_top5=float(np.mean(five/counts)),
+    result=dict(top1=correct_one/total,top5=correct_five/total,macro_top5=float(np.mean(five/counts)),
         worst_class_top5=float(np.min(five/counts)),per_class=per_class,loss=None if prior is not None else loss_sum/total)
+    if observations is not None:result['observation_metrics']=observations.finish()
+    return result

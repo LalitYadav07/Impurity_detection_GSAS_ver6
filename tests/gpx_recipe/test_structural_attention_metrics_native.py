@@ -18,3 +18,27 @@ def test_prior_baseline_reports_rare_family_failures_and_set_valued_hits():
     with pytest.raises(ValueError,match='Every scored family'):
         evaluate(None,rows,targets,np.arange(3),np.zeros((3,1),np.float32),
             np.ones((3,1),np.float32),np.arange(1,8),prior=np.arange(7,0,-1))
+
+
+def test_clean_and_noisy_diagnostics_share_exactly_one_forward_pass():
+    import torch
+    values=np.zeros((6,3,64),np.float32);values[:,0,0]=np.arange(6)
+    rows=feature_rows(values);targets=np.eye(6,dtype=bool)
+    logits=np.zeros((6,6),np.float32);logits[np.arange(6),np.arange(6)]=10
+    logits[0,0]=logits[1,1]=-10
+
+    class Fixed(torch.nn.Module):
+        calls=0
+        def forward(self,values):
+            self.calls+=1
+            return torch.from_numpy(logits)[values[:,0,0].long()]
+
+    model=Fixed();args=(model,rows,targets,np.arange(6),np.zeros((3,1),np.float32),
+                       np.ones((3,1),np.float32),np.arange(1,7))
+    result=evaluate(*args,clean=np.array([True,True,False,False,False,False]))
+    assert model.calls==1
+    parts=result.pop('observation_metrics')['partitions']
+    assert parts['clean_native']['rows']==2 and parts['clean_native']['top5']==0.
+    assert parts['simulated_observation']['rows']==4 and parts['simulated_observation']['top5']==1.
+    assert result==evaluate(*args)
+    assert model.calls==2

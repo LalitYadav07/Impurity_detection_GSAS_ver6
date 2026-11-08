@@ -49,6 +49,12 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
         assert 0<=metric['top1']<=metric['top5']<=1
         assert set(metric['per_class'])==set(map(str,cohort['classes']))
         assert 0<=metric['worst_class_top5']<=metric['macro_top5']<=1
+        observations=metric['observation_metrics']['partitions']
+        assert observations['clean_native']['rows']==dataset['partitions']['test']['clean_pairs']
+        assert observations['simulated_observation']['rows']==dataset['partitions']['test']['simulated_only_rows']
+    observed=result['history'][-1]['validation']['observation_metrics']['partitions']
+    assert observed['clean_native']['rows']==dataset['partitions']['validation']['clean_pairs']
+    assert observed['simulated_observation']['rows']==dataset['partitions']['validation']['simulated_only_rows']
     assert result['candidate_pruning_authorized'] is result['screening_qualified'] is False
     model=Ranker(tmp_path/'model');assert hasattr(model.model,'attention')
     a=read(path).arrays

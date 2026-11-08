@@ -176,7 +176,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                     evaluate(model,rows,targets,representatives,mean,scale,classes).items()
                     if key!='per_class'}
                 strong_recall['representatives']=len(representatives)
-                metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes)
+                metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes,clean=clean)
                 eligible=epoch>=clean_epochs and visited[train_rows].all()
                 key=(-metrics['macro_top5'],-metrics['top5'],metrics['loss'])
                 if eligible and (best_key is None or key<best_key):
@@ -197,8 +197,8 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
             # Test labels have no influence on initialization, normalization,
             # sampling, prototypes, stopping or checkpoint selection.
             progress('scoring_holdout',selected_epoch=selected_epoch)
-            test=evaluate(model,rows,targets,test_rows,mean,scale,classes)
-            prior=evaluate(model,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0))
+            test=evaluate(model,rows,targets,test_rows,mean,scale,classes,clean=clean)
+            prior=evaluate(model,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0),clean=clean)
         progress('packing_model',selected_epoch=selected_epoch)
         plane,layout=weights.pack(model)
         arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
