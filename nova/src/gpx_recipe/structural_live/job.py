@@ -26,7 +26,7 @@ FIELDS={'source','directory','anchor_snapshot','snapshot','receipt','mapping',
 
 
 def validate_payload(payload):
-    if not isinstance(payload,dict) or FIELDS-set(payload) or set(payload)-FIELDS-{'prepared_scattering'}:
+    if not isinstance(payload,dict) or FIELDS-set(payload) or set(payload)-FIELDS-{'prepared_scattering','rank_structural'}:
         raise ValueError('Use the complete closed structural snapshot request')
     for field in ('source','directory','anchor_snapshot','snapshot','destination',
                   'source_revision','reference_revision'):
@@ -42,6 +42,8 @@ def validate_payload(payload):
         raise ValueError('Structural handoff revisions differ from the reviewed mapping')
     if type(payload['revision']) is not int or payload['revision']<0 or type(payload['refine_transfer']) is not bool:
         raise ValueError('An explicit snapshot revision and transfer freedom are required')
+    if 'rank_structural' in payload and type(payload['rank_structural']) is not bool:
+        raise ValueError('An explicit structural ranking ownership flag is required')
     receipt=payload['receipt']
     if (not isinstance(receipt,dict) or receipt.get('identity')!=mapping['identity']
             or not isinstance(receipt.get('content_sha256'),str)
@@ -116,7 +118,8 @@ def transfer_request(payload,protocol):
 
 def execute(payload):
     """Own one scientific job; do not poll, discover models or infer settings."""
-    job,protocol,candidate,inputs,source,snapshot,anchor=captured_context(payload)
+    context=captured_context(payload)
+    job,protocol,candidate,inputs,source,snapshot,anchor=context
     mapping=payload['mapping']
     scope=protocol['policy']
     settings=SearchSettings(mode_radius=scope['structural_mode_radius'],cell_radius=scope['structural_cell_radius'],
@@ -130,10 +133,16 @@ def execute(payload):
     reference=confined(inputs,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None
     root=Path(payload['destination']);root.mkdir(parents=True,exist_ok=False)
     request=transfer_request(payload,protocol)
+    ranking={}
+    def after_transfer(directory,transfer):
+        from .ranking import rank_transferred
+        output=root/'structural-ranking';output.mkdir()
+        ranking['value']=rank_transferred(payload,context,directory,transfer,output)
     preparation_began=time.monotonic()
     contract=prepare_acquisition(request,confined(inputs,candidate['child']['path']),
         candidate['transformation_matrix'],candidate['origin_shift'],root/'acquisition',
-        source_scope=payload['source_scope'],settings=settings,prepared_banks=banks,prepared_profiles=profiles,reference_gpx=reference)
+        source_scope=payload['source_scope'],settings=settings,prepared_banks=banks,prepared_profiles=profiles,reference_gpx=reference,
+        after_transfer=after_transfer if payload.get('rank_structural',False) else None)
     metadata=json.loads((root/'acquisition/model/prepared.json').read_text())
     if set(metadata['inventory']['native_mode_names'])!=set(candidate['modes']):
         raise ValueError('Structural acquisition requires every reviewed physical mode')
@@ -164,6 +173,10 @@ def execute(payload):
            root/'acquisition/model/prepared.json',root/'acquisition/model/starting-curve-contract.json']
     paths += [Path(fitted[role]['path']) for role in ('frozen','continuation')]
     result['artifacts']=sorted([str(p.relative_to(root)) for p in paths]+['result.json'])
+    if ranking:
+        result['structural_ranking']=ranking['value']
+        result['artifacts']=sorted(result['artifacts']+[
+            str(Path('structural-ranking')/name) for name in ranking['value']['artifacts']])
     write_json(root/'result.json',result)
     if (file_sha(source)!=protocol['source']['sha256'] or stable_read(payload['snapshot'])!=snapshot
             or stable_read(payload['anchor_snapshot'])!=anchor):

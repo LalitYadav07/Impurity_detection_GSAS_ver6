@@ -85,7 +85,7 @@ def _json(path):
 
 
 def prepare_acquisition(request,child,transform,origin,directory,*,source_scope,
-                        settings=None,prepared_banks=(),prepared_profiles=(),reference_gpx=None):
+                        settings=None,prepared_banks=(),prepared_profiles=(),reference_gpx=None,after_transfer=None):
     """Transfer the nuclear reference once, then use the shared mode engine.
 
     Experiment snapshots remain outside portable theory-only libraries. The
@@ -98,9 +98,11 @@ def prepare_acquisition(request,child,transform,origin,directory,*,source_scope,
     source_scope=_scope(source_scope,mapping['identity'])
     settings=settings or SearchSettings()
     if not isinstance(settings,SearchSettings):raise TypeError('Explicit SearchSettings required')
+    if after_transfer is not None and not callable(after_transfer):raise TypeError('A native in-process transfer observer is required')
     root=Path(directory);root.mkdir(parents=True,exist_ok=False)
     transfer=prepare_nuclear_snapshot(request,root)
     write_json(root/'transfer.json',transfer)
+    if after_transfer is not None:after_transfer(root,transfer)
     metadata=prepare_model(root/transfer['source_gpx'],child,transform,origin,root/'model',
         phase_name=request['parent_phase'],settings=settings,prepared_banks=prepared_banks,prepared_profiles=prepared_profiles,
         reference_gpx=reference_gpx)

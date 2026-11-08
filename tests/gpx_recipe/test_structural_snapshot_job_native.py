@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -21,9 +22,8 @@ from gpx_recipe.symmetry.contracts import digest,validate_candidate,validate_pro
 from gpx_recipe.symmetry.native_audit import inspect_source
 
 
-@pytest.mark.parametrize('shared',[False,True])
-@pytest.mark.parametrize('operation',['structural-snapshot','structural-snapshot-ranking'])
-def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structural_snapshot(tmp_path,shared,operation):
+def snapshot_case(tmp_path,shared):
+    """The same public acquisition for wrapper and in-process state checks."""
     source,public=native_source(tmp_path/'public','PNT');source_sha=sha(source)
     parent=G.G2Project(gpxfile=str(source));warm=tmp_path/'warm.gpx'
     # A separately reviewed fractional structure/ADP reference must survive
@@ -82,6 +82,20 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
         mapping=mapping,source_scope=dict(run='2',sample_id='public',sample='Public ErSi',wavelength='1.5'),revision=2,
         source_revision='PG3_2:'+mapping['snapshot_sha256'],reference_revision='PG3_ref:'+source_sha,
         refine_transfer=False,destination='snapshot-output',prepared_scattering=preparation)
+    return SimpleNamespace(source=source,source_sha=source_sha,warm=warm,warm_sha=warm_sha,
+        protocol=protocol,packet=packet,payload=payload,candidate=candidate,raw=raw,
+        anchor=anchor,factor=factor,h=h,preparation=preparation)
+
+
+@pytest.mark.parametrize('shared',[False,True])
+@pytest.mark.parametrize('operation,rank_structural',[
+    ('structural-snapshot',False),('structural-snapshot',True),('structural-snapshot-ranking',False)])
+def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structural_snapshot(tmp_path,shared,operation,rank_structural):
+    case=snapshot_case(tmp_path,shared)
+    source,source_sha,warm,warm_sha=case.source,case.source_sha,case.warm,case.warm_sha
+    protocol,packet,payload,candidate=case.protocol,case.packet,case.payload,case.candidate
+    raw,factor,h,preparation=case.raw,case.factor,case.h,case.preparation
+    if rank_structural:payload['rank_structural']=True
     hashes={str(p.relative_to(packet)):sha(p) for p in packet.rglob('*') if p.is_file() and p.suffix!='.py'}
     request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,
         implementation_sha256=package_signature(),expected_source_sha256=source_sha,input_hashes=hashes,
@@ -105,7 +119,7 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
         assert result['source_sha256']==source_sha and result['protocol_sha256']==digest(protocol)
         observation=result['observation']
         assert observation['snapshot_sha256']==hashlib.sha256(raw).hexdigest() and observation['revision']==2
-        assert observation['acquisition_sha256']==digest([_mapping(mapping),payload['source_scope']])
+        assert observation['acquisition_sha256']==digest([_mapping(payload['mapping']),payload['source_scope']])
         validate(result['ranking'],protocol,snapshot=preparation['snapshot_sha256'],observation=observation)
         assert not result['ranking']['ranking_available'] and not result['candidate_pruning_authorized']
         assert result['ranking']['candidate_order']==[candidate['id']]
@@ -122,6 +136,18 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
         assert sha(source)==source_sha and sha(warm)==warm_sha
         return
     fitted=result['result']
+    if rank_structural:
+        from gpx_recipe.preparation.structural_ranking_result import validate
+        ranked=result['structural_ranking'];evidence=ranked['ranking']
+        validate(evidence,protocol,snapshot=preparation['snapshot_sha256'],observation=ranked['observation'])
+        assert ranked['observation']['snapshot_sha256']==hashlib.sha256(raw).hexdigest()
+        assert ranked['observation']['revision']==payload['revision']
+        assert evidence['candidate_order']==[candidate['id']] and not evidence['ranking_available']
+        assert not ranked['candidate_pruning_authorized'] and not ranked['scientific_result']
+        assert len(list((tmp_path/'worker/native/snapshot-output').rglob('reference-view.npz')))==1
+        assert (received/'native/snapshot-output/structural-ranking/ranking/ranking.json').is_file()
+        assert not list((received/'native/snapshot-output/structural-ranking').rglob('*.gpx'))
+    else:assert 'structural_ranking' not in result
     assert result['schema']=='radar-structural-snapshot-result/v1' and result['revision']==2
     stages=result['workflow_timings']
     assert stages['scope']=='acquisition' and stages['preparation_seconds']>0
@@ -156,3 +182,63 @@ def test_model_wrapper_preserves_reviewed_reference_and_exports_native_structura
         timings=fitted['timings'],worker_timing=response['worker_timing'],reference_preserved=True,
         complete_modes=2,cell_coordinates=3,
         scope='Artificial public POWGEN-format Model wrapper round trip; no NDIP or material-identification claim'))
+
+
+@pytest.mark.parametrize('shared',[False,True])
+def test_admitted_three_curve_ranking_leaves_native_state_intact_for_following_fit(tmp_path,monkeypatch,shared):
+    """Stub inference only; actual admission/features precede a real native fit.
+
+    Parent-reference extraction initializes GSAS-II global parameter mappings.
+    The subsequent child construction and independent GPX check must therefore
+    run in the same process here, rather than hiding state interaction behind
+    separate subprocesses. This does not measure classifier accuracy.
+    """
+    from gpx_recipe.preparation import structural_hints,structural_ranking_hints as hints
+    from gpx_recipe.preparation.structural_attention_weights import SCHEMA
+    from gpx_recipe.preparation.structural_domain import envelope
+    from gpx_recipe.structural_live.job import execute
+    case=snapshot_case(tmp_path,shared);payload=dict(case.payload,rank_structural=True)
+    for key in ('source','directory','anchor_snapshot','snapshot','destination'):
+        payload[key]=str(case.packet/payload[key])
+    parent=tmp_path/'ranking-parent.cif'
+    G.G2Project(gpxfile=str(case.source)).phase(0).export_CIF(str(parent))
+    instrument=tmp_path/'public/profile.instprm'
+    model=tmp_path/'model.json'
+    write_json(model,dict(schema=SCHEMA,training_domain=envelope(.001,parent_references=True)))
+    row=dict(entry='d'*24,bank='bank 1',grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1),
+        files=dict(parent=dict(sha256=file_sha(parent)),instrument=dict(sha256=file_sha(instrument))))
+    document=dict(case.preparation,ranking_models=dict(entries=[row]))
+    # Artifact/inference fixtures isolate the GSAS-II state handoff under test;
+    # production metadata/weight verification has its own transport tests.
+    monkeypatch.setattr(structural_hints,'read',lambda *a:document)
+    monkeypatch.setattr(hints,'checked_files',lambda *a:dict(parent=parent,instrument=instrument,model=model))
+    payload['prepared_scattering']=document
+    calls=[]
+    expected=uniform_density_to_tof(parse_live_ascii(case.raw),export_difc=case.factor)
+    def inference(*args,**kwargs):
+        calls.append(kwargs)
+        assert 'reference' in kwargs and np.isfinite(kwargs['reference']['intensity']).all()
+        np.testing.assert_allclose(kwargs['intensity'],expected['y'][::-1],rtol=1e-12,atol=0)
+        np.testing.assert_array_equal(kwargs['valid'],np.ones(len(expected['x']),bool))
+        np.testing.assert_array_equal(kwargs['reference']['q'],kwargs['q'])
+        assert not np.array_equal(kwargs['reference']['intensity'],kwargs['intensity'])
+        return dict(ranking_available=True,candidate_order=[case.candidate['id']],
+            families=[dict(space_group=63,model_score=1.,candidate_ids=[case.candidate['id']])],
+            support=dict(status='within_empirical_synthetic_support',nearest_training_rms=.1,
+                validation_maximum_rms=.2,statistical_coverage_qualified=False))
+    monkeypatch.setattr(hints,'rank',inference)
+    result=execute(payload)
+    assert len(calls)==1,result['structural_ranking']['ranking']
+    assert result['structural_ranking']['ranking']['ranking_available']
+    fitted=result['result']
+    assert fitted['state']=='verified_point_fit' and fitted['all_physical_modes_retained']
+    assert fitted['physical_mode_count']==2 and fitted['cell_parameter_count']==3
+    assert fitted['verification']['relative_error']<1e-8 and fitted['verification']['max_sigma_error']<.01
+    assert result['reference_sha256']==case.warm_sha
+    root=Path(payload['destination'])
+    assert len(list(root.rglob('reference-view.npz')))==1
+    for role in ('frozen','continuation'):
+        arrays=G.G2Project(gpxfile=fitted[role]['path']).histogram(0).data['data'][1]
+        for index,key in enumerate(('x','y','weights')):
+            np.testing.assert_allclose(arrays[index],expected[key],rtol=1e-12,atol=0)
+    assert sha(case.source)==case.source_sha and sha(case.warm)==case.warm_sha

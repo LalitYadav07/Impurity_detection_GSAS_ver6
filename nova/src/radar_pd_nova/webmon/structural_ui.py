@@ -185,7 +185,7 @@ class StructuralLiveMixin:
             html.P('{{ webmon_stream_message }}',v_if='webmon_stream_active')
             html.P('Point fits require optimization and scientific review. A current Rwp leader is not a uniquely identified structure; no structural posterior or counting-stop recommendation is produced.')
             html.P('{{ webmon_structural_ranking }}',v_if='webmon_structural_ranking')
-            v.VDataTable(headers=([dict(title='Search order',key='priority'),dict(title='Model',key='name'),dict(title='State',key='display_state'),dict(title='Rwp (%)',key='rwp'),dict(title='Revision',key='revision')],),items=('webmon_structural_rows',),items_per_page=8,density='compact')
+            v.VDataTable(headers=([dict(title='Priority',key='priority'),dict(title='Model',key='name'),dict(title='State',key='display_state'),dict(title='Rwp (%)',key='rwp'),dict(title='Revision',key='revision')],),items=('webmon_structural_rows',),items_per_page=8,density='compact')
             with html.Details(v_if='webmon_structural_rows.some(row => !!row.reason)'):
                 html.Summary('View job messages',style='cursor:pointer')
                 with html.Ul():
@@ -286,15 +286,16 @@ class StructuralLiveMixin:
                 evidence=row['result']['ranking']
                 if evidence['ranking_available']:
                     groups=', '.join('SG '+str(r['space_group']) for r in evidence['families'][:5])
-                    s.webmon_structural_ranking=f'Prepared family order: {groups}. Every reviewed model remains in the native fits.'
+                    s.webmon_structural_ranking=f'Prepared family priority: {groups}. Every reviewed model remains in the native fits; active fits keep running.'
                 else:s.webmon_structural_ranking=evidence['reason']
-                s.webmon_calculation_status='Submitting structural models'
+                s.webmon_calculation_status='Fitting structural models'
             elif row['state'] in {'failed','cancelled','not_available','not_started'}:
                 s.webmon_structural_ranking=row.get('reason','Prepared ranking unavailable; the full native portfolio is retained.')
+                s.webmon_calculation_status='Fitting structural models'
             else:
                 state=STATES.get(row['state'],row['state'].replace('_',' '))
-                s.webmon_structural_ranking='Prepared model ranking · '+state
-                s.webmon_calculation_status='Checking prepared model ranking'
+                s.webmon_structural_ranking='Prepared ranking in first fit · '+state
+                s.webmon_calculation_status='Fitting structural models'
             s.flush()
         def progress(rows):
             if not current():return

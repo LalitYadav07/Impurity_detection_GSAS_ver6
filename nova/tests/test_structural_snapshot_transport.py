@@ -130,7 +130,7 @@ def test_structural_native_dispatch_uses_the_existing_shared_model_input_layout(
     assert not any(name.startswith(str(directory.relative_to(root))+'/') and name.endswith('.gpx') for name in names)
 
 
-@pytest.mark.parametrize('change',['extra','revision','transfer','mapping','anchor_revision','reference_revision','receipt'])
+@pytest.mark.parametrize('change',['extra','revision','transfer','mapping','anchor_revision','reference_revision','receipt','ranking'])
 def test_closed_structural_payload_rejects_changed_review_or_arbitrary_controls(remote,tmp_path,change):
     _,_,source=remote;_,payload,_=captured(tmp_path,source)
     if change=='extra':payload['environment']={'arbitrary':'code'}
@@ -140,6 +140,7 @@ def test_closed_structural_payload_rejects_changed_review_or_arbitrary_controls(
     if change=='anchor_revision':payload['source_revision']='PG3_2:'+'a'*64
     if change=='reference_revision':payload['reference_revision']='PG3_1:'+'a'*64
     if change=='receipt':payload['receipt']['identity']=dict(payload['receipt']['identity'],run=3)
+    if change=='ranking':payload['rank_structural']='yes'
     with pytest.raises(ValueError):validate_native_payload('structural-snapshot',payload)
 
 
@@ -158,9 +159,11 @@ def test_structural_capture_rejects_invalid_inputs_before_upload(remote,tmp_path
     assert not service.submissions and not service.data
 
 
-@pytest.mark.parametrize('change',[None,'revision','candidate','settings','likelihood','gpx','histogram','output'])
-def test_structural_collection_checks_source_revision_artifacts_and_display(remote,tmp_path,change):
+@pytest.mark.parametrize('rank_structural',[False,True])
+@pytest.mark.parametrize('change',[None,'revision','candidate','settings','likelihood','gpx','histogram','output','ranking'])
+def test_structural_collection_checks_source_revision_artifacts_and_display(remote,tmp_path,change,rank_structural):
     runtime,_,source=remote;root,payload,protocol=captured(tmp_path,source)
+    if rank_structural:payload['rank_structural']=True
     from radar_pd_nova.native_operations import capture
     handle,_=capture(runtime,'structural-snapshot',payload,root,source,60)
     job=json.loads((root/'model/job.json').read_text());output=root/'output';output.mkdir()
@@ -181,6 +184,12 @@ def test_structural_collection_checks_source_revision_artifacts_and_display(remo
         snapshot_sha256=payload['receipt']['content_sha256'],revision=2,forecast_enabled=False,
         model_exclusion_authorized=False,statistical_policy_qualified=False,settings=settings,
         result=fitted,output=str(output),view=str(view))
+    if rank_structural:
+        from test_structural_snapshot_ranking import ranking_result
+        nested=ranking_result(dict(payload,destination=str(output/'structural-ranking')))
+        path=output/'structural-ranking/ranking/ranking.json';path.parent.mkdir(parents=True)
+        write_json(path,nested['ranking']);nested['ranking_sha256']=file_sha(path)
+        result['structural_ranking']=nested
     if change=='revision':result['revision']=1
     if change=='candidate':result['candidate_id']='struct:other'
     if change=='settings':fitted['settings']['starts']=3
@@ -188,6 +197,9 @@ def test_structural_collection_checks_source_revision_artifacts_and_display(remo
     if change=='gpx':Path(fitted['continuation']['path']).write_bytes(b'changed')
     if change=='histogram':write_json(view,dict(schema='radar-symmetry-view/v1',histogram='PWDR other bank'))
     if change=='output':result['output']=str(root.parent)
+    if change=='ranking':
+        if rank_structural:result.pop('structural_ranking')
+        else:result['structural_ranking']={}
     restored=[]
     adapter=StructuralSnapshotRuntime(SimpleNamespace(restore_native_inputs=lambda h,r:restored.append(h),
         collect_native=lambda h,r:(result,3.5)))

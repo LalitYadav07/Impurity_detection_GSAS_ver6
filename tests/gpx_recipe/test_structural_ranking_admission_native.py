@@ -75,7 +75,7 @@ def test_three_curve_parent_is_fresh_native_profile_on_actual_acquisition_grid(t
     np.testing.assert_allclose(ref['intensity'],original[selected],rtol=1e-12,atol=1e-12)
 
 
-@pytest.mark.parametrize('change',['none','cell_within','cell_outside','profile','position','adp','occupancy','sample','isotope'])
+@pytest.mark.parametrize('change',['none','cell_within','cell_outside','profile','position','adp','occupancy','sample','sample_contrast','legacy_contrast_zero','isotope'])
 def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change):
     _,p,r=pair(tmp_path/'control','PNT');parent=p.phase(0);h=p.histogram(0)
     cx,_,_,cia=parent.data['General']['AtomPtrs']
@@ -86,8 +86,10 @@ def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change)
     elif change=='adp':parent.data['Atoms'][0][cia+1]+=.001
     elif change=='occupancy':parent.data['Atoms'][0][cx+3]=.9
     elif change=='sample':h.data['Sample Parameters']['Absorption'][0]+=.1
+    elif change=='sample_contrast':h.data['Sample Parameters']['Contrast'][1]=.1
+    elif change=='legacy_contrast_zero':h.data['Sample Parameters']['Contrast'][1]=False
     elif change=='isotope':parent.data['General'].setdefault('Isotope',{})['Er']='unprepared isotope selection'
-    if change in {'none','cell_within'}:
+    if change in {'none','cell_within','legacy_contrast_zero'}:
         distance=require_compatible(parent,h,r.phase(0),r.histogram(0),maximum_metric=.001)
         assert 0<=distance<=.001
     else:

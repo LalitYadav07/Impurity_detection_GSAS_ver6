@@ -20,10 +20,10 @@ FIELDS = {
     'preparation-structural-examples': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
     'preparation-structural-training': ({'source', 'instrument', 'grid', 'plan', 'destination', 'settings'}, set()),
     'structural-snapshot': ({'source','directory','anchor_snapshot','snapshot','receipt','mapping',
-        'source_scope','revision','source_revision','reference_revision','refine_transfer','destination'}, {'prepared_scattering'}),
+        'source_scope','revision','source_revision','reference_revision','refine_transfer','destination'}, {'prepared_scattering','rank_structural'}),
 }
 STRUCTURAL_SNAPSHOT_OPERATIONS=frozenset({'structural-snapshot','structural-snapshot-ranking'})
-FIELDS['structural-snapshot-ranking']=FIELDS['structural-snapshot']
+FIELDS['structural-snapshot-ranking']=(FIELDS['structural-snapshot'][0],{'prepared_scattering'})
 
 
 def native_timeout_limit(operation):

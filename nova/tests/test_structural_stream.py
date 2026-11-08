@@ -22,9 +22,11 @@ def setup(tmp_path,count=1):
     path=tmp_path/'source.gpx';path.write_bytes(b'opaque public source')
     source=dict(id='public',source_path=str(path),source_sha256=file_sha(path),dataset_id='hda1')
     root,payload,protocol=captured(tmp_path,source);templates=[payload]
-    if count==2:
-        candidate=copy.deepcopy(protocol['candidates'][0]);candidate['id']='struct:second'
-        protocol['candidates'].append(candidate);protocol['policy']['maximum_trials']=2
+    if count>1:
+        for index in range(1,count):
+            candidate=copy.deepcopy(protocol['candidates'][0]);candidate['id']='struct:second' if index==1 else f'struct:extra-{index}'
+            protocol['candidates'].append(candidate)
+        protocol['policy']['maximum_trials']=count
         inputs=root/'model-inputs'
         write_json(inputs/'catalog.json',dict(schema='radar-symmetry-catalog/v1',parent_setting_sha256='a'*64,
             k=protocol['k'],candidates=protocol['candidates']))

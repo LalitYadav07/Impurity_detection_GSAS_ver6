@@ -154,7 +154,7 @@ def test_current_snapshot_ranking_status_is_visible_without_claiming_a_structure
         return []
     monkeypatch.setattr(structural_ui,'analyse_snapshot',ranking_updates)
     asyncio.run(obj._webmon_execute_structural(item,stream,plan))
-    assert seen==['Checking prepared model ranking']
+    assert seen==['Fitting structural models']
     message=obj.server.state.webmon_structural_ranking
     assert ('SG 63' in message and 'Every reviewed model remains' in message) if available else message=='Public transport fixture'
     assert not obj.server.state.webmon_structural_has_result

@@ -36,6 +36,21 @@ def require_unconstrained_project(project):
         raise ValueError('Prepared ranking is not qualified for assigned rigid-body models')
 
 
+def _sample_values(parameters):
+    ignored={'Scale','ranId','InstrName','Temperature','Pressure','Time'}
+    result={k:v for k,v in parameters.items() if k not in ignored}
+    if 'Contrast' in result:
+        # Contrast is a pair of numerical scattering contrasts, not [value,
+        # flag]. Older transfer code encoded a numerical zero/one as bool.
+        # Compare both physical values, including that legacy encoding;
+        # the generic native audit removes boolean refinement switches.
+        contrast=np.asarray(result['Contrast'],dtype=float)
+        if contrast.shape!=(2,) or not np.isfinite(contrast).all():
+            raise ValueError('Finite normal and anomalous sample contrasts required')
+        result['Contrast']=contrast.tolist()
+    return result
+
+
 def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_metric):
     """Compare native physical context, allowing only sampled parent strain.
 
@@ -72,9 +87,8 @@ def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_
     ignore={'Scale','Use','hId','Histogram','Fix FXU'}
     if not same({k:v for k,v in hap.items() if k not in ignore},{k:v for k,v in ref.items() if k not in ignore}):
         raise ValueError('Sample broadening, texture or histogram-phase corrections differ from preparation')
-    ignore={'Scale','ranId','InstrName','Temperature','Pressure','Time'}
-    if not same({k:v for k,v in histogram.data['Sample Parameters'].items() if k not in ignore},
-                {k:v for k,v in reference_histogram.data['Sample Parameters'].items() if k not in ignore}):
+    if not same(_sample_values(histogram.data['Sample Parameters']),
+                _sample_values(reference_histogram.data['Sample Parameters'])):
         raise ValueError('Physical sample corrections differ from preparation')
     if (not np.isfinite(hap['Scale'][0]) or hap['Scale'][0]<=0
             or not np.isfinite(histogram.data['Sample Parameters']['Scale'][0])

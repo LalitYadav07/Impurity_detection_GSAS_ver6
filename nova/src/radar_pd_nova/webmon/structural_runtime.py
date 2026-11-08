@@ -13,6 +13,34 @@ from gpx_recipe.symmetry.compiler import confined,file_sha,job_inputs
 from gpx_recipe.symmetry.contracts import digest
 
 
+def checked_ranking(result,handle,root,payload,job,protocol,expected_output):
+    """The same closed result for a diagnostic job or an existing point fit."""
+    keys={'schema','kind','protocol_sha256','implementation_sha256','source_sha256','observation','ranking',
+          'ranking_sha256','output','artifacts','seconds','candidate_pruning_authorized','scientific_result'}
+    expected=dict(schema='radar-structural-snapshot-ranking-result/v1',kind='structural_ranking',
+        protocol_sha256=job['protocol_sha256'],implementation_sha256=handle['request']['implementation_sha256'],
+        source_sha256=handle['source']['source_sha256'],candidate_pruning_authorized=False,scientific_result=False,
+        artifacts=['ranking/ranking.json','transfer.json','result.json'])
+    if (not isinstance(result,dict) or set(result)!=keys or any(result.get(k)!=v for k,v in expected.items())
+            or type(result['seconds']) not in (int,float) or not math.isfinite(result['seconds'])
+            or not 0<=result['seconds']<=3600):
+        raise ValueError('Structural ranking result differs from its captured source and scope')
+    from gpx_recipe.preparation.structural_ranking_result import observation_binding,validate
+    observation=observation_binding(result['observation'])
+    if (observation['snapshot_sha256']!=payload['receipt']['content_sha256']
+            or observation['revision']!=payload['revision']
+            or observation['acquisition_sha256']!=digest([_mapping(payload['mapping']),payload['source_scope']])):
+        raise ValueError('Structural ranking result belongs to another snapshot revision')
+    prepared=payload.get('prepared_scattering')
+    validate(result['ranking'],protocol,snapshot=prepared['snapshot_sha256'] if prepared else None,observation=observation)
+    output=confined(root,str(Path(result['output']).relative_to(root)))
+    if output!=expected_output:raise ValueError('Structural ranking publication escaped its destination')
+    path=confined(output,'ranking/ranking.json')
+    if path.stat().st_size>4*1024*1024 or file_sha(path)!=result['ranking_sha256'] or json.loads(path.read_text())!=result['ranking']:
+        raise ValueError('Structural ranking evidence changed after collection')
+    return result
+
+
 class StructuralSnapshotRuntime:
     def __init__(self,model_runtime):
         self.runtime=model_runtime
@@ -41,29 +69,7 @@ class StructuralSnapshotRuntime:
         root=Path(root).resolve();self.runtime.restore_native_inputs(handle,root)
         payload=handle['request']['payload'];job,protocol,_=reviewed_job(confined(root,payload['directory']))
         result,seconds=self.runtime.collect_native(handle,root)
-        keys={'schema','kind','protocol_sha256','implementation_sha256','source_sha256','observation','ranking',
-              'ranking_sha256','output','artifacts','seconds','candidate_pruning_authorized','scientific_result'}
-        expected=dict(schema='radar-structural-snapshot-ranking-result/v1',kind='structural_ranking',
-            protocol_sha256=job['protocol_sha256'],implementation_sha256=handle['request']['implementation_sha256'],
-            source_sha256=handle['source']['source_sha256'],candidate_pruning_authorized=False,scientific_result=False,
-            artifacts=['ranking/ranking.json','transfer.json','result.json'])
-        if (not isinstance(result,dict) or set(result)!=keys or any(result.get(k)!=v for k,v in expected.items())
-                or type(result['seconds']) not in (int,float) or not math.isfinite(result['seconds'])
-                or not 0<=result['seconds']<=3600):
-            raise ValueError('Structural ranking result differs from its captured source and scope')
-        from gpx_recipe.preparation.structural_ranking_result import observation_binding,validate
-        observation=observation_binding(result['observation'])
-        if (observation['snapshot_sha256']!=payload['receipt']['content_sha256']
-                or observation['revision']!=payload['revision']
-                or observation['acquisition_sha256']!=digest([_mapping(payload['mapping']),payload['source_scope']])):
-            raise ValueError('Structural ranking result belongs to another snapshot revision')
-        prepared=payload.get('prepared_scattering')
-        validate(result['ranking'],protocol,snapshot=prepared['snapshot_sha256'] if prepared else None,observation=observation)
-        output=confined(root,str(Path(result['output']).relative_to(root)))
-        if output!=confined(root,payload['destination']):raise ValueError('Structural ranking publication escaped its destination')
-        path=confined(output,'ranking/ranking.json')
-        if path.stat().st_size>4*1024*1024 or file_sha(path)!=result['ranking_sha256'] or json.loads(path.read_text())!=result['ranking']:
-            raise ValueError('Structural ranking evidence changed after collection')
+        checked_ranking(result,handle,root,payload,job,protocol,confined(root,payload['destination']))
         return result,seconds
 
     def collect(self,handle,root):
@@ -102,6 +108,11 @@ class StructuralSnapshotRuntime:
         output=confined(root,str(Path(result['output']).relative_to(root)))
         if output!=confined(root,payload['destination']):
             raise ValueError('Structural publication escaped its captured destination')
+        if payload.get('rank_structural',False)!=('structural_ranking' in result):
+            raise ValueError('Structural point fit changed its captured ranking ownership')
+        if payload.get('rank_structural',False):
+            checked_ranking(result['structural_ranking'],handle,root,payload,job,protocol,
+                confined(output,'structural-ranking'))
         for role in ('frozen','continuation'):
             artifact=fitted[role];path=confined(output,str(Path(artifact['path']).relative_to(output)))
             if file_sha(path)!=artifact['sha256']:

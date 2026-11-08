@@ -145,13 +145,16 @@ async def _native_step(adapter,payload,item,root,*,source,cancel,row,handle_name
 
 
 async def analyse_snapshot(adapter,item,root,*,source,labels=None,cancel=None,on_progress=None,on_ranking_progress=None,poll_seconds=3.):
-    """Rank actual snapshot data, then fit the complete bounded portfolio."""
+    """Rank inside an existing fit; reprioritize only still-pending work."""
     root=Path(root).resolve();labels=labels or {};rows=[];protocol=None;ranking_row=None;payloads={}
     for index,payload in enumerate(item['payloads']):
         job,current,candidate=reviewed_job(payload['directory']);protocol=protocol or current
         if digest(current)!=digest(protocol):raise ValueError('Structural snapshot contains conflicting reviewed protocols')
         if candidate['id'] in payloads:raise ValueError('A structural snapshot cannot duplicate a reviewed model')
-        payloads[candidate['id']]=payload
+        payloads[candidate['id']]=copy.deepcopy(payload)
+        # Ranking ownership belongs to this source owner, not a restored
+        # per-model template. Exactly one existing point fit may own it.
+        payloads[candidate['id']].pop('rank_structural',None)
         rows.append(dict(id=job['id'],candidate=candidate['id'],name=labels.get(candidate['id'],candidate['id']),
             state='pending',priority=index+1,revision=item['revision'],snapshot_sha256=item['receipt']['content_sha256']))
     if not rows:raise ValueError('A structural snapshot needs its complete reviewed portfolio')
@@ -169,46 +172,58 @@ async def analyse_snapshot(adapter,item,root,*,source,labels=None,cancel=None,on
     def rank_progress():
         publish()
         if on_ranking_progress:on_ranking_progress(copy.deepcopy(ranking_row))
-    publish()
     def stopped():return cancel is not None and cancel.is_set()
     eligible=getattr(adapter,'has_prepared_ranking',None)
+    ranking_owner=None
     if not stopped() and eligible is not None and await asyncio.to_thread(eligible,item['payloads'][0]):
-        payload=copy.deepcopy(item['payloads'][0]);payload['destination']=str(Path(item['folder'])/'ranking-output')
-        ranking_row=dict(state='pending')
-        def accept_ranking(result,seconds):
-            from gpx_recipe.preparation.structural_ranking_result import validate,observation_binding
-            observation=observation_binding(result['observation'])
-            if (result.get('schema')!='radar-structural-snapshot-ranking-result/v1'
-                    or result.get('protocol_sha256')!=digest(protocol) or result.get('source_sha256')!=protocol['source']['sha256']
-                    or observation['snapshot_sha256']!=item['receipt']['content_sha256'] or observation['revision']!=item['revision']
-                    or observation['acquisition_sha256']!=digest([_mapping(payload['mapping']),payload['source_scope']])):
-                raise ValueError('Prepared ranking belongs to another structural snapshot')
-            validate(result['ranking'],protocol,observation=observation)
-            return dict(state='ranked',result=result,native_seconds=seconds)
-        pending=await _native_step(adapter,payload,item,root,source=source,cancel=cancel,row=ranking_row,
-            handle_name='ranking-handle.json',submit=adapter.submit_ranking,collect=adapter.collect_ranking,
-            accept=accept_ranking,publish=rank_progress,poll_seconds=poll_seconds)
-        if pending:raise ReviewRequired('Structural ranking dispatch is unresolved. Recover its saved handle before continuing snapshots.')
-        if ranking_row['state']=='ranked':
-            evidence=ranking_row['result']['ranking']
-            write_json(Path(item['folder'])/'ranking-evidence.json',evidence)
-            if evidence['ranking_available']:
-                positions={key:i+1 for i,key in enumerate(evidence['candidate_order'])}
-                for row in rows:row['priority']=positions[row['candidate']]
-                rows.sort(key=lambda row:row['priority']);rank_progress()
-    elif on_ranking_progress:
-        on_ranking_progress(dict(state='not_started' if stopped() else 'not_available',
-            reason='Monitoring paused' if stopped() else 'No prepared structural ranking model is attached; using the reviewed model order.'))
-    slots=asyncio.Semaphore(maximum);unresolved=[]
-    async def one(row):
-        async with slots:
+        ranking_owner=rows[0]['candidate']
+        payloads[ranking_owner]=dict(copy.deepcopy(payloads[ranking_owner]),rank_structural=True)
+        ranking_row=dict(state='pending',candidate=ranking_owner)
+    else:
+        ranking_row=dict(state='not_started' if stopped() else 'not_available',
+            reason='Monitoring paused' if stopped() else 'No prepared structural ranking model is attached; using the reviewed model order.')
+    rank_progress()
+    pending_rows=list(rows);unresolved=[]
+    def accept_ranking(result):
+        from gpx_recipe.preparation.structural_ranking_result import validate,observation_binding
+        payload=payloads[ranking_owner];observation=observation_binding(result['observation'])
+        if (result.get('schema')!='radar-structural-snapshot-ranking-result/v1'
+                or result.get('protocol_sha256')!=digest(protocol) or result.get('source_sha256')!=protocol['source']['sha256']
+                or observation['snapshot_sha256']!=item['receipt']['content_sha256'] or observation['revision']!=item['revision']
+                or observation['acquisition_sha256']!=digest([_mapping(payload['mapping']),payload['source_scope']])):
+            raise ValueError('Prepared ranking belongs to another structural snapshot')
+        evidence=validate(result['ranking'],protocol,observation=observation)
+        write_json(Path(item['folder'])/'ranking-evidence.json',evidence)
+        if evidence['ranking_available']:
+            positions={key:i+1 for i,key in enumerate(evidence['candidate_order'])}
+            for row in rows:row['priority']=positions[row['candidate']]
+            rows.sort(key=lambda row:row['priority']);pending_rows.sort(key=lambda row:row['priority'])
+        ranking_row.update(state='ranked',result=result,native_seconds=result['seconds'])
+    async def worker():
+        while pending_rows and not unresolved:
+            # No await separates taking a row and assigning its native work.
+            # Other allocated fits run while the first fit supplies advice.
+            row=pending_rows.pop(0)
             def accept(result,seconds):
+                if (row['candidate']==ranking_owner)!=('structural_ranking' in result):
+                    raise ValueError('A structural fit changed its ranking ownership')
+                if row['candidate']==ranking_owner:accept_ranking(result['structural_ranking'])
                 return dict(state='verified_point_fit',result=result,native_seconds=seconds,
                     rwp=result['result']['metrics']['rwp_native'],seconds_from_capture=time.monotonic()-item['captured_monotonic'])
+            def point_progress():
+                if row['candidate']==ranking_owner:
+                    if ranking_row['state']!='ranked':
+                        ranking_row.update(state=row['state'])
+                        if row.get('reason'):ranking_row['reason']=row['reason']
+                    rank_progress()
+                else:publish()
             pending=await _native_step(adapter,payloads[row['candidate']],item,root,source=source,cancel=cancel,row=row,
                 handle_name='handle-'+digest(row['candidate'])[:24]+'.json',submit=adapter.submit,collect=adapter.collect,
-                accept=accept,publish=publish,poll_seconds=poll_seconds)
+                accept=accept,publish=point_progress,poll_seconds=poll_seconds)
             if pending:unresolved.append(row['candidate'])
-    await asyncio.gather(*(one(row) for row in rows))
+    await asyncio.gather(*(worker() for _ in range(min(maximum,len(rows)))))
+    if unresolved:
+        for row in pending_rows:row.update(state='not_started',reason='Recover existing dispatches before admitting more work')
+        publish()
     if unresolved:raise ReviewRequired('Structural dispatch is unresolved. Existing job handles are saved; recover them before continuing snapshots.')
     return rows

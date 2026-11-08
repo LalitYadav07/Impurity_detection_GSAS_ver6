@@ -43,33 +43,41 @@ def ranking_result(payload,*,available=True):
 def ranking_adapter(stream,*,problem=None,available=True):
     adapter,events,peak=adapter_for(stream);payloads={};rank_events=[];poll=adapter.poll
     adapter.has_prepared_ranking=lambda payload:True
+    submit_fit=adapter.submit;collect_fit=adapter.collect
     def submit(payload,root,**kwargs):
-        rank_events.append('ranking');handle=dict(key='a'*24,submission_started=True,kind='ranking')
-        kwargs['on_intent'](handle);payloads[handle['key']]=payload
-        if problem=='ack':raise TimeoutError('Ranking acknowledgement lost')
+        handle=submit_fit(payload,root,**kwargs);payloads[handle['key']]=payload
+        if payload.get('rank_structural'):
+            rank_events.append('ranking')
+            if problem=='ack':raise TimeoutError('Ranking owner acknowledgement lost')
         return handle
     def ranked_poll(handle):
-        if handle.get('kind')=='ranking':
-            return dict(state='failed' if problem=='known' else 'finished',handle=handle)
-        return poll(handle)
+        status=poll(handle)
+        if payloads[handle['key']].get('rank_structural') and problem=='known':status['state']='failed'
+        return status
     def collect(handle,root):
-        if problem=='collect':raise OSError('Ranking download interrupted')
-        result=ranking_result(payloads[handle['key']],available=available)
-        if problem=='old_scan':result['observation']['revision']+=1
-        return result,1.
-    adapter.submit_ranking=submit;adapter.collect_ranking=collect;adapter.poll=ranked_poll
+        result,seconds=collect_fit(handle,root);payload=payloads[handle['key']]
+        if payload.get('rank_structural'):
+            if problem=='collect':raise OSError('Ranking owner download interrupted')
+            ranked=ranking_result(dict(payload,destination=str(Path(payload['destination'])/'structural-ranking')),available=available)
+            if problem=='old_scan':ranked['observation']['revision']+=1
+            result['structural_ranking']=ranked
+        return result,seconds
+    adapter.submit=submit;adapter.collect=collect;adapter.poll=ranked_poll
+    adapter.submit_ranking=lambda *a,**k:pytest.fail('Live ranking must not add a Galaxy job')
+    adapter.collect_ranking=lambda *a,**k:pytest.fail('Live ranking belongs to its existing fit')
     return adapter,events,rank_events,peak
 
 
 @pytest.mark.parametrize('available',[True,False])
 def test_one_current_ranking_orders_without_dropping_any_native_model(tmp_path,available):
-    stream,state,source=setup(tmp_path,2);item=stream.capture()
+    stream,state,source=setup(tmp_path,4);item=stream.capture()
     adapter,events,ranks,peak=ranking_adapter(stream,available=available);progress=[]
+    adapter.runtime.max_active_jobs=1
     rows=asyncio.run(analyse_snapshot(adapter,item,stream.root,source=source,
         on_ranking_progress=progress.append,poll_seconds=.001))
-    assert ranks==['ranking'] and len(events)==2 and peak[0]<=2
-    assert events==(['child-1','child-0'] if available else ['child-0','child-1'])
-    assert [r['priority'] for r in rows]==[1,2]
+    assert ranks==['ranking'] and len(events)==4 and peak[0]==1
+    assert events==(['child-0','child-3','child-2','child-1'] if available else ['child-0','child-1','child-2','child-3'])
+    assert [r['priority'] for r in rows]==[1,2,3,4]
     assert all(r['state']=='verified_point_fit' for r in rows)
     assert progress[-1]['state']=='ranked'
     previous=json.loads((Path(item['folder'])/'ranking-evidence.json').read_text())
@@ -81,36 +89,42 @@ def test_one_current_ranking_orders_without_dropping_any_native_model(tmp_path,a
 
 
 @pytest.mark.parametrize('problem',['ack','collect','old_scan'])
-def test_unresolved_or_wrong_ranking_retains_handle_and_never_dispatches_fits(tmp_path,problem):
-    stream,_,source=setup(tmp_path,2);item=stream.capture()
+def test_unresolved_owner_retains_handle_and_never_dispatches_additional_fits(tmp_path,problem):
+    stream,_,source=setup(tmp_path,4);item=stream.capture()
     adapter,events,ranks,_=ranking_adapter(stream,problem=problem)
-    with pytest.raises(ReviewRequired,match='ranking dispatch is unresolved'):
+    adapter.runtime.max_active_jobs=1
+    with pytest.raises(ReviewRequired,match='Structural dispatch is unresolved'):
         asyncio.run(analyse_snapshot(adapter,item,stream.root,source=source,poll_seconds=.001))
-    assert ranks==['ranking'] and not events
+    assert ranks==['ranking'] and events==['child-0']
     progress=json.loads((Path(item['folder'])/'progress.json').read_text())
     assert progress['ranking']['state']=='needs_recovery' and progress['terminal']==0
-    assert (Path(item['folder'])/'ranking-handle.json').is_file()
+    assert len(list(Path(item['folder']).glob('handle-*.json')))==1
+    assert not (Path(item['folder'])/'ranking-handle.json').exists()
 
 
-def test_known_ranking_failure_uses_complete_native_portfolio(tmp_path):
-    stream,_,source=setup(tmp_path,2);item=stream.capture()
+def test_known_owner_job_failure_keeps_failed_record_and_attempts_complete_portfolio(tmp_path):
+    stream,_,source=setup(tmp_path,4);item=stream.capture()
     adapter,events,ranks,_=ranking_adapter(stream,problem='known')
     rows=asyncio.run(analyse_snapshot(adapter,item,stream.root,source=source,poll_seconds=.001))
-    assert ranks==['ranking'] and events==['child-0','child-1']
-    assert len(rows)==2 and all(r['state']=='verified_point_fit' for r in rows)
+    assert ranks==['ranking'] and set(events)=={'child-0','child-1','child-2','child-3'}
+    assert len(rows)==4 and sum(r['state']=='verified_point_fit' for r in rows)==3
+    assert sum(r['state']=='failed' for r in rows)==1
 
 
 @pytest.mark.parametrize('pause',['before','after_ranking'])
 def test_pausing_ranked_stream_never_admits_new_native_fits(tmp_path,pause):
-    stream,_,source=setup(tmp_path,2);item=stream.capture()
+    stream,_,source=setup(tmp_path,4);item=stream.capture()
     adapter,events,ranks,_=ranking_adapter(stream);cancel=threading.Event()
+    adapter.runtime.max_active_jobs=1
     if pause=='before':cancel.set()
     def progress(row):
         if pause=='after_ranking' and row['state']=='ranked':cancel.set()
     rows=asyncio.run(analyse_snapshot(adapter,item,stream.root,source=source,cancel=cancel,
         on_ranking_progress=progress,poll_seconds=.001))
-    assert not events and len(ranks)==int(pause=='after_ranking')
-    assert all(r['state']=='not_started' for r in rows)
+    expected=int(pause=='after_ranking')
+    assert len(events)==len(ranks)==expected
+    assert sum(r['state']=='verified_point_fit' for r in rows)==expected
+    assert sum(r['state']=='not_started' for r in rows)==4-expected
 
 
 def test_zero_allocation_and_incomplete_portfolio_fail_before_ranking_post(tmp_path):
@@ -124,7 +138,7 @@ def test_zero_allocation_and_incomplete_portfolio_fail_before_ranking_post(tmp_p
     assert not events and not ranks
 
 
-def test_rank_only_uses_same_durable_transport_and_recovers_finished_job(remote,tmp_path,monkeypatch):
+def test_ranked_point_fit_recovers_finished_job_without_an_extra_submission(remote,tmp_path,monkeypatch):
     runtime,service,source=remote;root,payload,_=captured(tmp_path,source)
     folder=root/'revision';folder.mkdir()
     item=dict(payloads=[payload],revision=payload['revision'],receipt=payload['receipt'],
@@ -134,16 +148,35 @@ def test_rank_only_uses_same_durable_transport_and_recovers_finished_job(remote,
     def collect(handle,root):
         collections.append(handle['key'])
         if len(collections)==1:raise OSError('Result download interrupted')
-        actual=copy.deepcopy(payload);actual['destination']=str(folder/'ranking-output')
-        return ranking_result(actual),1.
-    monkeypatch.setattr(adapter,'collect_ranking',collect)
-    monkeypatch.setattr(adapter,'collect',lambda *a:(dict(result=dict(metrics=dict(rwp_native=2.))),1.))
-    with pytest.raises(ReviewRequired,match='ranking dispatch is unresolved'):
+        actual=copy.deepcopy(payload);actual['destination']=str(Path(payload['destination'])/'structural-ranking')
+        return dict(result=dict(metrics=dict(rwp_native=2.)),structural_ranking=ranking_result(actual)),1.
+    monkeypatch.setattr(adapter,'collect',collect)
+    with pytest.raises(ReviewRequired,match='Structural dispatch is unresolved'):
         asyncio.run(analyse_snapshot(adapter,item,root,source=source,poll_seconds=.001))
     assert len(service.submissions)==1
     rows=asyncio.run(analyse_snapshot(adapter,item,root,source=source,poll_seconds=.001))
-    assert len(service.submissions)==2 and collections[0]==collections[1]
+    assert len(service.submissions)==1 and collections[0]==collections[1]
     assert rows[0]['state']=='verified_point_fit'
+
+
+def test_ranking_owner_runs_alongside_other_allocated_fits(tmp_path):
+    stream,_,source=setup(tmp_path,4);item=stream.capture()
+    adapter,events,ranks,peak=ranking_adapter(stream);poll=adapter.poll
+    def wait_for_another_fit(handle):
+        if handle['candidate']=='child-0' and len(events)<2:return dict(state='running',handle=handle)
+        return poll(handle)
+    adapter.poll=wait_for_another_fit
+    rows=asyncio.run(analyse_snapshot(adapter,item,stream.root,source=source,poll_seconds=.001))
+    assert len(events)==4 and peak[0]==2 and ranks==['ranking']
+    assert all(row['state']=='verified_point_fit' for row in rows)
+
+
+def test_restored_templates_cannot_duplicate_the_source_owners_ranking(tmp_path):
+    stream,_,source=setup(tmp_path,4);item=stream.capture()
+    for payload in item['payloads']:payload['rank_structural']=True
+    adapter,events,ranks,_=ranking_adapter(stream)
+    rows=asyncio.run(analyse_snapshot(adapter,item,stream.root,source=source,poll_seconds=.001))
+    assert len(events)==4 and ranks==['ranking'] and len(rows)==4
 
 
 @pytest.mark.parametrize('change',[None,'revision','acquisition','source','implementation','drop','artifact','output','observation','seconds'])

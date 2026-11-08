@@ -12,26 +12,45 @@ three-channel attention model by default. Clean pairs, noisy feature rows and
 independent trajectory holdouts have separate receipts. Trained rankings can
 prioritize Model campaign work after isolated native parent/profile admission;
 they retain the complete candidate list. An attached model also supplies an
-advisory search order for structural live snapshots. One isolated native
-ranking operation uses the current captured counts and masks, the reviewed
+advisory search order for structural live snapshots. The first existing native
+point-fit job owns ranking for that acquisition revision, reusing its nuclear
+transfer. Ranking uses the current captured counts and masks, the reviewed
 producer conversion and the transferred nuclear parent. It recalculates the
 parent reference and background on the current grid through the same admission
 and inference engine as completed-scan Model campaigns. It cannot reuse a
 completed-GPX score for a live revision or filter the reviewed model portfolio.
 
-The live panel shows ranking-job status, the leading space-group families and
-the resulting native search order. A missing/incompatible model or known
-ranking failure retains every native candidate in the reviewed order. An
-uncertain dispatch or uncollected result retains its existing Galaxy handle
-and requires recovery before admitting more work. Ranking scratch GPXs and
-measured arrays stay in the scientific worker; only its bound ranking and
-transfer receipts are exported. Ranking is currently a separate job before
-the bounded point fits, so its Galaxy queue, staging and startup add latency;
-the native test timings do not establish fast end-to-end live performance.
+The live panel shows ranking within the first fit, the leading space-group
+families and the resulting pending-model priority. Other allocated point fits
+start concurrently. When the first fit returns, its ranking reorders only
+models that have not started; active fits keep running. A missing or
+incompatible model retains every native candidate in the reviewed order. A
+known failed first fit is recorded while the remaining reviewed models are
+still attempted. An uncertain dispatch or uncollected result retains its
+existing Galaxy handle and requires recovery before admitting more work;
+already active fits can finish. Ranking scratch GPXs and measured arrays stay
+in the scientific worker; only its bound ranking and transfer receipts are
+exported with the fit's checked publications. This default adds no separate
+ranking Galaxy job or second nuclear transfer. The standalone native ranking
+operation remains an internal diagnostic, not another Live algorithm choice.
+Native component timings do not establish fast end-to-end live performance.
 
-The expanded 63-construction, 20,223-pair cohort is a development benchmark.
-Completion of its generation, training and independent scientific evaluation
-is still required. No learned model is authorized to remove candidates.
+Powder sample flag normalization now follows the fields consumed by
+GSAS-II's native sample-parameter reader. Numeric pairs such as normal and
+anomalous scattering `Contrast` values remain numeric; their zero/one values
+cannot become refinement flags. Structural admission compares both contrast
+values and accepts their equivalent legacy boolean zero/one encodings without
+ignoring a changed physical value. This avoids rejecting a matching prepared
+reference merely because a previous transfer encoded numerical zero as false.
+
+The expanded 63-construction cohort has completed all 20,223 native pairs with
+no failed constructions. After deduplication, the trajectory-separated split
+has 12,538 clean training pairs, 2,875 validation pairs and 2,740 test pairs.
+Three simulated observation variants per clean pair expand the training set
+to 50,152 examples; they do not count toward the clean-pair requirement. This
+is a parent-specific development benchmark, not a collection of independent
+experimental measurements. Training and independent scientific evaluation
+are still required. No learned model is authorized to remove candidates.
 Broader parent-reference sampling, optimizer checkpoint/resume, aligned NDIP
 images and complete real-experiment/UI acceptance remain open work. These
 changes have not yet been deployed as an accepted preparation release.
@@ -1114,8 +1133,10 @@ unsupported patterns. Its caller must select the exact checked entry: a
 multi-bank instrument file's checksum alone cannot identify the right bank.
 Model campaigns now run isolated native source/profile admission in their
 first scientific chunk and save the source-bound advisory order for later
-dispatch. Structural live snapshot ranking and scientifically qualified
-candidate filtering remain separate, unfinished handoffs.
+dispatch. Structural Live/Webmon snapshots use this same admission/inference
+engine inside the first point fit, bound to the actual captured counts and
+revision. Both paths retain all candidates. Scientific qualification of
+candidate filtering and complete real-NDIP handoff acceptance remain open.
 
 Library manifests use compact JSON and check the same encoded byte count that
 the reader accepts. This avoids admitting a multi-bank plan whose pretty
@@ -1130,8 +1151,9 @@ new viewer still recovers the original dispatch rather than posting a second
 job. The cross-process file lock remains in place.
 
 These application dependencies do not grant permission to prune candidates.
-Live/Webmon consumption of trained rankings, long training checkpoint/resume,
-broader sampling and scientific qualification remain required.
+Complete real-NDIP Live/Webmon acceptance, portable recovery after worker loss,
+broader sampling and scientific qualification remain required. Identical
+training requests can now recover worker-local atomic optimizer checkpoints.
 Interrupted jobs do not publish successful training receipts.
 
 ## Three-curve attention development
