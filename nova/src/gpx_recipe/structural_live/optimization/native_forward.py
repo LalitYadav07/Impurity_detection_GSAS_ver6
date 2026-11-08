@@ -76,14 +76,26 @@ class NativeTOFForward:
         began=time.monotonic();self.requests+=1;s=self.source
         try:
             if self.disabled:
+                if self.native_batch is not None:self.native_batch.discard_cached_plane()
                 self.fallback_calls+=1
                 return s.native(point)
             try:
                 n,driver,powder,_,peak,_,axis,histogram,_,_=self._context()
                 physical=s.check(np.asarray(point,float))
-                records=self.collector.collect_packed_physical(physical,
-                    maximum_bytes=self.maximum_bytes-self.fixed_workspace)
+                budget=self.maximum_bytes-self.fixed_workspace
+                cached=0 if self.native_batch is None else self.native_batch.cached_plane_bytes
+                if cached>=budget:
+                    self.native_batch.discard_cached_plane();cached=0
+                try:
+                    records=self.collector.collect_packed_physical(physical,maximum_bytes=budget-cached)
+                except ScalarBatchUnavailable:
+                    if not cached:raise
+                    # Cached unit shapes are disposable. They cannot reduce
+                    # the admitted scientific geometry or scalar workspace.
+                    self.native_batch.discard_cached_plane()
+                    records=self.collector.collect_packed_physical(physical,maximum_bytes=budget)
             except (ProposalUnavailable,ScalarBatchUnavailable) as exc:
+                if self.native_batch is not None:self.native_batch.discard_cached_plane()
                 self.bypasses[str(exc)]+=1;self.fallback_calls+=1
                 return s.native(point)
             if prepared is not None:
@@ -102,12 +114,14 @@ class NativeTOFForward:
                     signal=self.native_batch.render(records,axis,maximum_bytes=remaining)
                     self.peak_calls+=len(records)
                 except BatchUnavailable as error:
+                    self.native_batch.discard_cached_plane()
                     self.batch_fallbacks[str(error)]+=1;self.fallback_calls+=1
                     self.native_batch_disabled=True;self.qualified=False
                     # A changed ABI/control state or an unusual window must
                     # use a fresh complete native pass, not partial output.
                     return s.native(physical)
             else:
+                if self.native_batch is not None:self.native_batch.discard_cached_plane()
                 signal=np.zeros_like(background)
                 for hkl,(parameters,height,low,high) in record_items(records):
                     value=None if kernel is None else kernel.lookup(hkl,parameters,axis,low,high,function=peak)

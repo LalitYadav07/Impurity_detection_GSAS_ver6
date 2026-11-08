@@ -78,3 +78,24 @@ def test_unsupported_grouping_falls_back_without_truncating(change,expected):
     else:p[:,0]=1e100
     result,reason=grouped(p,b,x,maximum)
     assert result is None and reason==expected
+
+
+def test_previous_raw_plane_overlaps_indices_but_never_a_second_raw_allocation():
+    p,b,x=inputs()
+    baseline,reason=group(p,b,x,maximum_bytes=2**26,base_bytes=8192)
+    assert reason is None
+    retained=4*baseline.points+4096
+    value,reason=group(p,b,x,maximum_bytes=2**26,base_bytes=8192,retained_values_bytes=retained)
+    assert reason is None
+    assert value.required_bytes==baseline.required_bytes+4096
+    np.testing.assert_array_equal(value.mapping,baseline.mapping)
+    value,reason=group(p,b,x,maximum_bytes=baseline.required_bytes,base_bytes=8192,
+        retained_values_bytes=retained)
+    assert value is None and 'workspace' in reason
+
+
+@pytest.mark.parametrize('value',[-1,True,1.5,2**26+1])
+def test_previous_plane_accounting_cannot_escape_the_original_byte_bound(value):
+    p,b,x=inputs()
+    with pytest.raises(ValueError,match='retained'):
+        group(p,b,x,maximum_bytes=2**26,base_bytes=8192,retained_values_bytes=value)

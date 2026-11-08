@@ -203,6 +203,26 @@ class NativePeakBatch:
         self.native_reflections=self.requested_points=self.grouped_calls=self.duplicate_reflections=0
         self.grouped_parts=self.split_calls=0
         self.offset_comparisons=self.offset_collisions=0;self.grouping_bypasses=Counter()
+        self._previous_plane=None
+        self.plane_hits=self.plane_misses=self.plane_evictions=self.reused_native_points=0
+
+    @property
+    def cached_plane_bytes(self):
+        return 0 if self._previous_plane is None else 2048+sum(a.nbytes for a in self._previous_plane)
+
+    def discard_cached_plane(self):
+        if self._previous_plane is not None:self.plane_evictions+=1
+        self._previous_plane=None
+
+    def _matching_plane(self,axis,groups):
+        previous=self._previous_plane
+        if previous is None:return None
+        # Compare original bits, including signed zeros and low position bits.
+        # Rounded inputs, hkl labels or a checksum alone cannot reuse a plane.
+        for first,second in zip(previous[:4],(axis,groups.parameters,groups.bounds,groups.pointers)):
+            if (first.shape!=second.shape or first.dtype!=second.dtype
+                    or not np.array_equal(first.view(np.uint8),second.view(np.uint8))):return None
+        return previous[4]
 
     def _check(self):
         try:
@@ -215,21 +235,39 @@ class NativePeakBatch:
 
     def render(self,records,axis,*,maximum_bytes=MAXIMUM_BYTES):
         began=time.monotonic();self._check()
+        if type(maximum_bytes)is not int or not 0<maximum_bytes<=MAXIMUM_BYTES:
+            raise ValueError('Positive bounded native batch workspace required')
+        if self._previous_plane is not None:
+            # Bound packing/validation temporaries before they are allocated.
+            if (not isinstance(records,(dict,PackedPeakRecords)) or type(axis)is not np.ndarray
+                    or axis.ndim!=1
+                    or self.cached_plane_bytes+80*len(records)+10*axis.nbytes>maximum_bytes):
+                self.discard_cached_plane()
         parameters,heights,bounds,maximum,required=pack_records(records,axis,maximum_bytes)
         owned_axis=None
         if len(heights)>=256 and required+axis.nbytes<=maximum_bytes:
             owned_axis=axis.copy()
         else:self.grouping_bypasses['small or workspace-limited workload']+=1
         offsets=np.empty(maximum,np.float32);values=np.empty(maximum,np.float32)
-        signal=np.zeros(len(axis));stats=Counter();workspace=required
+        signal=np.zeros(len(axis));stats=Counter()
+        workspace=required+self.cached_plane_bytes+(0 if owned_axis is None else owned_axis.nbytes)
+        pending_plane=None
         native_axis=axis if owned_axis is None else owned_axis
 
         def render_part(low,high,depth=0):
-            nonlocal workspace
+            nonlocal workspace,pending_plane
             groups=None;reason=None
             if owned_axis is not None:
                 groups,reason=group_shapes(parameters[low:high],bounds[low:high],owned_axis,
-                    maximum_bytes=maximum_bytes,base_bytes=required+owned_axis.nbytes)
+                    maximum_bytes=maximum_bytes,base_bytes=required+owned_axis.nbytes,
+                    retained_values_bytes=self.cached_plane_bytes)
+                if self._previous_plane is not None and reason in {
+                        'grouping index exceeds workspace','unique native shapes exceed workspace'}:
+                    # A disposable previous plane cannot force a new geometry
+                    # into the slower fallback or reduce the reflection list.
+                    self.discard_cached_plane()
+                    groups,reason=group_shapes(parameters[low:high],bounds[low:high],owned_axis,
+                        maximum_bytes=maximum_bytes,base_bytes=required+owned_axis.nbytes)
                 if reason is not None:self.grouping_bypasses[reason]+=1
             # Keep the global original reflection order and one output
             # accumulator. At most four sequential parts can fit a repeated
@@ -242,35 +280,55 @@ class NativePeakBatch:
             points=ctypes.c_ssize_t()
             self._check()
             if groups is None:
+                self.discard_cached_plane()
                 code=self.function(self.address,high-low,len(native_axis),native_axis,
                     parameters[low:high],heights[low:high],bounds[low:high],
                     maximum,offsets,values,signal,ctypes.byref(points))
                 stats['native_reflections']+=high-low;stats['requested_points']+=points.value
                 workspace=max(workspace,required+(0 if owned_axis is None else owned_axis.nbytes))
             else:
-                raw=np.empty(groups.points,np.float32);unique=len(groups.parameters)
-                code=self.group_values(self.address,unique,len(owned_axis),owned_axis,
-                    groups.parameters,groups.bounds,groups.pointers,groups.points,maximum,
-                    offsets,values,raw,ctypes.byref(points))
+                whole=low==0 and high==len(heights) and depth==0
+                raw=self._matching_plane(owned_axis,groups) if whole else None
+                unique=len(groups.parameters)
+                if raw is None:
+                    self.discard_cached_plane()
+                    raw=np.empty(groups.points,np.float32);self.plane_misses+=int(whole)
+                    code=self.group_values(self.address,unique,len(owned_axis),owned_axis,
+                        groups.parameters,groups.bounds,groups.pointers,groups.points,maximum,
+                        offsets,values,raw,ctypes.byref(points))
+                    stats['native_reflections']+=unique
+                else:
+                    self.plane_hits+=1;self.reused_native_points+=groups.points;code=0
                 self._check()
                 if code==4:raise ValueError('Original native peaks produced a nonfinite profile')
                 if not code:
                     code=self.group_sum(high-low,unique,len(owned_axis),heights[low:high],bounds[low:high],
                         groups.mapping,groups.pointers,groups.points,raw,signal)
-                stats['native_reflections']+=unique;stats['requested_points']+=groups.requested_points
+                # Retaining a complete plane adds a small ownership record.
+                # Its overhead cannot reduce the original one-call grouping
+                # budget or turn a viable sequential part into a fallback.
+                if not code and whole and groups.required_bytes+2048<=maximum_bytes:
+                    pending_plane=(owned_axis,groups.parameters,groups.bounds,groups.pointers,raw)
+                stats['requested_points']+=groups.requested_points
                 stats['grouped_parts']+=1
                 stats['offset_comparisons']+=groups.offset_comparisons
                 stats['offset_collisions']+=groups.offset_collisions
-                workspace=max(workspace,groups.required_bytes)
+                workspace=max(workspace,groups.required_bytes+(2048 if pending_plane is not None else 0))
             self._check()
-            if code:raise BatchUnavailable('The native batch input was refused: '+str(code))
+            if code:
+                self.discard_cached_plane()
+                raise BatchUnavailable('The native batch input was refused: '+str(code))
             stats['points']+=points.value
 
         render_part(0,len(heights))
         if owned_axis is not None and not np.array_equal(axis,owned_axis):
+            self.discard_cached_plane()
             raise BatchUnavailable('Native grid changed during grouped peak calculation')
         self._check()
         if not np.isfinite(signal).all():raise ValueError('Original native peaks produced a nonfinite profile')
+        if pending_plane is not None:
+            for array in pending_plane:array.flags.writeable=False
+            self._previous_plane=pending_plane
         self.calls+=1;self.reflections+=len(heights);self.points+=stats['points']
         self.native_reflections+=stats['native_reflections'];self.requested_points+=stats['requested_points']
         self.grouped_calls+=int(stats['grouped_parts']>0);self.grouped_parts+=stats['grouped_parts']
@@ -287,11 +345,14 @@ class NativePeakBatch:
             grouped_calls=self.grouped_calls,duplicate_reflections=self.duplicate_reflections,
             grouped_parts=self.grouped_parts,sequentially_split_calls=self.split_calls,
             grouping_bypasses=dict(self.grouping_bypasses),
+            previous_plane_hits=self.plane_hits,previous_plane_misses=self.plane_misses,
+            previous_plane_evictions=self.plane_evictions,cached_plane_bytes=self.cached_plane_bytes,
+            reused_native_points=self.reused_native_points,
             compiled_offset_comparisons=self.offset_comparisons,compiled_offset_collisions=self.offset_collisions,
             maximum_accounted_workspace_bytes=self.maximum_workspace,
             helper_source_sha256=self.receipt['source_sha256'],helper_binary_sha256=self.receipt['binary_sha256'],
             interpolation=False,persisted_predictions=False,reflection_summation_order_preserved=True,
-            grouping_scope='identical compiled inputs within this batch; every reflection retains its own intensity')
+            grouping_scope='identical compiled inputs within a batch; one prior native plane may be reused only for bit-identical original grids, parameters, windows and pointers; every reflection retains its own current intensity')
 
 
 def for_powder(powder):

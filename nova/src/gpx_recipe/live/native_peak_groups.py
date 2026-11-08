@@ -24,19 +24,23 @@ class Groups:
     offset_collisions:int
 
 
-def group(parameters,bounds,axis,*,maximum_bytes,base_bytes):
+def group(parameters,bounds,axis,*,maximum_bytes,base_bytes,retained_values_bytes=0):
     """Bound scratch before grouping; use the original batch when unprofitable.
 
     Inputs come only from the checked native batch packer. The numeric
     workspace includes the unique raw float32 profiles and an allowance for
-    Python grouping records. Nothing is saved or reused across batches.
+    Python grouping records. A caller may retain one previous native plane:
+    on a miss it must release that plane before allocating the new raw values.
+    These buffers therefore overlap with grouping indices, never each other.
     """
     count=len(parameters)
+    if type(retained_values_bytes)is not int or not 0<=retained_values_bytes<=maximum_bytes:
+        raise ValueError('Bound the actual retained native plane inside the same workspace')
     if count<256:return None,'small workload'
     # Own the axis used for both grouping and native rendering. Its allocation
     # is accounted by the caller in base_bytes.
     fixed=base_bytes+28*count+8
-    if fixed>maximum_bytes:return None,'grouping index exceeds workspace'
+    if fixed+retained_values_bytes>maximum_bytes:return None,'grouping index exceeds workspace'
     # A rounded-position collision must not turn one native pass into a
     # quadratic search. This limit falls back to the full original batch;
     # it never truncates reflections or weakens the equivalence test.
@@ -66,7 +70,7 @@ def group(parameters,bounds,axis,*,maximum_bytes,base_bytes):
             points+=int(high-low)
             # 72 bytes of packed native inputs/pointers and 512 bytes of
             # grouping bookkeeping per representative, plus its raw values.
-            if fixed+584*len(selected)+4*points>maximum_bytes:
+            if fixed+584*len(selected)+max(4*points,retained_values_bytes)>maximum_bytes:
                 return None,'unique native shapes exceed workspace'
         mapping[row]=equivalent
     if len(selected)>.9*count:return None,'few repeated native inputs'
@@ -75,4 +79,4 @@ def group(parameters,bounds,axis,*,maximum_bytes,base_bytes):
     unique_bounds=np.ascontiguousarray(bounds[indices])
     pointers=np.r_[0,np.cumsum(unique_bounds[:,1]-unique_bounds[:,0],dtype=np.int64)]
     return Groups(unique_parameters,unique_bounds,mapping,pointers,points,requested,
-        fixed+584*len(selected)+4*points,comparisons,collisions),None
+        fixed+584*len(selected)+max(4*points,retained_values_bytes),comparisons,collisions),None
