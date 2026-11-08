@@ -213,11 +213,14 @@ def rank_gpx(input_root,protocol,destination,*,source_override=None,observation=
                     support=ranked.get('support')
                     checks.append(dict(entry=row['entry'],status='inference_unavailable',
                         reason=ranked.get('reason','Prepared model inference is unavailable')[:600]));continue
-                checks.append(dict(entry=row['entry'],status='compatible',
-                    reason='Native parent, bank profile, sites/ADPs and sample corrections matched within the trained lattice envelope'))
                 result=dict(fallback('Prepared simulations prioritize native work; every declared candidate remains available',snapshot=snapshot),
                     ranking_available=True,candidate_order=ranked['candidate_order'],families=ranked['families'],
                     entry_id=row['entry'],bank=row['bank'],support=ranked['support'])
+                if 'adaptive_work_set' in ranked:
+                    from .structural_ranking_result import attach_adaptive
+                    result=attach_adaptive(result,ranked['adaptive_work_set'])
+                checks.append(dict(entry=row['entry'],status='compatible',
+                    reason='Native parent, bank profile, sites/ADPs and sample corrections matched within the trained lattice envelope'))
                 break
             except (OSError,ValueError,ImportError,KeyError,TypeError,IndexError) as error:
                 checks.append(dict(entry=row['entry'],status='incompatible',reason=str(error)[:600]))

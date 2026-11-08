@@ -284,10 +284,8 @@ class StructuralLiveMixin:
             if not current():return
             if row['state']=='ranked':
                 evidence=row['result']['ranking']
-                if evidence['ranking_available']:
-                    groups=', '.join('SG '+str(r['space_group']) for r in evidence['families'][:5])
-                    s.webmon_structural_ranking=f'Prepared family priority: {groups}. Every reviewed model remains in the native fits; active fits keep running.'
-                else:s.webmon_structural_ranking=evidence['reason']
+                from ..structural_ranking_labels import describe
+                s.webmon_structural_ranking=describe(evidence)
                 s.webmon_calculation_status='Fitting structural models'
             elif row['state'] in {'failed','cancelled','not_available','not_started'}:
                 s.webmon_structural_ranking=row.get('reason','Prepared ranking unavailable; the full native portfolio is retained.')

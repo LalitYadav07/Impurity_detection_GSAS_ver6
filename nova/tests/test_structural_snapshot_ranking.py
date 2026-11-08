@@ -21,7 +21,7 @@ from test_structural_snapshot_transport import captured
 from test_model_runtime import remote
 
 
-def ranking_result(payload,*,available=True):
+def ranking_result(payload,*,available=True,adaptive=False):
     _,protocol,_=reviewed_job(payload['directory'])
     observation=dict(snapshot_sha256=payload['receipt']['content_sha256'],calculation_source_sha256='e'*64,
         acquisition_sha256=digest([_mapping(payload['mapping']),payload['source_scope']]),revision=payload['revision'])
@@ -33,6 +33,10 @@ def ranking_result(payload,*,available=True):
             families=[dict(space_group=63,model_score=1.,candidate_ids=order)],
             support=dict(status='within_empirical_synthetic_support',nearest_training_rms=.1,
                 validation_maximum_rms=.2,statistical_coverage_qualified=False))
+        if adaptive:
+            from gpx_recipe.preparation.structural_ranking_result import attach_adaptive
+            from test_structural_ranking_result import work_set
+            evidence=attach_adaptive(evidence,work_set([63]))
     return dict(schema='radar-structural-snapshot-ranking-result/v1',kind='structural_ranking',
         protocol_sha256=digest(protocol),implementation_sha256=package_signature(),source_sha256=protocol['source']['sha256'],
         observation=observation,ranking=evidence,ranking_sha256='b'*64,output=payload['destination'],
@@ -40,7 +44,7 @@ def ranking_result(payload,*,available=True):
         candidate_pruning_authorized=False,scientific_result=False)
 
 
-def ranking_adapter(stream,*,problem=None,available=True):
+def ranking_adapter(stream,*,problem=None,available=True,adaptive=False):
     adapter,events,peak=adapter_for(stream);payloads={};rank_events=[];poll=adapter.poll
     adapter.has_prepared_ranking=lambda payload:True
     submit_fit=adapter.submit;collect_fit=adapter.collect
@@ -58,7 +62,7 @@ def ranking_adapter(stream,*,problem=None,available=True):
         result,seconds=collect_fit(handle,root);payload=payloads[handle['key']]
         if payload.get('rank_structural'):
             if problem=='collect':raise OSError('Ranking owner download interrupted')
-            ranked=ranking_result(dict(payload,destination=str(Path(payload['destination'])/'structural-ranking')),available=available)
+            ranked=ranking_result(dict(payload,destination=str(Path(payload['destination'])/'structural-ranking')),available=available,adaptive=adaptive)
             if problem=='old_scan':ranked['observation']['revision']+=1
             result['structural_ranking']=ranked
         return result,seconds
@@ -69,9 +73,10 @@ def ranking_adapter(stream,*,problem=None,available=True):
 
 
 @pytest.mark.parametrize('available',[True,False])
-def test_one_current_ranking_orders_without_dropping_any_native_model(tmp_path,available):
+@pytest.mark.parametrize('adaptive',[True,False])
+def test_one_current_ranking_orders_without_dropping_any_native_model(tmp_path,available,adaptive):
     stream,state,source=setup(tmp_path,4);item=stream.capture()
-    adapter,events,ranks,peak=ranking_adapter(stream,available=available);progress=[]
+    adapter,events,ranks,peak=ranking_adapter(stream,available=available,adaptive=adaptive);progress=[]
     adapter.runtime.max_active_jobs=1
     rows=asyncio.run(analyse_snapshot(adapter,item,stream.root,source=source,
         on_ranking_progress=progress.append,poll_seconds=.001))
@@ -81,6 +86,7 @@ def test_one_current_ranking_orders_without_dropping_any_native_model(tmp_path,a
     assert all(r['state']=='verified_point_fit' for r in rows)
     assert progress[-1]['state']=='ranked'
     previous=json.loads((Path(item['folder'])/'ranking-evidence.json').read_text())
+    assert ('adaptive_work_set' in previous)==(available and adaptive)
     state['raw']=RAW;later=stream.capture()
     asyncio.run(analyse_snapshot(adapter,later,stream.root,source=source,poll_seconds=.001))
     current=json.loads((Path(later['folder'])/'ranking-evidence.json').read_text())

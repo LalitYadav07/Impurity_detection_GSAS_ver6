@@ -113,7 +113,7 @@ def test_outside_cell_message_explains_current_and_trained_ranges(tmp_path):
     assert 'Generate training examples over the wider parent-cell range' in str(caught.value)
 
 
-@pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain','live_counts'])
+@pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain','live_counts','paired_adaptive','live_adaptive','paired_bad_adaptive','paired_recover_adaptive'])
 def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_path,monkeypatch,change):
     """Inference is a controlled stub here; native input admission is real."""
     from gpx_recipe.preparation import structural_hints,structural_ranking_hints as hints
@@ -145,7 +145,7 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
             maximum_trials=1,maximum_cell_multiplier=8,maximum_moment=6.,fit_band_percent=.25,
             maximum_mode=.5,adequate_rwp_percent=12.)))
     metadata=dict(training_domain=envelope(.001))
-    paired=change.startswith('paired_') or change=='live_counts'
+    paired=change.startswith('paired_') or change in {'live_counts','live_adaptive'}
     if paired:
         from gpx_recipe.preparation.structural_attention_weights import SCHEMA
         metadata['schema']=SCHEMA
@@ -155,12 +155,13 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
         files=dict(parent=dict(sha256=file_sha(tmp_path/'control/parent.cif')),
                    instrument=dict(sha256=file_sha(root/'profile.instprm'))))
     document=dict(snapshot_sha256='e'*64,ranking_models=dict(entries=[] if change=='no_model' else [row]))
+    if change=='paired_recover_adaptive':document['ranking_models']['entries'].append(dict(row,entry='f'*24))
     monkeypatch.setattr(structural_hints,'read',lambda *a:document)
     monkeypatch.setattr(hints,'checked_files',lambda *a:dict(parent=tmp_path/'control/parent.cif',
         instrument=root/'profile.instprm',model=model))
     calls=[]
     observation=None;override=None;before_source=file_sha(source)
-    if change=='live_counts':
+    if change in {'live_counts','live_adaptive'}:
         override=tmp_path/'current-ranking.gpx'
         live=G.G2Project(gpxfile=str(source),newgpx=str(override))
         arrays=live.histogram(0).data['data'][1]
@@ -173,19 +174,29 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
     def inference(*args,**kwargs):
         calls.append(kwargs)
         assert ('reference' in kwargs)==paired
-        if change=='live_counts':
+        if change in {'live_counts','live_adaptive'}:
             for key in ('q','intensity','valid','background'):
                 np.testing.assert_array_equal(kwargs[key],expected[key])
             assert np.count_nonzero(kwargs['intensity']<0)>0 and np.count_nonzero(~kwargs['valid'])>=3
-        return dict(ranking_available=True,candidate_order=['public-ersi'],
+        result=dict(ranking_available=True,candidate_order=['public-ersi'],
             families=[dict(space_group=63,model_score=1.,candidate_ids=['public-ersi'])],
             support=dict(status='within_empirical_synthetic_support',nearest_training_rms=.1,
                          validation_maximum_rms=.2,statistical_coverage_qualified=False))
+        if 'adaptive' in change:
+            from test_structural_ranking_result import work_set
+            bad=(change=='paired_bad_adaptive' or change=='paired_recover_adaptive' and kwargs['entry_id']=='d'*24)
+            result['adaptive_work_set']=work_set([166] if bad else [63])
+        return result
     monkeypatch.setattr(hints,'rank',inference)
     destination=tmp_path/'ranking';result=rank_gpx(root,protocol,destination,source_override=override,observation=observation)
     assert result==json.loads((destination/'ranking.json').read_text())
-    available=change in {'same','paired_parent_within','live_counts'}
-    assert result['ranking_available']==available and len(calls)==int(available)
+    available=change in {'same','paired_parent_within','live_counts','paired_adaptive','live_adaptive','paired_recover_adaptive'}
+    assert result['ranking_available']==available
+    assert len(calls)==(2 if change=='paired_recover_adaptive' else int(available or change=='paired_bad_adaptive'))
+    if change=='paired_recover_adaptive':
+        assert [r['status'] for r in result['checks']]==['incompatible','compatible']
+        assert result['entry_id']=='f'*24
+    assert ('adaptive_work_set' in result)==(available and 'adaptive' in change)
     assert result['candidate_order']==['public-ersi'] and result['candidate_pruning_authorized'] is False
     assert result['preparation_snapshot_sha256']=='e'*64
     assert file_sha(source)==before_source

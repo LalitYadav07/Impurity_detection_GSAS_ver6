@@ -150,6 +150,44 @@ def select(logits,calibration,*,identities,within_support=True):
         experimental_coverage_qualified=False,candidate_pruning_authorized=False,native_refinement_required=True)
 
 
+def validate_work_set(value,classes):
+    """A source-bound priority set never changes the native candidate scope."""
+    d=fields(value,['schema','retained_space_groups','deferred_space_groups','calibrated_maximum_gap',
+        'calibration_groups','error_rate','adjacent_score_ratio','reason','model_scores_are_probabilities',
+        'experimental_coverage_qualified','candidate_pruning_authorized','native_refinement_required'])
+    retained=d['retained_space_groups'];deferred=d['deferred_space_groups'];q=d['calibrated_maximum_gap']
+    if (not isinstance(classes,list) or not 1<=len(classes)<=230
+            or any(type(c)is not int or not 1<=c<=230 for c in classes) or len(set(classes))!=len(classes)
+            or d['schema']!=SCHEMA or not isinstance(retained,list) or not retained or not isinstance(deferred,list)
+            or any(type(c)is not int for c in retained+deferred) or retained+deferred!=classes
+            or type(d['calibration_groups'])is not int or not 1<=d['calibration_groups']<=MAX_GROUPS
+            or type(d['error_rate']) not in (int,float) or not math.isfinite(d['error_rate']) or not 0<d['error_rate']<1
+            or type(d['adjacent_score_ratio'])is not float or d['adjacent_score_ratio']!=ADJACENT_SCORE_RATIO
+            or (q is not None and (type(q) not in (int,float) or not math.isfinite(q) or q<0))
+            or (q is None and deferred)
+            or (q is not None and math.ceil((d['calibration_groups']+1)*(1-d['error_rate']))>d['calibration_groups'])
+            or not isinstance(d['reason'],str) or not 1<=len(d['reason'])<=1000
+            or d['model_scores_are_probabilities'] is not False or d['experimental_coverage_qualified'] is not False
+            or d['candidate_pruning_authorized'] is not False or d['native_refinement_required'] is not True):
+        raise ValueError('Adaptive priority must retain the complete ordered requested class inventory')
+    return d
+
+
+def requested_scope(value,classes):
+    """Restrict a prepared priority to reviewed routes, never discard work."""
+    full=value['retained_space_groups']+value['deferred_space_groups']
+    d=validate_work_set(value,full)
+    if not classes or classes!=[c for c in full if c in classes]:
+        raise ValueError('Requested adaptive classes differ from the prepared ranking order')
+    retained=[c for c in d['retained_space_groups'] if c in classes]
+    if not retained:
+        # Expanding an empty intersection schedules work; it does not invent a
+        # favorable score or grant authority to reject the remaining classes.
+        retained=classes[:1]
+    scoped=dict(d,retained_space_groups=retained,deferred_space_groups=classes[len(retained):])
+    return validate_work_set(scoped,classes)
+
+
 def evaluate(logits,compatible,groups,calibration,*,identities):
     """Measure false exclusions and work-set sizes on untouched test groups."""
     d=validate(calibration);groups=_groups(groups);a,gaps=_scores(logits,d['classes']);y=np.asarray(compatible)

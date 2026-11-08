@@ -24,6 +24,7 @@ from . import structural_training_backend as backend
 from .structural_readout_health import training_health
 from .structural_training_curriculum import replay_batches,REPLAY_ROWS
 from .tof_kernel_arrays import checksum
+from .structural_compatible_objective import OBJECTIVE,SELECTION,terms,checkpoint_key
 
 
 def _inputs(cohort):
@@ -94,7 +95,8 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
     from .structural_calibration_partition import reserve
     reservation=reserve(cohort['groups'],split,clean,targets)
     split=reservation.split
-    cohort=dict(cohort,calibration_partition=reservation.metadata)
+    cohort=dict(cohort,calibration_partition=reservation.metadata,training_objective=OBJECTIVE,
+        checkpoint_selection=SELECTION)
     row_layout=rows.row_layout if len(rows)>MAX_ROWS else None
     dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
         generated_pairs=cohort['original_examples'],
@@ -179,7 +181,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             def update(selected,values):
                 model.train();logits=backend.forward(model,torch.from_numpy((values-mean)/scale))
                 allowed=torch.from_numpy(targets[selected])
-                objective=(torch.logsumexp(logits,1)-torch.logsumexp(logits.masked_fill(~allowed,-torch.inf),1)).mean()
+                objective=terms(logits,allowed)[0].mean()
                 if not torch.isfinite(objective):raise ValueError('Nonfinite attention training objective; no model was published')
                 optimizer.zero_grad(set_to_none=True);objective.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(),1.,error_if_nonfinite=True);optimizer.step()
@@ -221,7 +223,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
                 strong_recall['representatives']=len(representatives)
                 metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes,clean=clean)
                 eligible=epoch>=clean_epochs and visited[train_rows].all()
-                key=(-metrics['macro_top5'],-metrics['top5'],metrics['loss'])
+                key=checkpoint_key(metrics)
                 if eligible and (best_key is None or key<best_key):
                     best_key=key;selected_epoch=epoch+1;best=copy.deepcopy(model.state_dict())
                 history.append(dict(epoch=epoch+1,validation=metrics,checkpoint_eligible=bool(eligible),
@@ -282,7 +284,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             counts={name:targets[split==code].sum(0).tolist() for code,name in enumerate(partitions)},
             partition_rows=[int(np.count_nonzero(split==code)) for code in range(len(partitions))],dataset=dataset,test=test,prior_only_test=prior,
             calibration_partition=reservation.metadata,adaptive_calibration=adaptive_calibration,adaptive_test=adaptive_test,
-            selected_epoch=selected_epoch,checkpoint_selection='all-training-rows-seen/validation-macro-top5-then-top5-then-loss',
+            selected_epoch=selected_epoch,training_objective=OBJECTIVE,checkpoint_selection=SELECTION,
             readout_health=health,
             curriculum=dict(warmup_steps=warmup_steps,clean_epochs=clean_epochs,gradient_norm_limit=1.,
                 initialization='shared-convolution-and-readout/independent-attention-parameters/v1',

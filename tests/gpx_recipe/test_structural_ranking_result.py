@@ -79,3 +79,36 @@ def test_live_ranking_cannot_be_reused_for_a_completed_gpx_or_another_snapshot()
 def test_live_binding_requires_exact_hashes_and_integer_revision(observation):
     from gpx_recipe.preparation.structural_ranking_result import observation_binding
     with pytest.raises(ValueError):observation_binding(observation)
+
+
+def work_set(classes):
+    from gpx_recipe.preparation.structural_adaptive_sets import SCHEMA,ADJACENT_SCORE_RATIO
+    return dict(schema=SCHEMA,retained_space_groups=classes[:1],deferred_space_groups=classes[1:],
+        calibrated_maximum_gap=.4,calibration_groups=20,error_rate=.05,adjacent_score_ratio=ADJACENT_SCORE_RATIO,
+        reason='Contract fixture, not a scientific prediction',model_scores_are_probabilities=False,
+        experimental_coverage_qualified=False,candidate_pruning_authorized=False,native_refinement_required=True)
+
+
+@pytest.mark.parametrize('live',[False,True])
+def test_adaptive_evidence_keeps_source_binding_and_all_native_work(live):
+    from gpx_recipe.preparation.structural_ranking_result import attach_adaptive,ADAPTIVE_SCHEMA,ADAPTIVE_SNAPSHOT_SCHEMA
+    p=protocol();r=ranked(p);observation=None
+    if live:
+        observation=dict(snapshot_sha256='f'*64,calculation_source_sha256='e'*64,acquisition_sha256='d'*64,revision=3)
+        r.update(schema='radar-structural-snapshot-ranking-evidence/v1',observation=observation)
+    value=attach_adaptive(r,work_set([12]))
+    assert value['schema']==(ADAPTIVE_SNAPSHOT_SCHEMA if live else ADAPTIVE_SCHEMA)
+    assert validate(value,p,observation=observation) is value
+    assert value['candidate_order']==r['candidate_order'] and len(value['candidate_order'])==3
+    changed=copy.deepcopy(value);changed['adaptive_work_set']['retained_space_groups']=[166]
+    with pytest.raises(ValueError):validate(changed,p,observation=observation)
+    changed=copy.deepcopy(value);changed['schema']=r['schema']
+    with pytest.raises(ValueError):validate(changed,p,observation=observation)
+    if live:
+        with pytest.raises(ValueError):validate(value,p)
+
+
+def test_unavailable_evidence_cannot_hide_an_adaptive_priority():
+    from gpx_recipe.preparation.structural_ranking_result import attach_adaptive
+    p=protocol();r=unavailable(p,'Unavailable')
+    with pytest.raises(ValueError):attach_adaptive(r,work_set([12]))

@@ -26,6 +26,10 @@ def test_training_and_portable_inference_use_three_curves_and_attention(tmp_path
     assert result['schema']==SCHEMA and result['architecture']==ARCHITECTURE and result['channels']==3
     assert result['curriculum']['training_rows_seen']==np.count_nonzero(cohort['split']==0)
     assert result['selected_epoch']==1 and result['history'][-1]['checkpoint_eligible']
+    from gpx_recipe.preparation.structural_compatible_objective import OBJECTIVE,SELECTION,checkpoint_key
+    assert result['training_objective']==OBJECTIVE and result['checkpoint_selection']==SELECTION
+    eligible=[row for row in result['history'] if row['checkpoint_eligible']]
+    assert result['selected_epoch']==min(eligible,key=lambda row:checkpoint_key(row['validation']))['epoch']
     progress=json.loads((tmp_path/'model/progress.json').read_text())
     assert progress['state']=='complete' and progress['examples']==result['examples']
     assert progress['selected_epoch']==result['selected_epoch']

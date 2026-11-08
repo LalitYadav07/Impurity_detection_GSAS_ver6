@@ -123,6 +123,30 @@ def test_a_selected_k_scope_can_attach_a_broader_trained_library_without_adding_
     assert len(protocol['candidates'])==1
 
 
+@pytest.mark.parametrize('subset',[False,True])
+def test_adaptive_priority_uses_only_reviewed_routes_from_a_broader_model(tmp_path,monkeypatch,subset):
+    from gpx_recipe.preparation import structural_ranker
+    from test_structural_ranking_result import work_set
+    library,protocol=prepared(tmp_path/'control')
+    if subset:protocol['candidates']=protocol['candidates'][1:]
+    packet=tmp_path/'packet';document=hints.capture(library,protocol,packet)
+    row=document['ranking_models']['entries'][0]
+    class ControlledRanker:
+        def __init__(self,*args,**kwargs):pass
+        def rank(self,*args,**kwargs):
+            return dict(ranking_available=True,families=[dict(space_group=63,model_score=.9,candidate_ids=['first']),
+                dict(space_group=65,model_score=.1,candidate_ids=['second'])],
+                adaptive_work_set=work_set([63,65]),support={},candidate_pruning_authorized=False)
+    monkeypatch.setattr(structural_ranker,'Ranker',ControlledRanker)
+    result=ranking.rank(packet,protocol,[1,2],[3,4],background=[0,0],
+        parent_sha256=row['files']['parent']['sha256'],instrument_sha256=row['files']['instrument']['sha256'],entry_id=row['entry'])
+    assert result['ranking_available'] and result['candidate_order']==(['second'] if subset else ['first','second'])
+    value=result['adaptive_work_set']
+    assert value['retained_space_groups']==([65] if subset else [63])
+    assert value['deferred_space_groups']==([] if subset else [65])
+    assert not value['candidate_pruning_authorized']
+
+
 def test_a_foreign_profile_or_parent_does_not_load_the_model(tmp_path,monkeypatch):
     library,protocol=prepared(tmp_path/'control');packet=tmp_path/'packet'
     hints.capture(library,protocol,packet)

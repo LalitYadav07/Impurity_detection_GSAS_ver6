@@ -53,7 +53,8 @@ def identity(cohort,rows,targets,split,clean,mean,scale,*,epochs,seed,workers):
         'groups','example_simulations','references','candidates','candidate_groups','class_candidate_ids',
         'reference_feature_sha256','training_domain','augmentation','augmentation_sha256','original_examples',
         'augmented_examples','ambiguous_examples','channels','representation','reference_kind','partition_method','partition_anchor',
-        'mode_projection_inventory','mode_projection_references','mode_projection_coverage','calibration_partition')}
+        'mode_projection_inventory','mode_projection_references','mode_projection_coverage','calibration_partition',
+        'training_objective','checkpoint_selection')}
     metadata.update(implementation=package_signature(),architecture=weights.ARCHITECTURE,
         torch_version=str(torch.__version__),numpy_version=np.__version__,epochs=epochs,seed=seed,workers=workers)
     from .structural_training_data import MAX_ROWS
@@ -177,8 +178,11 @@ def restore(directory,run_identity,model,optimizer,scheduler,rng,visited,*,epoch
             or metadata['elapsed_seconds']<0):
         raise ValueError('Training checkpoint does not describe a complete warmup or epoch boundary')
     eligible=[row for row in history if row.get('checkpoint_eligible') is True]
-    selected=min(eligible,key=lambda row:(-row['validation']['macro_top5'],-row['validation']['top5'],row['validation']['loss'])) if eligible else None
-    expected_key=None if selected is None else [-selected['validation']['macro_top5'],-selected['validation']['top5'],selected['validation']['loss']]
+    from .structural_compatible_objective import checkpoint_key
+    methods={row['validation'].get('loss_method') for row in eligible}
+    if len(methods)>1:raise ValueError('Training checkpoint mixes incompatible validation objectives')
+    selected=min(eligible,key=lambda row:checkpoint_key(row['validation'])) if eligible else None
+    expected_key=None if selected is None else list(checkpoint_key(selected['validation']))
     if (metadata.get('selected_epoch')!=(None if selected is None else selected['epoch'])
             or metadata.get('best_key')!=expected_key or bool(arrays['best_parameters'].size)!=bool(selected)):
         raise ValueError('Training checkpoint lost its validation-selected incumbent')

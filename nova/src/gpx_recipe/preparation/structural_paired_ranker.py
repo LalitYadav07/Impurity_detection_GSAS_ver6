@@ -23,6 +23,8 @@ class Ranker:
     def __init__(self,directory,*,threads=1,metadata_name='model.json',weights_name='weights.npz'):
         import torch
         d=document(directory,metadata_name,weights_name)
+        from .structural_compatible_objective import validate_policy
+        validate_policy(d)
         raw=read_bounded(Path(directory)/weights_name,MAX_BYTES)
         classes=d.get('classes');bins=d.get('bins')
         if (any(k in d for k in ['adaptive_calibration','adaptive_test']) and 'calibration_partition' not in d):

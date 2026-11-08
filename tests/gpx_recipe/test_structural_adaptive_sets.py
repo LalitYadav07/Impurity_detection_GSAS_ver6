@@ -122,3 +122,27 @@ def test_saved_flags_and_changed_quantiles_cannot_authorize_exclusion(case):
     elif case=='ratio':c['adjacent_score_ratio']=.9
     else:c['class_target_coverage'][0]=False
     with pytest.raises(ValueError):sets.validate(c)
+
+
+def test_requested_scope_retains_every_reviewed_class_and_promotes_work_if_intersection_is_empty():
+    c=calibration();original=sets.select(np.array([[2.,0.,-2.]]),c,identities=IDENTITIES)
+    assert original['retained_space_groups']==[12]
+    scoped=sets.requested_scope(original,[166,194])
+    assert scoped['retained_space_groups']==[166] and scoped['deferred_space_groups']==[194]
+    assert original['retained_space_groups']==[12] and not scoped['candidate_pruning_authorized']
+    with pytest.raises(ValueError):sets.requested_scope(original,[194,166])
+    with pytest.raises(ValueError):sets.requested_scope(original,[12,123])
+
+
+@pytest.mark.parametrize('case',['drop','repeat','probability','prune','denominator','empty','ratio'])
+def test_serialized_adaptive_priority_cannot_lose_scope_or_acquire_scientific_authority(case):
+    value=sets.select(np.array([[2.,0.,-2.]]),calibration(),identities=IDENTITIES)
+    changed=copy.deepcopy(value)
+    if case=='drop':changed['deferred_space_groups'].pop()
+    elif case=='repeat':changed['deferred_space_groups'][0]=12
+    elif case=='probability':changed['model_scores_are_probabilities']=True
+    elif case=='prune':changed['candidate_pruning_authorized']=True
+    elif case=='denominator':changed['calibration_groups']=1
+    elif case=='empty':changed['retained_space_groups']=[]
+    else:changed['adjacent_score_ratio']=.9
+    with pytest.raises(ValueError):sets.validate_work_set(changed,[12,166,194])

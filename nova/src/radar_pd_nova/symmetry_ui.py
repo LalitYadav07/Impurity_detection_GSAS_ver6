@@ -76,6 +76,12 @@ def model_exploration(app):
             html.P('New campaigns default to eight concurrent Galaxy batches for independent models and scans. Analysis, recipe and model jobs share the History-wide capacity limit. Galaxy controls admission and CPU/RAM allocation; jobs may remain queued when the cluster is busy. An unreported allocation permits one native worker per job. The model-batch limit includes preparation jobs. Lowering it lets accepted jobs finish before submitting more.',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
+        with html.Details(v_if='!sx_setup && sx_results_current && sx_structural_priority_rows.length',classes='rf-card mb-3'):
+            html.Summary('Prepared structural priorities')
+            with html.Div(v_for='entry in sx_structural_priority_rows',key='entry.id'):
+                html.Strong('{{ entry.scan }}')
+                html.P('{{ entry.summary }}',classes='rf-notice')
+            html.P('These are model priorities, not probabilities of phase presence. Native refinement checks the structural hypotheses.',classes='rf-notice')
         html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='!sx_setup && sx_groups.length',classes='rf-notice')
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')

@@ -203,6 +203,12 @@ def rank(root,protocol,q,intensity,*,background,parent_sha256,instrument_sha256,
             for family in result['families']:
                 found=list(dict.fromkeys(routes[key] for key in family['candidate_ids'] if key in routes))
                 if found:families.append(dict(family,candidate_ids=found))
+            if not families:
+                fallback['reason']='The prepared classes have no reviewed native route in this scope';continue
+            if 'adaptive_work_set' in result:
+                from .structural_adaptive_sets import requested_scope
+                result=dict(result,adaptive_work_set=requested_scope(result['adaptive_work_set'],
+                    [r['space_group'] for r in families]))
             ranked=list(dict.fromkeys(key for family in families for key in family['candidate_ids']))
             return dict(result,families=families,candidate_order=ranked+[key for key in order if key not in ranked],
                         entry=row['entry'],bank=row['bank'],snapshot_sha256=document['snapshot_sha256'],

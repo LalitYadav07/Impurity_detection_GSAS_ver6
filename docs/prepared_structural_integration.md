@@ -1948,10 +1948,15 @@ support for every class must remain. Otherwise calibration is explicitly
 unavailable and the original fitting partition is retained. Counts report the
 four roles separately, without treating noisy variants as independent groups.
 The portable reader checks the reservation, model weights, physical identities
-and test denominators. Direct ranker results can carry an adaptive first work
-set, but the native campaign receipt/UI handoff is not yet connected to it.
-The complete native work inventory is still retained. No newly calibrated
-large-corpus classifier has been scientifically qualified.
+and test denominators. Direct ranker results carry an adaptive first work set.
+Versioned v2 native receipts carry it through completed-GPX and exact-revision
+Live observation paths, while v1 receipts remain readable. A broader prepared
+library is restricted to reviewed native routes; this never adds a candidate.
+Malformed advice retains the ordinary native fallback and can try the next
+compatible prepared entry. The campaign and Live views show the actual retained
+and deferred class counts, with no top-five display cap. The complete native
+work inventory is still retained. No newly calibrated large-corpus classifier
+has been scientifically qualified.
 
 Mode evidence will require a multi-label output because several irreps and
 secondary distortions may coexist within the same space group. The intended
@@ -2009,12 +2014,40 @@ their predictions are not a scientific accuracy result.
 
 The conditional mode prediction head remains untrained. Before full training,
 targets must aggregate every indistinguishable original construction and
-preserve amplitude ambiguity intervals. The legacy marginal compatible-label
-loss can favor one alternative; its objective and validation checkpoint
-selection must be aligned with retaining all compatible alternatives. Test
-groups must not choose that objective. Low scores cannot establish absence:
+preserve amplitude ambiguity intervals. New three-curve training replaces the
+legacy marginal compatible-label loss with cross-entropy averaged over every
+distinct compatible space-group label in each row. Duplicate candidate
+embeddings do not receive extra target mass. This equal target mass is a
+training convention, not a probability of phase presence. Checkpoint selection
+uses validation macro compatible-label negative log score, then row loss,
+after every fitting row has been seen. Top-one/top-five remain diagnostic
+metrics and no longer choose the checkpoint. The shared CPU/MPS recovery audit
+checks that policy, while old saved models remain readable. Calibration and
+test groups do not choose the new objective or checkpoint. Large-corpus
+retention and work-set sizes still require their own untouched measurements.
+Low scores cannot establish absence:
 bounded-small claims need calibrated sensitivity under noise, resolution,
 mixtures and nuisance variation, while symmetry-forbidden claims remain
 conditional on a complete reviewed candidate basis. Actual experimental
 handoffs, mode-presence/upper-bound performance and candidate-pruning authority
 remain unqualified.
+
+The all-compatible objective and adaptive handoff then passed 295 Linux/native
+checks with no failures, errors or skips (four CPUs, 8 GiB). The first run
+exposed a malformed-advice recovery bug: compatibility was recorded before
+validating the optional adaptive set, producing two conflicting statuses for
+one entry. The corrected path records success only after the full advice
+passes, preserves native fallback and can recover with another prepared entry.
+The native suite includes that two-entry recovery case, exact live-revision
+bindings, the actual four-role Galaxy training wrapper, legacy formats and
+checkpoint/worker continuations. A consolidated host suite passed 220 checks;
+three real MPS interruption/recovery and CPU-portability cases also passed
+with device fallback disabled. Suites overlap and are not additive. These
+are implementation checks, not newly measured diffraction prediction accuracy.
+
+The DGX root filesystem had no user-writable space during this run. Frozen
+test source and output used a private RAM-backed directory and bounded
+temporary storage inside the same 8-GiB container allocation. Final receipts
+were copied to the private local audit directory. No benchmark inputs,
+historical outputs, container images or host configuration were deleted or
+changed to make room. Deployment pins remain unchanged.

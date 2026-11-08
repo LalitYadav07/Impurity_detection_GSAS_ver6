@@ -68,7 +68,7 @@ class SymmetryMixin(KSearchMixin):
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='',sx_preparation_notice='')
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=8,
-            sx_queue_notice='',sx_backend='',sx_batches=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
+            sx_queue_notice='',sx_backend='',sx_batches=[],sx_structural_priority_rows=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,
             sx_structural_starts=4,sx_structural_seconds=DEFAULT_FIT_SECONDS,
             sx_structural_radius=.05,sx_structural_cells=DEFAULT_CELL_RADIUS,sx_structural_recovery=0.,sx_parent_reference='')
@@ -362,6 +362,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_campaigns=[dict(title=p.parent.name,value=p.parent.name) for p in roots]
                 if s.sx_campaign not in {p.parent.name for p in roots}:s.sx_campaign=roots[-1].parent.name if roots else ''
                 if not s.sx_campaign:
+                    self._symmetry_ranking_evidence={};s.sx_structural_priority_rows=[]
                     self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[]
                     s.sx_source='';s.sx_source_options=[];s.sx_enrollments=[];s.sx_coverage=[]
                     s.sx_progress='';s.sx_execution_detail='';s.sx_scope_progress='';s.sx_resumable=False;s.sx_following=False
@@ -440,6 +441,8 @@ class SymmetryMixin(KSearchMixin):
                 if identity!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
                     self._symmetry_refresh_pending=True;return
                 rows=scope_rows(rows,s.rf_experiment,s.sx_result_scope)
+                from .structural_ranking_labels import checked_receipts
+                self._symmetry_ranking_evidence=checked_receipts(campaign,rows)
                 s.sx_coverage=coverage_rows(rows)
                 s.sx_resumable=campaign_can_resume(summaries,list(campaign.setting('enrollments',{}).values()),
                     following=bool(template and campaign.setting('following',False)))
@@ -513,6 +516,8 @@ class SymmetryMixin(KSearchMixin):
 
     def _symmetry_publish_source(self):
         s=self.server.state;groups=self._symmetry_groups;rows=self._symmetry_rows
+        from .structural_ranking_labels import visible_rows
+        s.sx_structural_priority_rows=visible_rows(getattr(self,'_symmetry_ranking_evidence',{}),rows)
         s.sx_groups=[dict(id=g['id'],title=g['representative']['name'] if g['representative']['has_view'] else display_status(g['representative']['status']).capitalize(),count=len(g['members']),rwp=(f"{g['representative']['rwp']:.3f}%" if g['representative']['rwp'] is not None else '—'),status=display_status(g['representative']['status'])) for g in groups]
         s.sx_overview=plots.overview(rows,s.sx_selected)
         s.sx_pin_options=[dict(title=pin_label(r,include_start=True),value=r['id']) for r in rows if r['has_view']]
@@ -1459,6 +1464,7 @@ class SymmetryMixin(KSearchMixin):
         from copy import deepcopy
         for name,value in self._symmetry_defaults.items():setattr(self.server.state,name,deepcopy(value))
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved=''
+        self._symmetry_ranking_evidence={}
         self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_restore_requests=set();self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_pause_task=None;self._model_start_cancel=None
         self._k_result=None;self._k_result_identity=None
         s=self.server.state;s.sx_k_rows=[];s.sx_k_choices=[];s.sx_k_notes=[];s.sx_k_has_result=False;s.sx_k_busy=False

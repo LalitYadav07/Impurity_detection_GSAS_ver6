@@ -49,14 +49,21 @@ def receipt(p,document):
 
 
 @pytest.mark.parametrize('ranking_owner',[True,False])
-def test_chunk_ranks_once_and_orders_exact_existing_work(tmp_path,monkeypatch,ranking_owner):
+@pytest.mark.parametrize('adaptive',[True,False])
+def test_chunk_ranks_once_and_orders_exact_existing_work(tmp_path,monkeypatch,ranking_owner,adaptive):
     inputs,p,document=setup_inputs(tmp_path)
     ids=[trial_id(p,c['id'],s['id']) for c,s in iter_trials(p)]
     request=dict(schema='radar-model-chunk/v1',protocol=p,protocol_sha256=digest(p),
         trials=ids,workers=1,dispatch_key='d'*24,seconds=240,prepared_scattering=document,
         rank_structural=ranking_owner)
     calls=[];order=[]
-    def rank(*args,**kwargs):calls.append(kwargs);return receipt(p,document)
+    def rank(*args,**kwargs):
+        calls.append(kwargs);value=receipt(p,document)
+        if adaptive:
+            from gpx_recipe.preparation.structural_ranking_result import attach_adaptive
+            from test_structural_ranking_result import work_set
+            value=attach_adaptive(value,work_set([65,63]))
+        return value
     monkeypatch.setattr(chunks,'run_structural_ranking',rank)
     monkeypatch.setattr(chunks,'allocation',lambda *a,**k:dict(workers=1))
     def runner(directory,*,cancel):
@@ -68,6 +75,7 @@ def test_chunk_ranks_once_and_orders_exact_existing_work(tmp_path,monkeypatch,ra
     assert len(result['trials'])==len(ids) and not result['pending']
     assert {r['id'] for r in result['trials']}==set(ids)
     assert ('structural_ranking' in result)==ranking_owner
+    if ranking_owner:assert ('adaptive_work_set' in result['structural_ranking'])==adaptive
 
 
 def test_optional_ranking_timeout_keeps_full_native_order(tmp_path,monkeypatch):
@@ -82,11 +90,17 @@ def test_optional_ranking_timeout_keeps_full_native_order(tmp_path,monkeypatch):
     validate(result,p,snapshot=document['snapshot_sha256'])
 
 
-def test_campaign_prioritizes_later_batches_and_preserves_the_finite_denominator(tmp_path):
+@pytest.mark.parametrize('adaptive',[True,False])
+def test_campaign_prioritizes_later_batches_and_preserves_the_finite_denominator(tmp_path,adaptive):
     inputs,p,document=setup_inputs(tmp_path)
     campaign=Campaign(tmp_path/'campaign',shared_inputs=True)
     ids=campaign.enroll(p,inputs,approved_hash=digest(p))
-    campaign.set_setting('structural_rankings',{digest(p):receipt(p,document)})
+    evidence=receipt(p,document)
+    if adaptive:
+        from gpx_recipe.preparation.structural_ranking_result import attach_adaptive
+        from test_structural_ranking_result import work_set
+        evidence=attach_adaptive(evidence,work_set([65,63]))
+    campaign.set_setting('structural_rankings',{digest(p):evidence})
     class Transport:
         max_active_jobs=2;chunk_size=1
         def __init__(self):self.keys=[]

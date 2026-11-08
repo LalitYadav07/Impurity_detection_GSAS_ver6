@@ -6,6 +6,8 @@ from ..symmetry.contracts import digest
 
 SCHEMA='radar-structural-ranking-evidence/v1'
 SNAPSHOT_SCHEMA='radar-structural-snapshot-ranking-evidence/v1'
+ADAPTIVE_SCHEMA='radar-structural-ranking-evidence/v2'
+ADAPTIVE_SNAPSHOT_SCHEMA='radar-structural-snapshot-ranking-evidence/v2'
 
 
 def _hash(value):return isinstance(value,str) and re.fullmatch('[a-f0-9]{64}',value) is not None
@@ -30,6 +32,14 @@ def unavailable(protocol,reason,*,snapshot=None,seconds=0.,checks=(),support=Non
     return result
 
 
+def attach_adaptive(value,work_set):
+    from .structural_adaptive_sets import validate_work_set
+    validate_work_set(work_set,[r['space_group'] for r in value['families']])
+    if not value['ranking_available']:raise ValueError('Unavailable ranking cannot attach an adaptive priority')
+    return dict(value,schema=ADAPTIVE_SNAPSHOT_SCHEMA if 'observation' in value else ADAPTIVE_SCHEMA,
+        adaptive_work_set=work_set)
+
+
 def validate(value,protocol,*,snapshot=None,observation=None):
     required={'schema','protocol_sha256','source_sha256','implementation_sha256','preparation_snapshot_sha256',
         'candidate_order','ranking_available','families','entry_id','bank','support','checks','seconds','reason',
@@ -39,6 +49,9 @@ def validate(value,protocol,*,snapshot=None,observation=None):
         observation=observation_binding(observation);required.add('observation');schema=SNAPSHOT_SCHEMA
         if not isinstance(value,dict) or value.get('observation')!=observation:
             raise ValueError('Structural ranking belongs to another snapshot revision')
+    adaptive=isinstance(value,dict) and 'adaptive_work_set' in value
+    if adaptive:
+        required.add('adaptive_work_set');schema=ADAPTIVE_SNAPSHOT_SCHEMA if observation is not None else ADAPTIVE_SCHEMA
     candidates=[c['id'] for c in protocol['candidates']]
     if (protocol['kind']!='structural' or not isinstance(value,dict) or set(value)!=required
             or value['schema']!=schema or value['protocol_sha256']!=digest(protocol)
@@ -96,8 +109,12 @@ def validate(value,protocol,*,snapshot=None,observation=None):
                 or value['preparation_snapshot_sha256'] is None
                 or value['candidate_order']!=head+[key for key in candidates if key not in head]):
             raise ValueError('Available ranking needs its checked bank, support and complete native routing')
+        if adaptive:
+            from .structural_adaptive_sets import validate_work_set
+            validate_work_set(value['adaptive_work_set'],[r['space_group'] for r in families])
     elif (families or value['entry_id'] is not None or value['bank'] is not None or value['candidate_order']!=candidates):
         raise ValueError('Unavailable structural ranking must preserve the complete declared order')
+    elif adaptive:raise ValueError('Unavailable structural ranking cannot acquire an adaptive work set')
     return value
 
 
