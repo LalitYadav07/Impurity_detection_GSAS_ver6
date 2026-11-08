@@ -79,6 +79,7 @@ def _representatives(rows,clean,targets,classes):
 
 
 def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=None,_resume=None):
+    began=time.monotonic()
     import torch
     if (type(epochs) is not int or not 1<=epochs<=1000
             or type(seed) is not int or not 0<=seed<2**32):
@@ -97,7 +98,8 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
     representatives=_representatives(rows,clean_rows,targets,classes)
     budget=allocation(threads);torch.set_num_threads(budget['workers'])
     mean,scale=channel_statistics(rows,train_rows,minimum_scale=.01,center=False)
-    out=Path(destination);began=time.monotonic()
+    setup_seconds=time.monotonic()-began
+    out=Path(destination)
     engine=backend.select(out,segmented=_segment_seconds is not None,transferred=_resume is not None)
     recovery=engine.checkpoint
     run_identity=recovery.identity(cohort,rows,targets,split,clean,mean,scale,
@@ -108,7 +110,8 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
 
     with recovery.owned_run(out,run_identity):
         def progress(state,**values):
-            write_json(out/'progress.json',dict(state=state,dataset=dataset,**values))
+            write_json(out/'progress.json',dict(state=state,dataset=dataset,
+                data_preparation_seconds=setup_seconds,**values))
 
         rng=np.random.default_rng(seed);visited=np.zeros(len(rows),bool);history=[]
         clean_epochs=min(10,epochs//4);best=None;best_key=None;selected_epoch=None

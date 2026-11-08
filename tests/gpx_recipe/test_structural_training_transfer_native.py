@@ -99,3 +99,30 @@ def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_mo
         assert final[key]==reference_model[key]
     assert result['candidate_pruning_authorized'] is False
     assert jobs.execute_training(current)==result
+
+
+def test_worker_charges_both_assembly_and_normalization_before_checkpoint_admission(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from gpx_recipe.preparation import structural_jobs as jobs,structural_replay
+    from gpx_recipe.preparation import structural_training_segments as segments
+    from test_structural_training_continuation import request
+    payload,_=request(tmp_path/'inputs')
+    payload['settings'].update(epochs=1,workers=1,bins=128,augmentation=None)
+    job_clock=[0.];training_clock=[0.]
+    monkeypatch.setattr(jobs,'time',SimpleNamespace(monotonic=lambda:job_clock[0]))
+    monkeypatch.setattr(training,'time',SimpleNamespace(monotonic=lambda:training_clock[0]))
+    monkeypatch.setattr(segments,'SEGMENT_SECONDS',100.)
+    original_build=structural_replay.build;statistics=training.channel_statistics
+    def build(*args,**kwargs):
+        result=original_build(*args,**kwargs);job_clock[0]+=60.;return result
+    def setup(*args,**kwargs):
+        result=statistics(*args,**kwargs);training_clock[0]+=45.;return result
+    monkeypatch.setattr(structural_replay,'build',build)
+    monkeypatch.setattr(training,'channel_statistics',setup)
+    monkeypatch.setattr(training,'evaluate',lambda *a,**k:pytest.fail('The complete checkpoint boundary should precede validation'))
+    result=jobs.execute_training(payload)
+    assert result['schema']==segments.SCHEMA and result['warmup_completed']==20
+    assert result['epochs_completed']==0 and result['trained_model'] is False
+    progress=json.loads((Path(result['output'])/'model/progress.json').read_text())
+    assert progress['data_preparation_seconds']==45.
+    assert not list(Path(result['output']).rglob('features.npy'))

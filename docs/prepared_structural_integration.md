@@ -1555,6 +1555,15 @@ Complete warmup/epoch continuation tests retain the same parameters, optimizer,
 random state, history and holdouts. The full large-cohort cold lifecycle and
 actual NDIP transport still require acceptance before release.
 
+The worker subtracts assembly time from its existing segment allowance, and
+the trainer's clock starts before representative selection and normalization.
+Progress separately reports `data_preparation_seconds`. A segment that spends
+its allowance preparing data still advances to a complete warmup/checkpoint
+boundary before returning; it cannot silently restart a fresh full optimizer
+allowance after expensive setup. Curriculum, epoch targets, validation selection
+and checkpoint tensor audits are unchanged. Reported training elapsed time now
+includes data preparation instead of presenting optimizer time alone.
+
 The seekable layout separately bounds logical rows at 1,048,576, its typed
 selector/provenance/hash index at 96 MiB and its complete compatible-label plane
 at 64 MiB. Dense NPY and earlier count/checkpoint formats retain their 131,072-row

@@ -404,8 +404,10 @@ def execute_training(request):
         try:
             write_json(out/'progress.json', dict(state='training', examples=len(cohort['features']),
                 independent_groups=len(set(cohort['groups'])),feature_storage=cohort['features'].storage))
+            remaining=(None if not paired or segments.SEGMENT_SECONDS is None else
+                max(1e-9,float(segments.SEGMENT_SECONDS)-(time.monotonic()-began)))
             model = train(cohort, out/'model', epochs=settings['epochs'], seed=settings['seed'],
-                          threads=settings['workers'],**(dict(_segment_seconds=segments.SEGMENT_SECONDS,
+                          threads=settings['workers'],**(dict(_segment_seconds=remaining,
                               _resume=resume_directory(plan_path,plan)) if paired else {}))
         finally:
             cohort['features'].close()
