@@ -43,6 +43,15 @@ def test_batched_scalars_match_complete_native_trace_at_current_geometry(tmp_pat
     collector=module.for_source(s,n.math.getPowderProfile)
     assert collector is not None
     batched=collector.collect(point,maximum_bytes=64*1024*1024)
+    packed=collector.collect_packed_physical(point*s.radii,maximum_bytes=64*1024*1024)
+    assert [tuple(h) for h in packed.hkls]==list(batched)
+    assert module.record_bytes(packed)<module.record_bytes(batched)
+    for i,(parameters,height,low,high) in enumerate(batched.values()):
+        np.testing.assert_array_equal(packed.parameters[i],parameters)
+        assert packed.heights[i]==height and tuple(packed.bounds[i])==(low,high)
+    native_rows=s.fast.native.histo_phases[0][s.fast.slow.hist.name]['Reflection Lists'][s.fast.slow.phase.name]['RefList']
+    ds={tuple(map(int,r[:3])):r[4] for r in native_rows}
+    np.testing.assert_array_equal(packed.spacings,[ds[tuple(h)] for h in packed.hkls])
     geometry=collector.collect_kernel_geometry(point*s.radii,maximum_bytes=64*1024*1024)
     original,curve=native_records(s,point)
     assert set(batched)==set(original)
@@ -124,6 +133,21 @@ def test_batched_workspace_is_bounded_without_dropping_reflections(tmp_path):
     collector=module.for_source(s,s.fast.native.math.getPowderProfile)
     with pytest.raises(module.ScalarBatchUnavailable,match='workspace budget'):
         collector.collect(np.zeros(len(s.radii)),maximum_bytes=1)
+
+
+def test_packed_representation_fits_a_real_bound_that_refuses_per_reflection_python_records(tmp_path):
+    _,source=native_source(tmp_path/'inputs','PNT')
+    collector=module.for_source(source,source.fast.native.math.getPowderProfile)
+    point=np.zeros(len(source.radii))
+    original=collector.collect_physical(point,maximum_bytes=64*1024*1024)
+    rows=source.fast.native.histo_phases[0][source.fast.slow.hist.name]['Reflection Lists'][source.fast.slow.phase.name]['RefList']
+    budget=len(rows)*(512+96)+4096
+    assert budget<len(rows)*(512+1024)
+    with pytest.raises(module.ScalarBatchUnavailable,match='workspace budget'):
+        collector.collect_physical(point,maximum_bytes=budget)
+    packed=collector.collect_packed_physical(point,maximum_bytes=budget)
+    assert [tuple(h) for h in packed.hkls]==list(original)
+    assert collector.last_workspace_bytes<=budget
 
 
 def test_collector_cannot_bypass_replaced_native_owner(tmp_path,monkeypatch):

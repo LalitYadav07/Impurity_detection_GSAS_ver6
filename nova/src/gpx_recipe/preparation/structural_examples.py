@@ -79,14 +79,22 @@ def render_native(source,points,*,kind,check_indices,progress):
         raise ValueError('Instrument conversion has no unique finite positive Q grid')
     engine=for_source(source) if kind=='PNT' else None
     curves=[];labels=[];native_checks=0;regenerated=0;original_only=False
+    timings=dict(geometry_labels=0.,forward_curves=0.,independent_native_checks=0.,native_regeneration=0.)
     for index,point in enumerate(points):
+        began=time.monotonic()
         labels.append(geometry_labels(source,point))
+        timings['geometry_labels']+=time.monotonic()-began;began=time.monotonic()
         curve=source.native(point) if engine is None or original_only else engine.evaluate(point)
+        timings['forward_curves']+=time.monotonic()-began
         if engine is not None and not original_only and index in check_indices:
+            began=time.monotonic()
             expected=source.native(point);native_checks+=1
+            timings['independent_native_checks']+=time.monotonic()-began
             if not np.array_equal(curve,expected):
+                began=time.monotonic()
                 curves=[source.native(previous)[order] for previous in points[:index]]
                 regenerated=len(curves);curve=expected;original_only=True
+                timings['native_regeneration']+=time.monotonic()-began
         if curve.shape!=x.shape or not np.isfinite(curve).all():
             raise ValueError('Native structural example returned a nonfinite or incomplete curve')
         if index==0:
@@ -96,7 +104,8 @@ def render_native(source,points,*,kind,check_indices,progress):
         curves.append(curve[order]);progress('rendering',index+1)
     return dict(q=q,curves=np.asarray(curves),background=background,labels=np.asarray(labels,np.int32),
         renderer=(engine.diagnostics() if engine is not None else dict(method='original native profile')),
-        native_checks=native_checks,original_only=original_only,regenerated=regenerated)
+        native_checks=native_checks,original_only=original_only,regenerated=regenerated,
+        timing_seconds=timings)
 
 
 def generate(request, *, seed, trajectories=64, steps=4, trajectory_slice=None):
@@ -175,6 +184,7 @@ def generate(request, *, seed, trajectories=64, steps=4, trajectory_slice=None):
         actual_geometry_groups=sorted(set(map(int, labels.ravel()))),
         ambiguous_examples=int(np.count_nonzero(labels[:, 0] != labels[:, 1])),
         renderer=rendered['renderer'],
+        rendering_timing_seconds=rendered['timing_seconds'],
         independent_native_anchor_checks=rendered['native_checks'],
         original_profile_fallback=rendered['original_only'], regenerated_examples=rendered['regenerated'],
         package_sha256=package_signature(), examples_sha256=file_sha(destination),

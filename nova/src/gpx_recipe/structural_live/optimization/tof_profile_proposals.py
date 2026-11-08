@@ -77,18 +77,19 @@ class TOFProfileProposals:
     def evaluate(self,point):
         began=time.monotonic();n,_,_,_,_,_,axis,hist,_,_=self._context()
         source=self.source;physical=source.check(np.asarray(point,float))
-        records=self.exact.collector.collect_physical(physical,maximum_bytes=MAXIMUM_BYTES)
-        parameters,heights,bounds,maximum,required=pack_records(records,axis,MAXIMUM_BYTES)
-        refs=hist['Reflection Lists'][source.fast.slow.phase.name]['RefList']
-        ds={tuple(map(int,row[:3])):float(row[4]) for row in refs}
-        d=np.asarray([ds[key] for key in records],float)
-        footprint=(self.numeric_bytes+self.exact.fixed_workspace+record_bytes(records)+
-                   required+16*maximum+d.nbytes)
+        remaining=MAXIMUM_BYTES-self.numeric_bytes-self.exact.fixed_workspace
+        records=self.exact.collector.collect_packed_physical(physical,maximum_bytes=remaining)
+        scratch_budget=remaining-record_bytes(records)
+        if scratch_budget<1:raise ProposalUnavailable('Continuous TOF proposals exceed the bounded forward workspace')
+        parameters,heights,bounds,maximum,required=pack_records(records,axis,scratch_budget)
+        d=records.spacings
+        footprint=self.numeric_bytes+self.exact.fixed_workspace+max(
+            self.exact.collector.last_workspace_bytes,record_bytes(records)+required+16*maximum)
         if footprint>MAXIMUM_BYTES:
             raise ProposalUnavailable('Continuous TOF proposals exceed the bounded forward workspace')
         scratch=[np.empty(maximum,np.float32),np.empty(maximum,np.float32),
                  np.empty(maximum),np.empty(maximum,np.int64)]
-        signal=np.zeros(len(axis));statistics=np.zeros(4,np.int64)
+        signal=np.zeros(len(axis));statistics=np.zeros(6,np.int64)
         code=self.function(self.batch.address,len(heights),len(axis),axis,parameters,heights,bounds,d,
             maximum,self.coefficients,self.halo,*self.coefficients.shape,
             self.logd[0],self.logd[1]-self.logd[0],self.eta[0],self.eta[1]-self.eta[0],
@@ -104,7 +105,7 @@ class TOFProfileProposals:
         n._check();self.calls+=1;self.seconds+=time.monotonic()-began
         self.maximum_workspace=max(self.maximum_workspace,footprint)
         self.statistics.update(dict(zip(['native_bins','interpolated_bins','native_fallback_rows',
-            'unsupported_native_bins'],map(int,statistics))))
+            'unsupported_native_bins','identical_adjacent_rows_reused','identical_adjacent_bins_reused'],map(int,statistics))))
         return curve
 
     def diagnostics(self):
@@ -119,6 +120,7 @@ class TOFProfileProposals:
             roughness_relative_to_native_precision=float(ROUGH_NATIVE_RELATIVE),
             native_origin_authority=False,observations_used_for_compilation=False,
             owned_table_reused=self.table_reused,
+            scalar_record_format='owned packed native columns; original reflection order',
             table_import_supported=True,portable_table_bound=self.table.portable_origin is not None,
             portable_table_reused=self.table.portable_origin is not None and self.statistics['interpolated_bins']>0,
             portable_origin=self.table.portable_origin,current_portable_probes=self.table.portable_probes,
@@ -128,8 +130,8 @@ class TOFProfileProposals:
 def for_source(source,*,exact=None,table=None):
     """Avoid table setup for workloads below the measured large-profile case."""
     exact=exact or NativeTOFForward(source)
-    records=exact.collector.collect_physical(np.zeros(len(source.radii)),maximum_bytes=MAXIMUM_BYTES)
-    if sum(high-low for _,_,low,high in records.values())<MINIMUM_REFERENCE_BINS:
+    records=exact.collector.collect_packed_physical(np.zeros(len(source.radii)),maximum_bytes=MAXIMUM_BYTES)
+    if int(np.sum(records.bounds[:,1]-records.bounds[:,0],dtype=np.int64))<MINIMUM_REFERENCE_BINS:
         # This threshold amortizes compilation, not numerical fidelity. A
         # compatible already-prepared table has paid that cost. Discarding it
         # here would make a valid cold-library handoff silently unused.

@@ -49,6 +49,11 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     verify_structural_child(settings, hashes[2])
     out = Path(request['destination']).resolve(); out.mkdir(parents=True, exist_ok=False)
     began = time.monotonic(); denominator = 1+(interval[1]-interval[0])*(steps+1)
+    stages={};stage_began=began
+
+    def mark(name):
+        nonlocal stage_began
+        now=time.monotonic();stages[name]=now-stage_began;stage_began=now
 
     def progress(state, processed):
         write_json(out/'generation-progress.json', dict(state=state, processed=processed,
@@ -57,17 +62,21 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
 
     progress('preparing_native_context', 0)
     reference = create_reference(inputs[0], inputs[1], out/'reference', **request['grid'])
+    mark('preparing_reference')
     phase = G.G2Project(gpxfile=reference['path']).phase(reference['parent_phase'])
     parent_space = ParentMetricSpace(native_reciprocal_matrix(L.cell2A(phase.data['General']['Cell'][1:7])),
         rotations(phase.data['General']['SGData']))
     # Construct these from the identical parsed parent, never the child's
     # slightly rounded back-transformed cell or candidate-dependent basis.
     parents = parent_space.draw(seed=parent_seed, count=trajectories, relative_range=parent_relative_range)
+    mark('sampling_parent_cells')
     prepare(reference['path'], inputs[2], candidate['transformation_matrix'], candidate['origin_shift'], out/'prepared')
     source = make_source(out/'prepared', out/'context', SearchSettings(
         mode_radius=settings['mode_radius'], cell_radius=settings['cell_radius']))
+    mark('preparing_child')
     child_group = declared_group(source)
     original = from_source(source, seed=seed, trajectories=trajectories, steps=steps)
+    mark('sampling_child_trajectories')
     paired = condition(source, original, parent_space, candidate['transformation_matrix'], parents)
     selected = (paired.trajectory == -1) | ((paired.trajectory >= interval[0]) & (paired.trajectory < interval[1]))
     points = paired.points[selected]; parent_a = paired.parent_a[selected]
@@ -79,8 +88,10 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         +points.nbytes+parent_a.nbytes+trajectory.nbytes+role.nbytes+len(points)*(8+1+8+8))
     if numeric_bytes>MAX_BYTES:
         raise ValueError('Shard complete paired trajectories to fit the bounded numerical block; retain every coordinate')
+    mark('conditioning_and_selecting_whole_trajectories')
     checks = set(np.flatnonzero(role != 2)) | set(np.flatnonzero(np.r_[trajectory[:-1] != trajectory[1:], True]))
     rendered = render_native(source, points, kind=request['grid']['kind'], check_indices=checks, progress=progress)
+    mark('rendering_children')
     # No child callback is allowed after constructing the owned parent below.
     progress('rendering_parent_references', 0)
     parent = NativeParentReference(inputs[0], inputs[1], out/'parent-forward', grid=request['grid'])
@@ -92,6 +103,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         reference_curves.append(curve); reference_background.append(background)
         progress('rendering_parent_references', i+1)
     reference_curves = np.asarray(reference_curves); reference_background = np.asarray(reference_background)
+    mark('rendering_parent_references')
     controls = []
     for i in np.flatnonzero(role != 2):
         child = rendered['curves'][i]-rendered['background']
@@ -105,6 +117,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
             intensity_scale=factor, relative_shape_error=error))
     if hashes != [file_sha(p) for p in inputs]:
         raise ValueError('A paired-pattern input changed during native calculation')
+    mark('checking_parent_controls')
     destination = out/'pairs.npz'
     np.savez_compressed(destination, q=rendered['q'], theory_intensity=rendered['curves'],
         background=rendered['background'], parent_intensity=reference_curves,
@@ -112,6 +125,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         trajectory=trajectory, role=role, geometry_groups=rendered['labels'],
         ambiguous_geometry=rendered['labels'][:, 0] != rendered['labels'][:, 1],
         displacement_rms=paired.displacement_rms[selected], relative_metric_norm=paired.relative_metric_norm[selected])
+    mark('writing_native_arrays')
     manifest = dict(schema='radar-structural-ranking-paired-pilot/v1',
         source_sha256=hashes[0], instrument_sha256=hashes[1], child_sha256=hashes[2],
         candidate=candidate, declared_child_group=child_group, grid=request['grid'],
@@ -130,5 +144,7 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         partition_assigned=False, observations_included=False, classifier_trained=False,
         screening_qualified=False, scientific_result=False, pairs_sha256=file_sha(destination),
         package_sha256=package_signature(), seconds=time.monotonic()-began)
+    manifest['timing']=dict(stages_seconds=stages,child_rendering_seconds=rendered['timing_seconds'],
+        scope='Worker wall time; native forward includes its own mandatory anchor; independent checks and regeneration are separate')
     write_json(out/'pairs.json', manifest); progress('complete', len(points))
     return manifest

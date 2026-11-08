@@ -18,6 +18,7 @@ on:
       - tests/gpx_recipe/test_native_peak_memo*.py
       - tests/gpx_recipe/test_native_peak_batch*.py
       - tests/gpx_recipe/test_native_peak_groups.py
+      - tests/gpx_recipe/test_native_peak_records.py
       - tests/gpx_recipe/test_native_peak_derivative_batch*.py
       - tests/gpx_recipe/test_structural_live_profiled_native_fit.py
       - tests/gpx_recipe/test_structural_live_profiled_nuisance.py
@@ -210,6 +211,7 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_background_context_native.py \
             /validation/tests/gpx_recipe/test_native_peak_precision_native.py \
             /validation/tests/gpx_recipe/test_native_peak_batch_native.py \
+            /validation/tests/gpx_recipe/test_native_peak_records.py \
             /validation/tests/gpx_recipe/test_native_peak_derivative_batch.py \
             /validation/tests/gpx_recipe/test_native_peak_derivative_batch_native.py \
             /validation/tests/gpx_recipe/test_structural_live_profiled_native_fit.py \

@@ -11,6 +11,7 @@ import hashlib
 import inspect
 import types
 import numpy as np
+from ...live.native_peak_records import PackedPeakRecords
 
 
 class ScalarBatchUnavailable(ValueError):
@@ -45,6 +46,7 @@ def _nested(driver,name,bindings):
 def record_bytes(records):
     # Include owned arrays plus a conservative allowance for Python keys,
     # tuples, floats, integers and the dictionary's sparse storage.
+    if isinstance(records,PackedPeakRecords):return records.numeric_bytes+4096
     return sum(row[0].nbytes+1024 for row in records.values())
 
 
@@ -59,7 +61,7 @@ class NativeTOFScalars:
         self.dependencies=[(n.math,name,getattr(n.math,name)) for name in FUNCTION_SOURCES]
         self.dependencies.extend([(n.math.G2pwd,'getWidthsTOF',n.math.G2pwd.getWidthsTOF),
                                   (n.math,'getPowderProfile',driver)])
-        self.calls=0;self.maximum_workspace_bytes=0
+        self.calls=0;self.maximum_workspace_bytes=0;self.last_workspace_bytes=0
         self.geometry_calls=0
 
     def collect(self,point,*,maximum_bytes):
@@ -70,6 +72,10 @@ class NativeTOFScalars:
         """Retain physical coordinate bits without a normalization round trip."""
         return self._collect(point,maximum_bytes=maximum_bytes,geometry_only=False)
 
+    def collect_packed_physical(self,point,*,maximum_bytes):
+        """Same native scalars/order, without per-reflection Python objects."""
+        return self._collect(point,maximum_bytes=maximum_bytes,geometry_only=False,packed=True)
+
     def collect_kernel_geometry(self,point,*,maximum_bytes):
         """Native shape/window arguments only, with no atomic feasibility.
 
@@ -79,7 +85,7 @@ class NativeTOFScalars:
         """
         return self._collect(point,maximum_bytes=maximum_bytes,geometry_only=True)
 
-    def _collect(self,point,*,maximum_bytes,geometry_only):
+    def _collect(self,point,*,maximum_bytes,geometry_only,packed=False):
         if type(maximum_bytes)is not int or maximum_bytes<1:
             raise ScalarBatchUnavailable('No remaining scalar collection workspace')
         n=self.native;s=self.source;n._check()
@@ -99,10 +105,11 @@ class NativeTOFScalars:
         rows=refs['RefList']
         # The native engine owns its reflection array. Bound the additional
         # scalar arrays and worst-case returned records before creating them.
-        workspace=len(rows)*(1024+8*64)
+        workspace=len(rows)*((96 if packed else 1024)+8*64)+(4096 if packed else 0)
         if rows.ndim!=2 or not len(rows) or rows.shape[1]<18 or workspace>maximum_bytes:
             raise ScalarBatchUnavailable('Native scalar collection exceeds its workspace budget')
         self.maximum_workspace_bytes=max(self.maximum_workspace_bytes,workspace)
+        self.last_workspace_bytes=workspace
         a=np.array([parms[self.pfx+f'A{i}'] for i in range(6)])+n.math.GetDij(self.phfx,sg,parms)
         reciprocal,direct=n.lattice.A2Gmat(a);_,gb=n.lattice.Gmat2AB(reciprocal)
         if not geometry_only:
@@ -149,8 +156,20 @@ class NativeTOFScalars:
             height=r[9]*r[11]
             if not np.isfinite(height).all():
                 raise ScalarBatchUnavailable('Nonfinite batched native peak arguments')
-            records={tuple(map(int,r[:3,i])):(parameters[i].copy(),float(height[i]),int(begin[i]),int(end[i]))
-                     for i in active}
+            if packed:
+                # Fancy indexing creates owned buffers. No native reflection
+                # or current structure-factor array is exposed or retained.
+                if not np.isfinite(r[:3]).all() or np.any(abs(r[:3])>1e9):
+                    raise ScalarBatchUnavailable('Packed native reflection indices exceed their integer domain')
+                try:
+                    records=PackedPeakRecords(np.ascontiguousarray(parameters[active]),height[active].copy(),
+                        np.column_stack((begin[active],end[active])).astype(np.int64,copy=False),
+                        r[4,active].copy(),np.array(r[:3,active].T,dtype=np.int64,order='C',copy=True))
+                except ValueError as error:
+                    raise ScalarBatchUnavailable('Packed native records require the original path: '+str(error)) from error
+            else:
+                records={tuple(map(int,r[:3,i])):(parameters[i].copy(),float(height[i]),int(begin[i]),int(end[i]))
+                         for i in active}
         if len(records)!=len(active):raise ScalarBatchUnavailable('Duplicate native reflection identity')
         self.calls+=1
         return records

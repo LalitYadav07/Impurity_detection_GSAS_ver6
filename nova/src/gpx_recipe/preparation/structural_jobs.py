@@ -231,7 +231,7 @@ def execute_examples(request):
         examples_sha256=examples_sha256,seconds=time.monotonic()-began)
     if settings.get('representation')==REPRESENTATION:
         receipt.update(representation=REPRESENTATION,parent_seed=settings['parent_seed'],
-            parent_relative_metric_range=settings['parent_relative_metric_range'])
+            parent_relative_metric_range=settings['parent_relative_metric_range'],timing=detail['timing'])
     return publish_result('structural-examples',request,receipt,['examples.json','examples.npz'])
 
 

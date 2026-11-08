@@ -105,6 +105,43 @@ def test_other_profile_or_unattributed_arrays_cannot_claim_owned_reuse(theory_ta
         TOFProfileProposals(source,table=theory_table)
 
 
+@pytest.mark.parametrize('change',['same','position_bit','width_bit','spacing_bit','window'])
+def test_adjacent_profile_reuse_preserves_each_reflection_and_exact_double_inputs(theory_table,tmp_path,monkeypatch,change):
+    from gpx_recipe.live.native_peak_records import PackedPeakRecords
+    from gpx_recipe.live.native_peak_batch import pack_records
+    _,source=native_source(tmp_path/'input','PNT')
+    renderer=TOFProfileProposals(source,table=theory_table);native=source.fast.native
+    real=renderer.exact.collector.collect_packed_physical(np.zeros(len(source.radii)),maximum_bytes=64*1024**2)
+    parameters=np.repeat(real.parameters[:1],3,axis=0)
+    bounds=np.repeat(real.bounds[:1],3,axis=0);spacings=np.repeat(real.spacings[:1],3)
+    if change=='position_bit':parameters[2,0]=np.nextafter(parameters[2,0],np.inf)
+    elif change=='width_bit':parameters[2,3]=np.nextafter(parameters[2,3],np.inf)
+    elif change=='spacing_bit':spacings[2]=np.nextafter(spacings[2],np.inf)
+    elif change=='window':bounds[2,0]+=1
+    records=PackedPeakRecords(parameters,np.array([1.,0.,-.5]),bounds,spacings,
+        np.array([[1,0,0],[0,1,0],[0,0,1]],np.int64))
+    axis=source.fast.x[source.fast.slice];p,h,b,maximum,_=pack_records(records,axis,64*1024**2)
+    # Three separate calls cannot reuse a previous row's plane. They provide
+    # the original per-reflection operation sequence on one accumulator.
+    expected=np.zeros(len(axis));statistics=np.zeros(6,np.int64)
+    scratch=[np.empty(maximum,np.float32),np.empty(maximum,np.float32),
+        np.empty(maximum),np.empty(maximum,np.int64)]
+    for i in range(3):
+        code=renderer.function(renderer.batch.address,1,len(axis),axis,p[i:i+1],h[i:i+1],b[i:i+1],
+            records.spacings[i:i+1],maximum,renderer.coefficients,renderer.halo,*renderer.coefficients.shape,
+            renderer.logd[0],renderer.logd[1]-renderer.logd[0],renderer.eta[0],renderer.eta[1]-renderer.eta[0],
+            *scratch,expected,statistics)
+        assert code==0
+    hist=native.histo_phases[0][source.fast.slow.hist.name];prefix=renderer.exact.collector.hfx
+    background,_=renderer.exact.background_function(prefix,native.parms,native.controls[prefix+'bakType'],
+        native.controls[prefix+'histType'],axis,hist['Background'][1].get('fixback'))
+    full=np.zeros(len(source.fast.x));full[source.fast.slice]=expected+background
+    monkeypatch.setattr(renderer.exact.collector,'collect_packed_physical',lambda *a,**kw:records)
+    actual=renderer.evaluate(np.zeros(len(source.radii)))
+    np.testing.assert_array_equal(actual,full)
+    assert renderer.statistics['identical_adjacent_rows_reused']==(2 if change=='same' else 1)
+
+
 @pytest.mark.parametrize('change',['process','thread','floating','compiled'])
 def test_table_ownership_and_native_runtime_remain_required(theory_table,monkeypatch,change):
     if change=='process':monkeypatch.setattr(theory_table,'_pid',-1)

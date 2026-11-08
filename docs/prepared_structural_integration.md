@@ -1205,3 +1205,34 @@ little-endian uint32 storage retains the existing sixteen-array,
 planes and noncanonical padding, reconstruct the original physical arrays,
 then repeat all null-control and immutable-array checks. Repacking retains
 the source checksum as provenance; it does not grant native qualification.
+
+## Preparation timing and large TOF proposal workspaces
+
+Paired-generation receipts separate reference construction, parent-cell
+sampling, child preparation, trajectory sampling, conditioning, child rendering,
+parent-reference rendering, control checks and numerical-file writing. Child
+rendering further records symmetry labels, forward curves, mandatory independent
+native checks and native regeneration separately. The entry receipt retains
+these timings. They are measured worker wall times, not Galaxy queue latency;
+timing does not replace any numerical check or change generated arrays.
+
+Continuous TOF proposals use packed native scalar columns rather than one Python
+dictionary entry per reflection. The common native scalar implementation still
+calculates all structure factors, corrections, positions, widths and windows in
+their original order. Hkl identities and actual d spacings remain explicit.
+The legacy dictionary interface remains available to its existing callers.
+Forward memory admission accounts both the scalar-collection peak and the
+table/record/rendering footprint within the same 64 MiB ceiling. Work that still
+cannot fit retains the original native path rather than omitting reflections.
+
+The compiled proposal loop can reuse its immediately preceding raw plane only
+when all five float64 parameters, d spacing and window bounds are bit-identical.
+It retains each reflection's intensity and original double addition order,
+including zero and negative contributions. This cache lives only within one
+call, adds no profile-plane allocation and never reuses a calculated curve or
+fitted intensity across cells or scans. Changed low bits or bounds trigger a
+new calculation. Diagnostics distinguish actual evaluated bins from reused
+rows and bins. Proposal tables still cannot authorize a native likelihood or
+candidate exclusion. Full prepared-curve generation remains on its independently
+checked native renderer; these changes do not relabel approximate curves as
+native training truth.

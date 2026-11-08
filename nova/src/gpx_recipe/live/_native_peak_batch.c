@@ -10,7 +10,7 @@ typedef void (*peak_function)(int *,float *,float *,float *,float *,float *,floa
 
 int native_peak_batch_abi(void) {
     return sizeof(int)==4 && sizeof(float)==4 && sizeof(double)==8 &&
-           sizeof(int64_t)==8 && sizeof(ptrdiff_t)==8 ? 0x504e5401 : 0;
+           sizeof(int64_t)==8 && sizeof(ptrdiff_t)==8 ? 0x504e5402 : 0;
 }
 
 /* All exact sum paths share the original double product/addition order. */
@@ -202,12 +202,28 @@ int proposal_tof_profile_sum(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
     if (!peak||nr<0||nx<1||maximum<2||maximum>INT_MAX||rows<4||cols<4||
         !isfinite(u0)||!isfinite(v0)||!isfinite(du)||!isfinite(dv)||du<=0.||dv<=0.) return 1;
     const double radius=sinh(6.);
+    double previous_parameters[5],previous_d=0.;
+    int64_t previous_low=-1,previous_high=-1;
     for (ptrdiff_t row=0;row<nr;row++) {
         int64_t lo=bounds[2*row],hi=bounds[2*row+1];
         const double *p=parameters+row*5;
         if (lo<0||hi>nx||hi-lo<2||hi-lo>maximum) return 2;
         if (!isfinite(heights[row])) return 3;
         for (int j=0;j<5;j++) if (!isfinite(p[j])) return 3;
+        /* Adjacent reflections may have identical complete proposal inputs.
+         * Reuse only that already-owned temporary plane, never an intensity
+         * or a rounded metric. All original double additions still execute.
+         * The cache is local to this call and adds no raw-profile allocation. */
+        if (row&&lo==previous_low&&hi==previous_high&&
+                memcmp(p,previous_parameters,5*sizeof(double))==0&&
+                memcmp(d+row,&previous_d,sizeof(double))==0) {
+            statistics[4]++;statistics[5]+=hi-lo;
+            for (int64_t j=0;j<hi-lo;j++) {
+                double contribution=heights[row]*temporary[j];
+                signal[lo+j]=signal[lo+j]+contribution;
+            }
+            continue;
+        }
         double width=sqrt(p[3]),u=(log(d[row])-u0)/du;
         int supported=isfinite(width)&&width>0.&&isfinite(u)&&u>=1.&&u<rows-2.;
         proposal_spline_row spline;
@@ -234,6 +250,8 @@ int proposal_tof_profile_sum(peak_function peak,ptrdiff_t nr,ptrdiff_t nx,
             double contribution=heights[row]*temporary[j];
             signal[lo+j]=signal[lo+j]+contribution;
         }
+        memcpy(previous_parameters,p,5*sizeof(double));previous_d=d[row];
+        previous_low=lo;previous_high=hi;
     }
     return 0;
 }

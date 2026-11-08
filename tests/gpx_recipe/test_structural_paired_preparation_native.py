@@ -38,6 +38,8 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
             trajectories=3,steps=2,trajectory_slice=[1,3]),destination=str(tmp_path/'output'))
     result=execute('structural-examples',request);root=Path(result['output'])
     original=read(root/'working-native');paired=read(root,names='examples')
+    entry=json.loads((root/'entry.json').read_text())
+    assert entry['detail']['timing']==original.manifest['timing']
     assert paired.manifest['examples']==7 and paired.manifest['trajectory_slice']==[1,3]
     assert paired.manifest['parent_controls_shape_qualified']
     for name in original.arrays:assert original.arrays[name].tobytes()==paired.arrays[name].tobytes()

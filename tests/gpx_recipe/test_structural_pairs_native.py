@@ -29,6 +29,11 @@ def test_native_pairs_preserve_physical_controls_and_whole_trajectory_shards(tmp
     assert result['schema'] == 'radar-structural-ranking-paired-pilot/v1'
     assert result['examples'] == 10 and result['parent_native_calls'] == 4
     assert result['parent_controls_shape_qualified'], result['parent_control_comparisons']
+    stages=result['timing']['stages_seconds'];rendering=result['timing']['child_rendering_seconds']
+    assert all(np.isfinite(v) and v>=0 for v in [*stages.values(),*rendering.values()])
+    assert sum(stages.values())<=result['seconds']
+    assert sum(rendering.values())<=stages['rendering_children']
+    assert stages['rendering_parent_references']>0 and rendering['forward_curves']>0
     assert all(abs(c['intensity_scale']-1) < 1e-6 for c in result['parent_control_comparisons'])
     assert not any(result[k] for k in ('observations_included', 'screening_qualified', 'classifier_trained', 'scientific_result'))
     with np.load(tmp_path/'pairs/pairs.npz', allow_pickle=False) as data:

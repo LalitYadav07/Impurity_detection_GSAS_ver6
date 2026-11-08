@@ -29,11 +29,12 @@ import numpy as np
 from ..preparation.kernel_runtime import floating_state
 from .native_peak_memo import _compiled_tof_float32
 from .native_peak_groups import group as group_shapes
+from .native_peak_records import PackedPeakRecords
 
 MAXIMUM_BYTES=64*1024*1024
 FLAGS=('-O3','-fPIC','-shared','-fno-fast-math','-ffp-contract=off','-frounding-math')
 SCHEMA='radar-native-peak-batch-build/v1'
-ABI=0x504e5401
+ABI=0x504e5402
 DEFAULT_FLOATING=(895,8064)
 IMAGE_HELPER_ROOTS=(Path('/opt/radar-native/gpx_recipe/live'),
     Path('/opt/radar-symmetry/gpx_recipe/live'))
@@ -109,7 +110,7 @@ def pack_records(records,axis,maximum_bytes):
     """Bound data-only buffers before a native call; do not truncate work."""
     if type(maximum_bytes)is not int or not 0<maximum_bytes<=MAXIMUM_BYTES:
         raise ValueError('Positive bounded native batch workspace required')
-    if (not isinstance(records,dict) or type(axis)is not np.ndarray
+    if (not isinstance(records,(dict,PackedPeakRecords)) or type(axis)is not np.ndarray
             or axis.ndim!=1 or axis.dtype!=np.dtype('float64')
             or not axis.flags.c_contiguous or not len(axis)):
         raise BatchUnavailable('Native batching requires an ordinary contiguous float64 grid')
@@ -118,6 +119,20 @@ def pack_records(records,axis,maximum_bytes):
         raise BatchUnavailable('Native batch input exceeds its workspace')
     if not np.isfinite(axis).all() or np.any(np.diff(axis)<=0):
         raise BatchUnavailable('Ordered finite native grid required')
+    if isinstance(records,PackedPeakRecords):
+        if (records.parameters.shape!=(count,5) or records.heights.shape!=(count,)
+                or records.bounds.shape!=(count,2) or np.any(records.bounds[:,0]<0)
+                or np.any(records.bounds[:,1]>len(axis)) or records.maximum>np.iinfo(np.int32).max
+                or np.any(records.bounds[:,1]-records.bounds[:,0]<2)
+                or np.any(records.bounds[:,1]-records.bounds[:,0]>records.maximum)
+                or not np.isfinite(records.parameters).all() or not np.isfinite(records.heights).all()):
+            raise BatchUnavailable('Packed original native peak arguments exceed their domain')
+        with np.errstate(over='ignore'):
+            if not np.isfinite(records.parameters[:,1:].astype(np.float32)).all():
+                raise BatchUnavailable('Native shape arguments exceed the compiled precision')
+        required=2*axis.nbytes+8*records.maximum
+        if required>maximum_bytes:raise BatchUnavailable('Native batch scratch exceeds its workspace')
+        return records.parameters,records.heights,records.bounds,records.maximum,required
     parameters=np.empty((count,5));heights=np.empty(count);bounds=np.empty((count,2),dtype=np.int64)
     maximum=2
     for index,row in enumerate(records.values()):
