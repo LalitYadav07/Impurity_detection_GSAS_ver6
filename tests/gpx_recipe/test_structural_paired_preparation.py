@@ -62,6 +62,34 @@ def test_app_default_expands_to_three_curves_with_shared_parent_sampling():
     assert [r['settings']['trajectory_slice'] for r in rows]==[[0,4],[4,8]]
 
 
+@pytest.mark.parametrize('modes,bins,unit',[(27,4096,8),(228,4096,2),(237,4096,2),
+    (130,4096,3),(228,8192,1),(None,4096,2)])
+def test_automatic_work_units_keep_every_original_trajectory_and_coordinate(modes,bins,unit):
+    candidate=dict(id='one',modes=None if modes is None else [f'm{i}' for i in range(modes)])
+    model=dict(kind='structural',bank='bank 1',child='original-child.cif',
+        settings=dict(candidate=candidate,mode_radius=.05,cell_radius=.01))
+    original=copy.deepcopy(model)
+    rows=example_models([model],bank_grids={'bank 1':dict(bins=bins)})
+    assert model==original
+    intervals=[row['settings']['trajectory_slice'] for row in rows]
+    assert intervals==[[i,min(i+unit,64)] for i in range(0,64,unit)]
+    assert [i for a,b in intervals for i in range(a,b)]==list(range(64))
+    for row in rows:
+        assert row['settings']['candidate']==candidate
+        assert row['settings']['trajectories']==64 and row['settings']['steps']==4
+        assert row['settings']['mode_radius']==.05 and row['settings']['cell_radius']==.01
+    assert len({row['settings']['seed'] for row in rows})==1
+    assert len({row['settings']['parent_seed'] for row in rows})==1
+
+
+@pytest.mark.parametrize('grid',[None,'unavailable',dict(bins=True),dict(bins=0),dict(bins=4096.5)])
+def test_missing_or_malformed_resolution_keeps_all_trajectories_in_small_units(grid):
+    model=dict(kind='structural',bank='one',settings=dict(candidate=dict(modes=['m']*228)))
+    rows=example_models([model],bank_grids={'one':grid})
+    assert [i for row in rows for i in range(*row['settings']['trajectory_slice'])]==list(range(64))
+    assert all(row['settings']['trajectory_slice'][1]-row['settings']['trajectory_slice'][0]<=2 for row in rows)
+
+
 def test_paired_names_keep_lossless_arrays_and_default_training_contract(tmp_path):
     request,directory=inputs(tmp_path)
     raw=read(tmp_path/'raw');paired=read(directory,names='examples')

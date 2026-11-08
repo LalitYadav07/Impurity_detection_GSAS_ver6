@@ -9,6 +9,30 @@ from .structural_training_blocks import REPRESENTATION,PARENT_RANGE,parent_conte
 
 EXAMPLES='structural-examples'
 TRAINING='structural-training'
+DEFAULT_TRAJECTORY_UNIT=8
+COORDINATE_ROWS_PER_UNIT=2560
+
+
+def trajectory_unit(model,steps,*,grid=None):
+    """Choose scheduling granularity, never reduce the physical portfolio.
+
+    A complete measured 228-coordinate two-trajectory unit took 233 seconds;
+    its eight-trajectory counterpart exceeds a batch budget. Discovery mode
+    counts are a conservative cost estimate, not native scientific authority.
+    Unknown counts use small units. Actual native dimensions, byte limits,
+    allocation and deadline checks remain authoritative in the worker.
+    """
+    modes=model.get('settings',{}).get('candidate',{}).get('modes')
+    if not isinstance(modes,list) or not modes:return 2
+    grid=model.get('grid',{}) if grid is None else grid
+    if not isinstance(grid,dict):return 2
+    bins=grid.get('bins',4096)
+    if type(bins)is not int or bins<3:return 2
+    resolution=max(1,(bins+4095)//4096)
+    # Retain the parent-only control beside every whole trajectory and allow
+    # all six lattice coordinates when estimating this computational unit.
+    work=(len(modes)+6)*(steps+1)*resolution
+    return max(1,min(DEFAULT_TRAJECTORY_UNIT,COORDINATE_ROWS_PER_UNIT//work))
 
 
 def validate_entries(entries):
@@ -59,18 +83,21 @@ def validate_entries(entries):
             raise ValueError('Structural example slices must cover the complete declared trajectory portfolio')
 
 
-def example_models(models, *, trajectories=64, shard=8, steps=4, seed=89113):
+def example_models(models, *, trajectories=64, shard=None, steps=4, seed=89113,bank_grids=None):
     """Expand each structural context into complete, disjoint trajectory slices."""
     if (type(trajectories) is not int or not 1<=trajectories<=4096
-            or type(shard) is not int or not 1<=shard<=trajectories):
+            or type(steps)is not int or not 1<=steps<=32
+            or (shard is not None and (type(shard) is not int or not 1<=shard<=trajectories))):
         raise ValueError('Declare bounded complete structural trajectories and shard size')
     result=[]
     for model in models:
         if model['kind']!='structural':continue
-        for first in range(0,trajectories,shard):
+        grid=None if bank_grids is None else bank_grids.get(model['bank'])
+        size=min(trajectories,trajectory_unit(model,steps,grid=grid)) if shard is None else shard
+        for first in range(0,trajectories,size):
             row=copy.deepcopy(model);row['kind']=EXAMPLES
             row['settings'].update(seed=seed,trajectories=trajectories,steps=steps,
-                trajectory_slice=[first,min(first+shard,trajectories)],
+                trajectory_slice=[first,min(first+size,trajectories)],
                 representation=REPRESENTATION,parent_seed=seed^0x63BC32D9,
                 parent_relative_metric_range=list(PARENT_RANGE))
             result.append(row)

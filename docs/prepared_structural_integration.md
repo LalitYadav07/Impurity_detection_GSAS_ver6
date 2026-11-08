@@ -49,10 +49,13 @@ has 12,538 clean training pairs, 2,875 validation pairs and 2,740 test pairs.
 Three simulated observation variants per clean pair expand the training set
 to 50,152 examples; they do not count toward the clean-pair requirement. This
 is a parent-specific development benchmark, not a collection of independent
-experimental measurements. Training and independent scientific evaluation
-are still required. No learned model is authorized to remove candidates.
-Broader parent-reference sampling, optimizer checkpoint/resume, aligned NDIP
-images and complete real-experiment/UI acceptance remain open work. These
+experimental measurements. A complete 60-epoch training control has finished,
+but its held-out family coverage is insufficient for candidate exclusion.
+Architecture and noise-robustness trials continue using validation data; the
+rare families and weak examples remain in the cohort. No learned model is
+authorized to remove candidates. Broader parent-reference sampling, portable
+optimizer recovery, aligned NDIP images and complete real-experiment/UI
+acceptance remain open work. These
 changes have not yet been deployed as an accepted preparation release.
 Component measurements below retain their original scope; they do not prove
 complete-workflow speed, structural recovery or NDIP latency.
@@ -73,6 +76,22 @@ bounds and fails with a specific scope-conflict message. Bounded, request-bound
 diagnostic receipts carry that reason through native batches and single Galaxy
 jobs. Failed members remain failed while successful siblings can be published;
 the diagnostics cannot create a scientific result or a preparation certificate.
+
+New paired-example libraries automatically divide each complete trajectory
+portfolio into smaller scheduling units for children with many declared modes
+or a dense calculation grid. This changes job granularity only: every original
+trajectory, amplitude step, seed, physical coordinate and bound remains in the
+plan. Existing saved plans keep their captured slices. Actual native dimensions,
+granted CPUs, memory and output-size checks still control worker admission;
+declared mode counts are only a conservative estimate of computation cost.
+
+A native unit started late in a batch receives only the remaining batch time.
+If that shortened budget expires, its verified interruption remains pending
+and the queue starts it alone with one fresh full budget, preserving its logical
+attempt. Partial scientific outputs are not published. A unit that exhausts
+that fresh budget becomes a visible failure requiring review; technical
+failures and cancellations do not enter automatic deadline recovery. The queue
+retains the acknowledged Galaxy job and result identity across recovery.
 
 CPU attention training now saves owned, atomic numerical checkpoints during
 warmup and after complete epochs. Repeating the identical training request in

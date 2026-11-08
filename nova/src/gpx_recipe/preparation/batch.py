@@ -25,6 +25,7 @@ from .worker import input_roles
 
 SCHEMA='radar-preparation-batch/v1'
 RESULT_SCHEMA='radar-preparation-batch-result/v1'
+DEADLINE_INTERRUPTED='interrupted_at_batch_deadline'
 MAX_TASKS=64
 MAX_METADATA=8*1024*1024
 RESULT_BUDGET=480*1024*1024
@@ -131,7 +132,10 @@ def run_task(task, request, scratch, *, cancel, timeout):
         except ScientificCancelled:
             return dict(state='cancelled',reason='Native preparation was cancelled',seconds=time.monotonic()-began)
         except subprocess.TimeoutExpired:
-            return dict(state='failed',reason='Native preparation exceeded this batch deadline',seconds=time.monotonic()-began)
+            # Private scheduler disposition, not a completed model or a
+            # scientific rejection. The caller knows whether this task had
+            # an initial full budget or only a late batch remainder.
+            return dict(state='interrupted',reason=DEADLINE_INTERRUPTED,seconds=time.monotonic()-began)
     if result.returncode or not output.is_file():
         from .failures import read as read_failure
         reason=read_failure(output,task['kind'],request)
@@ -191,7 +195,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
     output=Path(request['destination']).resolve();output.mkdir(parents=True,exist_ok=False)
     budget=allocation(request['workers'],environ=environ);cancel=cancel or threading.Event()
     began=clock();deadline=began+request['seconds'];remaining=list(plan['tasks']);active={};finished={}
-    paths=[];used=0;peak=0;peak_reserved=0;stop_reason='';sized=set();invalid_size=set()
+    paths=[];used=0;peak=0;peak_reserved=0;stop_reason='';sized=set();invalid_size=set();waited=False
     implementation=package_signature()
 
     def refresh_reservations():
@@ -215,7 +219,9 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
     def progress():
         write_json(output/'progress.json',dict(total=len(plan['tasks']),terminal=sum(v['state']!='pending' for v in finished.values()),
             prepared=sum(v['state']=='prepared' for v in finished.values()),active=len(active),
-            pending=len(remaining),allocation=budget,peak_admitted_tasks=peak,
+            pending=sum(t['entry'] not in finished for t in remaining)
+                +sum(v['state']=='pending' for v in finished.values()),
+            allocation=budget,peak_admitted_tasks=peak,
             native_sized_tasks=len(sized),native_size_reports_rejected=len(invalid_size),
             reserved_result_bytes=sum(t['_reserve'] for t in active.values()),
             used_result_bytes=used,peak_reserved_result_bytes=peak_reserved))
@@ -234,17 +240,24 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                 payload['destination']=str(confined(output,payload['destination'],exists=False))
                 scratch=output/'.work'/task['entry']/('attempt-'+str(task['attempt']))
                 future=pool.submit(runner,task,payload,scratch,cancel=cancel,timeout=max(1.,deadline-clock()))
-                active[future]=dict(task,payload=payload,scratch=scratch,_reserve=RESERVES[task['kind']])
+                active[future]=dict(task,payload=payload,scratch=scratch,_reserve=RESERVES[task['kind']],
+                    _late_admission=waited)
                 peak=max(peak,len(active));peak_reserved=max(peak_reserved,used+sum(t['_reserve'] for t in active.values()))
             progress()
             if not active:break
             ready,_=wait(active,timeout=.1,return_when=FIRST_COMPLETED)
+            waited=True
             for future in ready:
                 task=active.pop(future)
                 try:
                     row=future.result()
-                    if not isinstance(row,dict) or row.get('state') not in {'prepared','failed','cancelled'}:
+                    if not isinstance(row,dict) or row.get('state') not in {'prepared','failed','cancelled','interrupted'}:
                         raise ValueError('Invalid native preparation task status')
+                    if row['state']=='interrupted':
+                        row=dict(state='pending' if task['_late_admission'] else 'failed',
+                            reason=(DEADLINE_INTERRUPTED if task['_late_admission'] else
+                                'Native preparation exceeded its full fresh batch budget'),
+                            seconds=row['seconds'])
                     if row['state']=='prepared':
                         if ('_native_size' in task
                                 and read_native_size(task['payload'],implementation)!=task['_native_size']):
@@ -269,7 +282,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
             reason=stop_reason or 'not_started')
     counts={name:sum(row['state']==name for row in finished.values())
             for name in ('prepared','failed','cancelled','pending')}
-    result=dict(schema=RESULT_SCHEMA,plan_sha256=digest(plan),status='partial' if remaining else 'complete',
+    result=dict(schema=RESULT_SCHEMA,plan_sha256=digest(plan),status='partial' if counts['pending'] else 'complete',
         counts=counts,all_prepared=counts['prepared']==len(plan['tasks']),
         entries=[finished[t['entry']] for t in plan['tasks']],allocation=dict(budget,peak_admitted_tasks=peak,
             result_byte_budget=RESULT_BUDGET,native_sized_tasks=len(sized),

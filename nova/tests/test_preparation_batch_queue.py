@@ -8,6 +8,7 @@ from radar_pd_nova.model_runtime import GalaxyModelRuntime
 from radar_pd_nova.preparation_queue import PreparationQueue
 from test_model_runtime import remote
 from test_preparation_queue import setup, complete, entry
+from gpx_recipe.preparation.batch import DEADLINE_INTERRUPTED
 
 
 def restore(queue,base,runtime,service,source,tmp_path,monkeypatch):
@@ -71,6 +72,51 @@ def test_partial_batch_defers_unstarted_members_but_failures_need_review(remote,
     assert third['members']==[dict(entry=entry(first,1),attempt=2)]
     complete(queue,service,third,tmp_path)
     assert queue.tick()['coverage']['all_prepared'] and len(service.submissions)==3
+
+
+def test_late_interrupted_member_gets_one_isolated_full_budget_then_failure_needs_review(remote,tmp_path):
+    queue,_,_=setup(remote,tmp_path,count=3,batch_size=None);_,service,_=remote
+    queue.resume();queue.tick();first=queue.snapshot()['jobs'][0]
+    interrupted=entry(first,1);unstarted=entry(first,2)
+    def disposition(result):
+        result['entries'][1]['reason']=DEADLINE_INTERRUPTED
+        result['entries'][1]['seconds']=300.
+    complete(queue,service,first,tmp_path,
+        states={interrupted:'pending',unstarted:'pending'},mutate=disposition)
+    queue.tick();second=queue.snapshot()['jobs'][1]
+    assert second['mode']=='batch' and second['members']==[dict(entry=interrupted,attempt=1)]
+    complete(queue,service,second,tmp_path,states={interrupted:'failed'})
+    queue.tick();third=queue.snapshot()['jobs'][2]
+    assert third['members']==[dict(entry=unstarted,attempt=1)]
+    complete(queue,service,third,tmp_path)
+    status=queue.tick();assert status['coverage']['counts']['failed']==1
+    assert len(service.submissions)==3 and status['active']==0
+    assert queue.library.row(interrupted)['state']=='failed'
+    # Full-budget failure does not become another automatic attempt.
+    queue.tick();assert len(service.submissions)==3
+
+
+@pytest.mark.parametrize('recovery_stage',['deferred','isolated_job_submitted'])
+def test_interrupted_unit_recovery_retains_attempt_and_existing_dispatch(remote,tmp_path,monkeypatch,recovery_stage):
+    queue,_,base=setup(remote,tmp_path,count=2,batch_size=None);runtime,service,source=remote
+    queue.resume();queue.tick();first=queue.snapshot()['jobs'][0];interrupted=entry(first,1)
+    def disposition(result):result['entries'][1].update(reason=DEADLINE_INTERRUPTED,seconds=100.)
+    complete(queue,service,first,tmp_path,states={interrupted:'pending'},mutate=disposition)
+    queue.pause();queue.tick()
+    if recovery_stage=='isolated_job_submitted':queue.resume();queue.tick()
+    restored=restore(queue,base,runtime,service,source,tmp_path,monkeypatch)
+    restored.tick()
+    assert len(service.submissions)==(1 if recovery_stage=='deferred' else 2)
+    restored.resume();restored.tick();isolated=restored.snapshot()['jobs'][1]
+    assert isolated['members']==[dict(entry=interrupted,attempt=1)]
+    assert isolated['handle']['key']!=first['handle']['key']
+    assert len(service.submissions)==2
+    # A job already submitted before viewer loss finishes from its original
+    # captured inputs. The restored viewer downloads that packet on collection.
+    owner=queue if recovery_stage=='isolated_job_submitted' else restored
+    complete(owner,service,isolated,tmp_path)
+    assert restored.tick()['coverage']['all_prepared']
+    assert restored.tick()['active']==0 and len(service.submissions)==2
 
 
 def test_partial_batch_restore_checks_original_packet_and_keeps_deferral_attempt(remote,tmp_path,monkeypatch):

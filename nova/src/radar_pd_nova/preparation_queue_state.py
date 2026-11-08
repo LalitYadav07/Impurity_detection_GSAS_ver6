@@ -73,7 +73,7 @@ def validate(value,library,runtime,identity):
                 raise ValueError('Invalid preparation member outcome')
             if outcome['state']=='pending' and (job['mode']!='batch' or job['result_sha256'] is None
                     or outcome['source']!='worker'):
-                raise ValueError('Only a verified batch may defer an unstarted member')
+                raise ValueError('Only a verified batch may defer an unfinished member')
             if outcome['state']=='prepared' and (not job['handle'] or not job['handle']['job']):
                 raise ValueError('Prepared work needs its acknowledged native job')
         if job['phase']=='collected' and (not job['handle'] or not job['handle']['job']):

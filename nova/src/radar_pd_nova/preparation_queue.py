@@ -1,7 +1,8 @@
 """Durable finite preparation: one Galaxy dispatch per bounded model batch.
 
-Members retain independent scientific outcomes. A worker-proven unstarted
-member may continue in a later batch with the same logical attempt; failures
+Members retain independent scientific outcomes. Worker-proven unstarted or
+late-deadline-interrupted members may continue with the same logical attempt.
+An interrupted member gets an isolated fresh budget; full-budget failures
 require explicit retry. Counts, weights and experiment inference stay absent.
 """
 from __future__ import annotations
@@ -285,11 +286,21 @@ class PreparationQueue:
                 if state['paused'] or self._paused.is_set():break
                 deferred=self._deferred(state)
                 pending=pending_entries(self.library,deferred=deferred)
+                latest={identifier:job['outcomes'].get(identifier,{}) for job in state['jobs']
+                    if job['phase']=='collected' for identifier in job['outcomes']}
+                interrupted=next((identifier for identifier in pending if identifier in deferred
+                    and latest.get(identifier,{}).get('reason')==batch.DEADLINE_INTERRUPTED),None)
                 training=next((identifier for identifier in pending
                     if self.library.row(identifier)['model']['kind']=='structural-training'),None)
                 # A trainer owns its allocation-sized tensor pool. Never nest
                 # it under a multi-model native batch's process pool.
-                if training is not None:
+                if interrupted is not None:
+                    # This logical unit previously received only a batch
+                    # remainder. Start it alone so it receives the initial
+                    # full budget exactly once; another timeout is a visible
+                    # full-budget failure, never an endless deferral loop.
+                    identifiers=[interrupted];mode='batch'
+                elif training is not None:
                     identifiers=[training];mode='single'
                 else:
                     mode='batch'
@@ -300,7 +311,7 @@ class PreparationQueue:
                 remaining_slots=available-slot
                 members_per_job=min(state['batch_size'],
                     (len(pending)+remaining_slots-1)//remaining_slots)
-                if training is None:identifiers=pending[:members_per_job]
+                if training is None and interrupted is None:identifiers=pending[:members_per_job]
                 if not identifiers:break
                 members=[dict(entry=i,attempt=self.library.row(i)['attempt']+(i not in deferred)) for i in identifiers]
                 job=dict(id=uuid.uuid4().hex,mode=mode,phase='awaiting_submission',handle=None,

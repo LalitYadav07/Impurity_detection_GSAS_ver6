@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import threading
 import time
+import subprocess
 
 import numpy as np
 import pytest
@@ -128,6 +129,54 @@ def test_soft_deadline_keeps_unstarted_entries_pending(tmp_path):
     assert all(row['reason']=='batch_time_budget' for row in result['entries'][1:])
     progress=json.loads((Path(result['output'])/'progress.json').read_text())
     assert progress['terminal']==1 and progress['pending']==2
+
+
+def test_actual_native_timeout_has_a_private_interruption_disposition(tmp_path,monkeypatch):
+    def timed_out(*args,**kwargs):raise subprocess.TimeoutExpired(args[0],kwargs['timeout'])
+    monkeypatch.setattr(batch,'run_scientific',timed_out)
+    row=batch.run_task(dict(kind='reference'),dict(destination=str(tmp_path/'unused')),
+        tmp_path/'task',cancel=threading.Event(),timeout=2.)
+    assert row['state']=='interrupted' and row['reason']==batch.DEADLINE_INTERRUPTED
+    assert row['seconds']>=0 and 'result' not in row
+
+
+def test_late_deadline_interruption_is_pending_without_publishing_partial_outputs(tmp_path):
+    request=plan(tmp_path,count=3);now=[0.]
+    def runner(task,payload,scratch,**kwargs):
+        if task['entry']=='0'*24:
+            row=prepared(task,payload,scratch,**kwargs);now[0]=10.;return row
+        path=Path(payload['destination']);path.mkdir(parents=True)
+        np.savez(path/'partial-native-data.npz',unfinished=np.ones(8))
+        now[0]=30.
+        return dict(state='interrupted',reason=batch.DEADLINE_INTERRUPTED,seconds=20.)
+    result=batch.execute(request,runner=runner,clock=lambda:now[0],environ={'GALAXY_SLOTS':'1'})
+    assert result['status']=='partial' and result['counts']==dict(prepared=1,failed=0,cancelled=0,pending=2)
+    assert result['entries'][1]['reason']==batch.DEADLINE_INTERRUPTED
+    assert result['entries'][2]['reason']=='batch_time_budget'
+    assert not any('partial-native' in name for name in result['artifacts'])
+    progress=json.loads((Path(result['output'])/'progress.json').read_text())
+    assert progress['terminal']==1 and progress['pending']==2
+
+
+def test_initial_full_budget_timeout_remains_a_failure_not_an_endless_pending_unit(tmp_path):
+    request=plan(tmp_path,count=1);now=[0.]
+    def runner(*args,**kwargs):
+        now[0]=30.;return dict(state='interrupted',reason=batch.DEADLINE_INTERRUPTED,seconds=30.)
+    result=batch.execute(request,runner=runner,clock=lambda:now[0],environ={'GALAXY_SLOTS':'1'})
+    assert result['status']=='complete' and result['counts']==dict(prepared=0,failed=1,cancelled=0,pending=0)
+    assert 'full fresh batch budget' in result['entries'][0]['reason']
+    assert not result['all_prepared'] and 'result' not in result['entries'][0]
+
+
+def test_late_technical_failure_is_not_reclassified_as_a_deadline_deferral(tmp_path):
+    request=plan(tmp_path,count=2);now=[0.]
+    def runner(task,payload,scratch,**kwargs):
+        if task['entry']=='0'*24:
+            row=prepared(task,payload,scratch,**kwargs);now[0]=10.;return row
+        return dict(state='failed',reason='Native structural import failed',seconds=2.)
+    result=batch.execute(request,runner=runner,clock=lambda:now[0],environ={'GALAXY_SLOTS':'1'})
+    assert [row['state'] for row in result['entries']]==['prepared','failed']
+    assert result['entries'][1]['reason']=='Native structural import failed'
 
 
 def test_cancel_before_start_preserves_all_entries_as_pending(tmp_path):

@@ -18,6 +18,7 @@ on:
       - tests/gpx_recipe/test_native_peak_precision*.py
       - tests/gpx_recipe/test_native_peak_memo*.py
       - tests/gpx_recipe/test_native_peak_batch*.py
+      - tests/gpx_recipe/test_native_peak_workload.py
       - tests/gpx_recipe/test_native_peak_groups.py
       - tests/gpx_recipe/test_native_peak_records.py
       - tests/gpx_recipe/test_native_peak_derivative_batch*.py
@@ -178,6 +179,7 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_training_checkpoint.py \
             /validation/tests/gpx_recipe/test_structural_training_checkpoint_native.py \
             /validation/tests/gpx_recipe/test_native_peak_batch.py \
+            /validation/tests/gpx_recipe/test_native_peak_workload.py \
             /validation/tests/gpx_recipe/test_native_peak_groups.py \
             /validation/tests/gpx_recipe/test_native_window_response.py \
             /validation/tests/gpx_recipe/test_native_axis_view.py \

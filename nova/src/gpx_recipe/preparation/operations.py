@@ -126,7 +126,7 @@ def pending_entries(library, *, deferred=()):
         raise ValueError('This library needs a supported scientific preparation plan before admission')
     deferred=set(deferred)
     if any(library.row(identifier)['state']!='preparing' for identifier in deferred):
-        raise ValueError('Only verified unstarted attempts may be deferred')
+        raise ValueError('Only verified unfinished attempts may be deferred')
     groups = {}
     for row in library.document['entries']:
         model = row['model'];settings = model['settings']

@@ -76,8 +76,9 @@ def outcomes(job, result, root, plan):
                     or not math.isfinite(row['seconds']) or row['seconds']<0))):
             raise ValueError('Invalid preparation batch member receipt')
         if row['state']=='pending' and row['reason'] not in {
-                'batch_time_budget','batch_artifact_budget','cancelled_before_start','not_started'}:
-            raise ValueError('An unstarted preparation needs its explicit worker disposition')
+                'batch_time_budget','batch_artifact_budget','cancelled_before_start','not_started',
+                batch.DEADLINE_INTERRUPTED}:
+            raise ValueError('An unfinished preparation needs its explicit worker disposition')
         actual.append({k:row[k] for k in ('entry','attempt')});counts[row['state']]+=1
     if (actual!=job['members'] or not isinstance(result['counts'],dict) or result['counts']!=counts
             or any(type(n) is not int for n in result['counts'].values())
