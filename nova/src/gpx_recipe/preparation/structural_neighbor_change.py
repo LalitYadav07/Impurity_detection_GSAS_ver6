@@ -50,6 +50,61 @@ class NeighborGraph:
     excluded_coincident_contacts:int
     partially_occupied_sites:int
 
+    def first_strong_amplitude(self,direction,maximum_amplitude,*,reference_coordinates=None,
+                               reference_metric=None,target_fraction=.021):
+        """Solve a fixed-cell displacement ray before rendering diffraction.
+
+        Each squared contact length is quadratic in amplitude. Both increasing
+        and decreasing lengths are checked, with no monotonicity assumption.
+        This is a geometric proposal only: callers must still apply the whole
+        native coordinate box and chemistry checks. A missing proposal cannot
+        discard a mode or establish diffraction invisibility.
+        """
+        direction=_coordinates(direction)
+        if (direction.shape!=self.coordinates.shape
+                or type(maximum_amplitude)not in (int,float) or not np.isfinite(maximum_amplitude)
+                or not 0<maximum_amplitude<=1e6
+                or type(target_fraction)not in (int,float) or not np.isfinite(target_fraction)
+                or not STRONG_FRACTION<target_fraction<1
+                or (reference_coordinates is None)!=(reference_metric is None)):
+            raise ValueError('A bounded complete fixed-cell ray and above-threshold geometric target required')
+        ref=self.coordinates if reference_coordinates is None else _coordinates(reference_coordinates)
+        if ref.shape!=direction.shape:raise ValueError('The parent reference changed atom identities')
+        metric=self.metric if reference_metric is None else metric_matrix(reference_metric)
+        empty=dict(amplitude=None,target_fraction=float(target_fraction),
+            maximum_amplitude=float(maximum_amplitude),screening_qualified=False)
+        if self.excluded_coincident_contacts:
+            return dict(empty,status='unresolved_coincident_parent_contacts')
+        i,j=self.pairs.T;v=ref[j]-ref[i]+self.images;w=direction[j]-direction[i]
+        before,errors=_distances(ref,metric,self.pairs,self.images)
+        if np.any(before<=errors):return dict(empty,status='unresolved_parent_distance_precision')
+        a=np.einsum('ni,ij,nj->n',w,metric,w)
+        b=2*np.einsum('ni,ij,nj->n',v,metric,w)
+        if np.any(a<0) or not np.isfinite(a).all() or not np.isfinite(b).all():
+            raise ValueError('Unresolved fixed-cell contact polynomial')
+        proposals=[]
+        for sign in [-1,1]:
+            c=-(2*sign*target_fraction+target_fraction**2)*before**2
+            discriminant=b*b-4*a*c
+            if not np.isfinite(discriminant).all():raise ValueError('Contact roots exceeded finite arithmetic')
+            possible=discriminant>=0
+            square=np.sqrt(np.maximum(discriminant,0.))
+            q=-.5*(b+np.copysign(square,b))
+            roots=[np.divide(q,a,out=np.full_like(a,np.inf),where=a>0),
+                   np.divide(c,q,out=np.full_like(a,np.inf),where=q!=0),
+                   np.divide(-c,b,out=np.full_like(a,np.inf),where=(a==0)&(b!=0))]
+            for root in roots:
+                valid=possible&np.isfinite(root)&(root>0)&(root<=maximum_amplitude)
+                for index in np.flatnonzero(valid):proposals.append((float(root[index]),int(index)))
+        if not proposals:return dict(empty,status='target_not_reached_inside_declared_ray_bound')
+        amplitude,index=min(proposals)
+        report=self.compare(ref+amplitude*direction,metric,
+            reference_coordinates=ref,reference_metric=metric)
+        if report['strong_neighbor_distance_change'] is not True:
+            return dict(empty,status='unresolved_proposed_contact_precision')
+        return dict(empty,status='geometric_proposal_requires_native_admission',amplitude=amplitude,
+            contact=index,verified_maximum_relative_change=report['maximum_relative_change'])
+
     def compare(self,coordinates,metric,*,reference_coordinates=None,reference_metric=None):
         """Compare to the corresponding parent at the same acquisition context.
 

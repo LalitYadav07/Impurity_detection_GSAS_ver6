@@ -1553,3 +1553,11 @@ resolution and noise affect the observed signature. This report neither
 removes weak examples nor changes their symmetry labels. It does not yet
 enforce a two-percent sampling target or provide a diffraction-detectability
 qualification. Those require separate coverage and observation diagnostics.
+
+For fixed-cell displacement rays, the report helper also solves the exact
+quadratic distance equations for a first 0.021 relative-distance target,
+checking both compression and expansion branches. It verifies the proposed
+geometry again without rendering diffraction. The proposal remains subject
+to the caller's original coordinate box and chemistry checks. Failure to find
+an admissible proposal cannot remove that mode or imply that its diffraction
+signature is undetectable. This proposal helper is not yet the default sampler.

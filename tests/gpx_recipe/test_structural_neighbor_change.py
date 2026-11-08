@@ -78,3 +78,61 @@ def test_invalid_geometry_cannot_be_reported_as_a_weak_distortion(case):
         elif case=='nonfinite':graph.compare(xyz*np.nan,g)
         elif case=='bad_metric':graph.compare(xyz,-g)
         else:graph.compare(xyz,g,reference_coordinates=xyz)
+
+
+@pytest.mark.parametrize('sign',[-1,1])
+def test_fixed_cell_contact_roots_find_compression_and_expansion_without_a_profile(sign):
+    xyz,g,graph=example();direction=np.array([[0.,0,0],[sign*.2,0,0]])
+    d=graph.first_strong_amplitude(direction,.1)
+    assert d['amplitude']==pytest.approx(.021,rel=1e-12)
+    assert d['verified_maximum_relative_change']==pytest.approx(.021,rel=1e-12)
+    before=graph.compare(xyz+direction*(d['amplitude']*.9),g)
+    assert before['maximum_relative_change']<.021
+    assert not d['screening_qualified']
+
+
+def test_perpendicular_displacement_uses_quadratic_distance_change_not_a_linear_approximation():
+    xyz,g,graph=example();direction=np.array([[0.,0,0],[0.,.2,0]])
+    d=graph.first_strong_amplitude(direction,.5)
+    assert d['amplitude']==pytest.approx(np.sqrt(1.021**2-1),rel=1e-12)
+    assert d['verified_maximum_relative_change']==pytest.approx(.021,rel=1e-12)
+
+
+def test_unreachable_target_and_common_translation_do_not_invent_a_strong_sample():
+    xyz,g,graph=example()
+    for direction,limit in [(np.array([[0.,0,0],[.2,0,0]]),.01),(np.ones_like(xyz),.1)]:
+        d=graph.first_strong_amplitude(direction,limit)
+        assert d['amplitude'] is None and d['status']=='target_not_reached_inside_declared_ray_bound'
+
+
+def test_polynomial_solver_checks_both_branches_after_a_contact_turning_point():
+    xyz,g,graph=example();direction=np.array([[0.,0,0],[-.2,.01,0]])
+    d=graph.first_strong_amplitude(direction,3.)
+    assert 0<d['amplitude']<.03
+    assert d['verified_maximum_relative_change']==pytest.approx(.021,rel=1e-12)
+
+
+@pytest.mark.parametrize('case',['short','bad_limit','nonfinite','below_threshold','incomplete_parent'])
+def test_contact_root_invalid_inputs_fail_instead_of_reducing_sampling_scope(case):
+    xyz,g,graph=example();direction=np.ones_like(xyz);kwargs={};limit=.1
+    if case=='short':direction=direction[:1]
+    elif case=='bad_limit':limit=True
+    elif case=='nonfinite':direction*=np.nan
+    elif case=='below_threshold':kwargs['target_fraction']=.01
+    else:kwargs['reference_coordinates']=xyz
+    with pytest.raises(ValueError):graph.first_strong_amplitude(direction,limit,**kwargs)
+
+
+def test_first_contact_crossings_remain_correct_across_skew_metrics_and_random_directions():
+    rng=np.random.default_rng(9621);xyz=np.array([[0.,0,0],[.2,.05,.03]])
+    for _ in range(48):
+        matrix=np.eye(3)*3+rng.normal(scale=.2,size=(3,3));metric=matrix.T@matrix*25
+        graph=from_parent(xyz,metric,[1.,1.]);direction=rng.normal(scale=.05,size=xyz.shape)
+        proposal=graph.first_strong_amplitude(direction,2.)
+        assert proposal['amplitude'] is not None
+        amplitude=proposal['amplitude']
+        at=graph.compare(xyz+direction*amplitude,metric)
+        assert at['maximum_relative_change']==pytest.approx(.021,abs=1e-12)
+        for fraction in [.1,.5,.9,.99]:
+            before=graph.compare(xyz+direction*(amplitude*fraction),metric)
+            assert before['maximum_relative_change']<.021
