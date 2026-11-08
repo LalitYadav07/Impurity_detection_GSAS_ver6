@@ -94,6 +94,28 @@ class CapturingService(Service):
         return 'request-hda'
 
 
+def test_live_submission_forwards_origin_hdas_once_outside_the_scientific_packet(tmp_path,monkeypatch):
+    prepared=library(tmp_path/'library');request,_=request_for(tmp_path/'source',prepared)
+    service=CapturingService(tmp_path);runtime=GalaxyLiveRuntime(tmp_path/'runtime',service)
+    runtime.preparation_provider=lambda context,root:hints.capture(prepared,context,root)
+    calls=[]
+    def origins(actual_runtime,captured):
+        assert actual_runtime is runtime and captured.get('prepared_scattering')
+        calls.append(captured['prepared_scattering']['snapshot_sha256'])
+        return ['original-receipt1','original-receipt2']
+    monkeypatch.setattr('radar_pd_nova.preparation_evidence.input_ids',origins)
+    first=runtime.call(request,tmp_path/'first',dispatch_key='d'*24)
+    second=runtime.call(request,tmp_path/'second',dispatch_key='d'*24)
+    assert first['packet_id']==second['packet_id'] and len(calls)==1
+    assert len(service.uploads)==len(service.submissions)==1
+    assert service.submissions[0]['inputs']['preparation_evidence']==[
+        {'dataset_id':'original-receipt1'},{'dataset_id':'original-receipt2'}]
+    with zipfile.ZipFile(io.BytesIO(service.uploads[0])) as packet:
+        assert 'preparation_evidence' not in json.loads(packet.read('request.json'))
+        assert not any('certificate' in name or 'authority' in name for name in packet.namelist())
+    assert 'prepared_scattering' not in request
+
+
 def test_live_recovery_keeps_the_original_job_after_disposable_theory_is_lost(tmp_path):
     prepared=library(tmp_path/'library');request,_=request_for(tmp_path/'source',prepared)
     service=CapturingService(tmp_path);runtime=GalaxyLiveRuntime(tmp_path/'runtime',service)

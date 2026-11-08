@@ -66,7 +66,12 @@ def native(request,inputs,root,cancel):
         environment=native_environment()
         process=run_scientific([sys.executable,*command],timeout=request['timeout'],cancel_event=cancel,
             cwd=root,env=environment,stdout=log,stderr=subprocess.STDOUT)
-    if process.returncode or not output.is_file():raise RuntimeError('The native operation stopped before producing its checked response')
+    if process.returncode or not output.is_file():
+        reason=None
+        if operation.startswith('preparation-'):
+            from gpx_recipe.preparation.failures import read as read_failure
+            reason=read_failure(output,operation.removeprefix('preparation-'),payload)
+        raise RuntimeError(reason or 'The native operation stopped before producing its checked response')
     return json.loads(output.read_text()),root
 
 

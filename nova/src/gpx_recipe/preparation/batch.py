@@ -133,7 +133,10 @@ def run_task(task, request, scratch, *, cancel, timeout):
         except subprocess.TimeoutExpired:
             return dict(state='failed',reason='Native preparation exceeded this batch deadline',seconds=time.monotonic()-began)
     if result.returncode or not output.is_file():
-        return dict(state='failed',reason='Native preparation exited without a complete receipt',seconds=time.monotonic()-began)
+        from .failures import read as read_failure
+        reason=read_failure(output,task['kind'],request)
+        return dict(state='failed',reason=reason or 'Native preparation exited without a complete receipt',
+            seconds=time.monotonic()-began)
     if output.stat().st_size>MAX_METADATA:raise ValueError('Native preparation receipt is oversized')
     return dict(state='prepared',result=json.loads(output.read_text()),reason='',seconds=time.monotonic()-began)
 

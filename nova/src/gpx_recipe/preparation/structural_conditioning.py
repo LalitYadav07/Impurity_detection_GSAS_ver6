@@ -53,7 +53,11 @@ class ParentConditioner:
                                   for g in self.metrics])
         # Preserve strict native/chemistry diagnostics instead of turning an
         # impossible shared parent into endless child resampling.
-        for control in self.controls:source.check(control)
+        for control in self.controls:
+            if np.any(abs(control)>source.radii):
+                from .failures import PreparationScopeError
+                raise PreparationScopeError('parent_cell_domain_conflict')
+            source.check(control)
         for array in (self.basis,self.mapping,self.parents,self.metrics,self.controls):array.flags.writeable=False
 
     def coordinates(self,metric):

@@ -137,11 +137,13 @@ def test_conditioned_admission_redraws_child_rays_without_changing_shared_parent
 
 
 def test_impossible_shared_parent_is_not_resampled_for_a_candidate():
+    from gpx_recipe.preparation.failures import PreparationScopeError
     source,_,space,basis,parents,_=setup()
     source.radii[1:]=1e-12
     before=parents.copy()
-    with pytest.raises(ValueError,match='physical domain'):
+    with pytest.raises(PreparationScopeError,match='reviewed cell bounds') as caught:
         ParentConditioner(source,space,basis,parents)
+    assert caught.value.code=='parent_cell_domain_conflict'
     np.testing.assert_array_equal(parents,before)
 
 

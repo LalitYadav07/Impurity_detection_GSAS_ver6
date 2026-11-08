@@ -166,7 +166,6 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     # This intentionally tiny sampling budget checks handoffs, not posterior
     # convergence, magnetic identification or an exposure recommendation.
     from gpx_recipe.live.packet import create_packet
-    from gpx_recipe.live.galaxy_worker import run_packet
     preflight=tmp_path/'live-preflight.json'
     write_json(preflight,[dict(id=candidate['id'],compatible=True,dimensions=3)])
     live_request=dict(source_gpx=str(source),source_sha256=file_sha(source),
@@ -178,8 +177,17 @@ def test_theory_library_reaches_real_model_jobs_and_current_native_checks(tmp_pa
     live_document=hints.capture(library,hints.live_context(live_request,catalog),live_inputs)
     live_request['prepared_scattering']=live_document
     packet=tmp_path/'live-packet.zip';create_packet(live_request,packet,prepared_root=live_inputs)
-    with authority.server_scope(envelope,tmp_path):
-        live=run_packet(packet,tmp_path/'live-native',tmp_path/'live-result.zip',tmp_path/'live-cache.zip')
+    # Exercise the installed CLI boundary, not an authority scope provided by
+    # the test around an otherwise unaware launcher. Galaxy supplies this
+    # envelope separately from the untrusted scientific packet.
+    with (tmp_path/'live-wrapper.log').open('w') as log:
+        subprocess.run([sys.executable,'-m','gpx_recipe.live.galaxy_worker',str(packet),
+            str(tmp_path/'live-native'),str(tmp_path/'live-result.zip'),str(tmp_path/'live-cache.zip')]+
+            (['--preparation-evidence',str(envelope)] if envelope is not None else []),
+            check=True,timeout=300,stdout=log,stderr=subprocess.STDOUT)
+    live=json.loads((tmp_path/'live-native/result.json').read_text())
+    with __import__('zipfile').ZipFile(tmp_path/'live-result.zip') as archive:
+        assert not any('authority' in name or name.endswith('certificate.json') for name in archive.namelist())
     assert len(live['rows'])==1 and live['rows'][0]['status'] in {'conditional_posterior','sampling_unresolved'},live['rows']
     assert not live['rows'][0].get('sampling_incomplete'),live['rows']
     assert live['rows'][0].get('posterior')

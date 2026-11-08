@@ -6,7 +6,7 @@ from .packet import unpack_packet,unpack_cache,pack_cache,canonical
 from .contracts import file_hash
 
 
-def run_packet(packet,directory,result_archive,cache_archive,*,cache=None):
+def _run_packet(packet,directory,result_archive,cache_archive,*,cache=None):
     root=Path(directory).resolve()
     request,packet_id=unpack_packet(packet,root)
     if cache:unpack_cache(cache,root)
@@ -52,11 +52,26 @@ def run_packet(packet,directory,result_archive,cache_archive,*,cache=None):
     return output
 
 
+def run_packet(packet,directory,result_archive,cache_archive,*,cache=None,preparation_evidence=None):
+    """Use only evidence supplied separately by the fixed Galaxy launcher.
+
+    The temporary authority lives outside the transported result directory.
+    An absent envelope explicitly suppresses inherited authority; scientific
+    packet fields and uploaded cache flags cannot establish native provenance.
+    """
+    from ..preparation.authority import server_scope
+    workspace=Path(directory).resolve().parent;workspace.mkdir(parents=True,exist_ok=True)
+    with server_scope(preparation_evidence,workspace):
+        return _run_packet(packet,directory,result_archive,cache_archive,cache=cache)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('packet');parser.add_argument('directory');parser.add_argument('result_archive');parser.add_argument('cache_archive');parser.add_argument('--cache')
+    parser.add_argument('--preparation-evidence')
     args=parser.parse_args()
-    run_packet(args.packet,args.directory,args.result_archive,args.cache_archive,cache=args.cache)
+    run_packet(args.packet,args.directory,args.result_archive,args.cache_archive,
+        cache=args.cache,preparation_evidence=args.preparation_evidence)
 
 
 if __name__=='__main__':main()

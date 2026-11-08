@@ -67,6 +67,13 @@ An infeasible parent-only control or an exhausted trajectory scope still fails
 the block. This sampling change does not widen an existing model's verified
 parent-reference envelope; that requires new native curves and held-out tests.
 
+Parent-reference sampling also does not enlarge the child's reviewed cell
+domain. An incompatible parent-only control retains the declared cells and
+bounds and fails with a specific scope-conflict message. Bounded, request-bound
+diagnostic receipts carry that reason through native batches and single Galaxy
+jobs. Failed members remain failed while successful siblings can be published;
+the diagnostics cannot create a scientific result or a preparation certificate.
+
 CPU attention training now saves owned, atomic numerical checkpoints during
 warmup and after complete epochs. Repeating the identical training request in
 the same surviving worker directory verifies the feature cache and restores

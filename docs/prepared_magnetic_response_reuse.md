@@ -51,6 +51,13 @@ Live packets. The existing bounded packet budget still applies. Older
 factor-only entries remain usable. Omitted or unavailable optional assets do
 not remove scientific candidates.
 
+The Live launcher passes the selected original receipt datasets through the
+same creating-job evidence helper as Model campaigns. Its fixed Galaxy command
+supplies the rendered evidence separately from the scientific packet and cache.
+The worker owns a temporary authority scope outside its result archive; missing
+evidence suppresses inherited authority and retains native requalification.
+Recovery keeps the acknowledged dispatch and does not select a new origin.
+
 Native compiler receipts record `prepared_rendered_response_reused`, the
 exact rendered identity and component hashes, originating certificate, native
 construction call counts and fallback notes. Preparation attachments separately

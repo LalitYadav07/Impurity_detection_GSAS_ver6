@@ -244,16 +244,21 @@ def main():
     parser.add_argument('request')
     parser.add_argument('output')
     args = parser.parse_args()
-    if args.kind=='batch':
-        import threading
-        from ..process import cancellation_signals
-        from .batch import execute as execute_batch
-        cancel=threading.Event()
-        with cancellation_signals(cancel):
-            result=execute_batch(json.loads(Path(args.request).read_text()),cancel=cancel)
-        write_json(args.output,result)
-    else:
-        write_json(args.output, execute(args.kind, json.loads(Path(args.request).read_text())))
+    request=json.loads(Path(args.request).read_text())
+    try:
+        if args.kind=='batch':
+            import threading
+            from ..process import cancellation_signals
+            from .batch import execute as execute_batch
+            cancel=threading.Event()
+            with cancellation_signals(cancel):result=execute_batch(request,cancel=cancel)
+        else:result=execute(args.kind,request)
+    except Exception as error:
+        from .failures import write as write_failure
+        try:write_failure(args.output,args.kind,request,error)
+        except Exception:pass  # Diagnostic publication must not replace the original failure.
+        raise
+    write_json(args.output,result)
 
 
 if __name__ == '__main__':

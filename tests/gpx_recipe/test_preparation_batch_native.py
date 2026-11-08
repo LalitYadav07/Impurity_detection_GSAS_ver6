@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import copy
+import os
 
 import numpy as np
 
@@ -18,9 +19,14 @@ from gpx_recipe.preparation.magnetic import load, ARRAYS
 from gpx_recipe.symmetry.bundle import pack, unpack
 from gpx_recipe.symmetry.compiler import file_sha, package_signature
 from gpx_recipe.symmetry.contracts import digest
+from gpx_recipe.symmetry.resources import allocation
 
 
 def test_two_bank_native_preparation_shares_one_job_and_exports_no_construction_gpx(tmp_path):
+    # Model a two-slot scheduler grant explicitly; the test runner may itself
+    # have four or more slots. The actual container quota still limits it.
+    environment=dict(os.environ,GALAXY_SLOTS='2',GALAXY_MEMORY_MB='8192')
+    expected_workers=allocation(4,environ=environment)['workers']
     banks={};models=[];parent=None
     for kind in ('PNC','PNT'):
         payload,protocol,candidate=request(tmp_path/kind,kind)
@@ -48,13 +54,14 @@ def test_two_bank_native_preparation_shares_one_job_and_exports_no_construction_
         subprocess.run([sys.executable,str(script),'native',str(source),str(tmp_path/'inputs.zip'),
             str(tmp_path/'request.json'),str(tmp_path/'job'),str(tmp_path/'result.zip'),
             '--preparation-certificate',str(tmp_path/'certificate.json')],
-            check=True,timeout=180,stdout=stream,stderr=subprocess.STDOUT)
+            check=True,timeout=180,stdout=stream,stderr=subprocess.STDOUT,env=environment)
     received=unpack(tmp_path/'result.zip',tmp_path/'received')
     envelope=json.loads((received/'response.json').read_text());result=envelope['result']
     assert result['schema']==RESULT_SCHEMA and result['status']=='complete'
     assert result['plan_sha256']==digest(plan) and len(result['entries'])==2
     assert result['allocation']['requested_workers']==4
-    assert 1<=result['allocation']['workers']<=2
+    assert result['allocation']['workers']==expected_workers
+    assert 1<=result['allocation']['peak_admitted_tasks']<=min(2,expected_workers)
     assert all(row['state']=='prepared' for row in result['entries'])
     assert result['observations_included'] is False and result['scientific_result'] is False
     assert not any(name.endswith('.gpx') or '/.work/' in name for name in envelope['files'])
@@ -80,7 +87,7 @@ def test_two_bank_native_preparation_shares_one_job_and_exports_no_construction_
     with (tmp_path/'serial-wrapper.log').open('w') as stream:
         subprocess.run([sys.executable,str(script),'native',str(source),str(tmp_path/'inputs.zip'),
             str(tmp_path/'serial-request.json'),str(tmp_path/'serial-job'),str(tmp_path/'serial-result.zip')],
-            check=True,timeout=180,stdout=stream,stderr=subprocess.STDOUT)
+            check=True,timeout=180,stdout=stream,stderr=subprocess.STDOUT,env=environment)
     restored=unpack(tmp_path/'serial-result.zip',tmp_path/'serial-received')
     serial_result=json.loads((restored/'response.json').read_text())['result']
     assert serial_result['all_prepared'] and serial_result['allocation']['workers']==1

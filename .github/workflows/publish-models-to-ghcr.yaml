@@ -9,6 +9,7 @@ on:
       - tests/gpx_recipe/test_prepared_structural_acceptance_native.py
       - tests/gpx_recipe/test_structural_block_damping.py
       - tests/gpx_recipe/test_preparation*.py
+      - tests/gpx_recipe/test_live_preparation_authority.py
       - tests/gpx_recipe/test_prepared_k_series_native.py
       - tests/gpx_recipe/test_prepared_model_handoff_native.py
       - tests/gpx_recipe/test_preparation_rendered_magnetic.py
@@ -184,8 +185,10 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_background_context.py \
             /validation/tests/gpx_recipe/test_quadratic_qualification.py \
             /validation/tests/gpx_recipe/test_preparation_authority.py \
+            /validation/tests/gpx_recipe/test_live_preparation_authority.py \
             /validation/tests/gpx_recipe/test_preparation_batch.py \
             /validation/tests/gpx_recipe/test_preparation_batch_cancellation.py \
+            /validation/tests/gpx_recipe/test_preparation_failures.py \
             /validation/tests/gpx_recipe/test_preparation_native_size.py \
             /validation/tests/gpx_recipe/test_preparation_magnetic_arrays.py \
             /validation/tests/gpx_recipe/test_native_forward.py \
@@ -299,6 +302,7 @@ jobs:
             /validation/tests/gpx_recipe/test_native_cell_proposals.py \
             /validation/tests/gpx_recipe/test_preparation_worker_native.py \
             /validation/tests/gpx_recipe/test_preparation_batch_native.py \
+            /validation/tests/gpx_recipe/test_preparation_failures_native.py \
             /validation/tests/gpx_recipe/test_preparation_adaptation_native.py \
             /validation/tests/gpx_recipe/test_preparation_authority_native.py \
             /validation/tests/gpx_recipe/test_preparation_magnetic_authority_native.py \

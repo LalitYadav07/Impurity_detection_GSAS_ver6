@@ -87,6 +87,9 @@ class GalaxyLiveRuntime(GalaxyRefinementRuntime):
                     raise RuntimeUnavailable('Live request stopped after upload; no new job was submitted')
                 inputs={'dispatch_key':dispatch_key,'packet':{'dataset_id':packet_dataset}}
                 if cache_dataset_id:inputs['response_cache']={'dataset_id':cache_dataset_id}
+                from ..preparation_evidence import input_ids
+                origins=input_ids(self,request)
+                if origins:inputs['preparation_evidence']=[{'dataset_id':value} for value in origins]
                 try:
                     with pending.open('x') as handle:json.dump(dict(packet_id=packet_id,scientific_packet_id=scientific_id),handle)
                 except FileExistsError:raise RuntimeUnavailable('Another caller owns this live dispatch; recover it') from None
