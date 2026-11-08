@@ -214,7 +214,7 @@ def create_library(root, *, name, source, banks, models, scope=None):
         return PreparationLibrary.create(root,name=name,specification=specification,models=declared,inputs=inputs)
 
 
-def stage_entry(library, identifier, attempt, directory, *, recover_completed=False):
+def stage_entry(library, identifier, attempt, directory, *, recover_completed=False,training_resume=None):
     """Capture or recover this exact attempt without changing its inputs."""
     library.refresh()
     row = library.row(identifier)
@@ -247,7 +247,9 @@ def stage_entry(library, identifier, attempt, directory, *, recover_completed=Fa
         payload[role] = str(target)
     if model['kind']=='structural-training':
         from .structural_dependencies import stage
-        payload=stage(library,model,payload,directory)
+        payload=stage(library,model,payload,directory,resume=training_resume)
+    elif training_resume is not None:
+        raise ValueError('Only structural training can continue an optimizer checkpoint')
     return validate_request(model['kind'], payload)
 
 

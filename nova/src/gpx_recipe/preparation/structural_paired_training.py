@@ -77,11 +77,14 @@ def _representatives(rows,clean,targets,classes):
     return chosen
 
 
-def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
+def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=None,_resume=None):
     import torch
     if (type(epochs) is not int or not 1<=epochs<=1000
             or type(seed) is not int or not 0<=seed<2**32):
         raise ValueError('Bounded attention training epochs and seed required')
+    if (_segment_seconds is not None and (type(_segment_seconds) not in (int,float)
+            or not np.isfinite(_segment_seconds) or _segment_seconds<=0)):
+        raise ValueError('An internal training segment needs a positive finite work budget')
     rows,targets,classes,split,clean,routes=_inputs(cohort)
     dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
         generated_pairs=cohort['original_examples'],
@@ -94,6 +97,9 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
     out=Path(destination);began=time.monotonic()
     run_identity=checkpoint.identity(cohort,rows,targets,split,clean,mean,scale,
         epochs=epochs,seed=seed,workers=budget['workers'])
+    if _resume is not None:
+        from .structural_training_transfer import restore
+        restore(_resume,out,identity=run_identity,epochs=epochs)
 
     with checkpoint.owned_run(out,run_identity):
         def progress(state,**values):
@@ -126,6 +132,21 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                     warmup=warmup,epochs=completed,history=history,best=best,selected_epoch=selected_epoch,
                     best_key=best_key,elapsed_seconds=previous_seconds+time.monotonic()-began)
 
+            def continuation(warmup,completed,*,next_seconds=0.):
+                # Budget changes only job boundaries, never the complete
+                # curriculum, data, epoch target or validation selection.
+                if (_segment_seconds is None
+                        or time.monotonic()-began+next_seconds<_segment_seconds):return None
+                if (completed,warmup)<=(completed_epochs,warmup_done):
+                    raise ValueError('The training work budget cannot advance a complete checkpoint boundary')
+                elapsed=previous_seconds+time.monotonic()-began
+                progress('checkpointed_for_continuation',warmup_completed=warmup,
+                    epochs_completed=completed,epochs=epochs,seconds=elapsed)
+                return dict(schema='radar-attention-training-segment/v1',status='checkpointed',
+                    identity=run_identity,warmup_completed=warmup,epochs_completed=completed,epochs=epochs,
+                    dataset=dataset,seconds=elapsed,trained_model=False,
+                    scientific_result=False,candidate_pruning_authorized=False)
+
             def require_readout():
                 health=training_health(model,rows,representatives,mean,scale)
                 if not health['readout_active']:
@@ -151,8 +172,11 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                 if (step+1)%20==0:
                     save_checkpoint(step+1,0)
                     progress('clean_prototype_warmup',step=step+1,steps=warmup_steps)
+                    pending=continuation(step+1,0)
+                    if pending is not None:return pending
             require_readout()
             for epoch in range(completed_epochs,epochs):
+                epoch_began=time.monotonic()
                 pool=clean_rows if epoch<clean_epochs else train_rows
                 buckets=[pool[targets[pool,c]] for c in range(len(classes))]
                 order=np.concatenate([np.concatenate([rng.choice(bucket,4,replace=True) for bucket in buckets])
@@ -189,6 +213,14 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
                 progress('training',epoch=epoch+1,epochs=epochs,
                     selected_epoch=selected_epoch,validation=metrics,training_rows_seen=int(visited[train_rows].sum()),
                     readout_health=health,strong_training_recall=strong_recall)
+                elapsed_epoch=time.monotonic()-epoch_began
+                next_rows=len(clean_rows) if epoch+1<clean_epochs else len(train_rows)
+                # Retain room for the first full noisy-pool coverage pass and
+                # native publication. A fresh job must still make progress.
+                estimate=(3.*elapsed_epoch*next_rows/max(1,len(pool))+120.
+                          if epoch+1<epochs else 600.)
+                pending=continuation(warmup_steps,epoch+1,next_seconds=estimate)
+                if pending is not None:return pending
             if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
             model.load_state_dict(best);model.eval()
             health=require_readout()
@@ -233,7 +265,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4):
             seconds=previous_seconds+time.monotonic()-began,history=history,
             training_recovery=dict(identity=run_identity,warmup_completed_on_resume=warmup_done,
                 epochs_completed_on_resume=completed_epochs,
-                scope='Owned worker-local CPU state; checkpoints are not portable library artifacts'))
+                scope='Owned CPU optimizer state, retained locally or restored from a bound worker continuation; checkpoints are not model-library artifacts'))
         encoded=(json.dumps(metadata,indent=2,allow_nan=False)+'\n').encode()
         if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
         (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',metadata)

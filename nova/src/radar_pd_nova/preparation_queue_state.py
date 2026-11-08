@@ -71,9 +71,14 @@ def validate(value,library,runtime,identity):
                     or not isinstance(outcome['reason'],str) or len(outcome['reason'])>2000
                     or not isinstance(outcome['source'],str) or outcome['source'] not in {'worker','verification','job','legacy'}):
                 raise ValueError('Invalid preparation member outcome')
-            if outcome['state']=='pending' and (job['mode']!='batch' or job['result_sha256'] is None
-                    or outcome['source']!='worker'):
-                raise ValueError('Only a verified batch may defer an unfinished member')
+            if outcome['state']=='pending':
+                from gpx_recipe.preparation.structural_training_segments import REASON
+                training=(job['mode']=='single' and job['handle'] is not None
+                    and job['handle']['request']['operation']=='preparation-structural-training'
+                    and outcome['reason']==REASON)
+                if ((job['mode']!='batch' and not training) or job['result_sha256'] is None
+                        or outcome['source']!='worker'):
+                    raise ValueError('Only a verified batch or training checkpoint may defer an unfinished member')
             if outcome['state']=='prepared' and (not job['handle'] or not job['handle']['job']):
                 raise ValueError('Prepared work needs its acknowledged native job')
         if job['phase']=='collected' and (not job['handle'] or not job['handle']['job']):

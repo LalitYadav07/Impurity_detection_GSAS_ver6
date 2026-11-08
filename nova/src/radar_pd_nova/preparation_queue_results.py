@@ -46,9 +46,17 @@ def stable_digest(result, root):
     return digest(normalize(result))
 
 
-def outcomes(job, result, root, plan):
+def outcomes(job, result, root, plan, *, requests=None):
     """Check whole-batch completeness before publishing independent siblings."""
     if job['mode']=='single':
+        from gpx_recipe.preparation import structural_training_segments as segments
+        if isinstance(result,dict) and result.get('schema')==segments.SCHEMA:
+            if job['handle']['request']['operation']!='preparation-structural-training':
+                raise ValueError('An optimizer continuation belongs only to its training operation')
+            if requests is None:requests,_=requests_for(job,root)
+            member=job['members'][0];request=requests[member['entry']]
+            segments.validate(result,request,file_sha(request['plan']))
+            return [dict(member,state='pending',reason=segments.REASON,result=result)]
         return [dict(job['members'][0],state='prepared',reason='',result=result)]
     expected={'schema','plan_sha256','status','counts','all_prepared','entries','allocation',
               'output','observations_included','scientific_result','artifacts','seconds'}

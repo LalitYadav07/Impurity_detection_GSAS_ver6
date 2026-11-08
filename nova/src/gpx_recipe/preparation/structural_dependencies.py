@@ -169,7 +169,7 @@ def dependencies(library, model):
     return result
 
 
-def stage(library, model, payload, directory):
+def stage(library, model, payload, directory, *, resume=None):
     """Copy immutable dependency bytes into the job's recoverable input packet."""
     from .structural_jobs import create_plan
     directory=Path(directory);paths=[]
@@ -183,15 +183,16 @@ def stage(library, model, payload, directory):
             if file_sha(path)!=expected:raise ValueError('Training input changed while staging')
         paths.append(target)
     plan=directory/'training-plan.json'
-    create_plan(payload['source'],paths,plan,recover_identical=True)
+    create_plan(payload['source'],paths,plan,recover_identical=True,resume=resume)
     payload['plan']=str(plan)
     return payload
 
 
 def verify(library, model, request):
     """Publication must still refer to every declared dependency, after recovery."""
-    from .structural_jobs import read_plan
+    from .structural_jobs import read_plan,resume_directory
     plan=read_plan(request['plan'])
+    resume_directory(Path(request['plan']),plan)
     expected=[dict(directory='blocks/'+key,manifest_sha256=file_sha(assets['examples.json']),
                    examples_sha256=file_sha(assets['examples.npz'])) for key,assets in dependencies(library,model)]
     if (plan['blocks']!=expected or plan['parent_sha256']!=file_sha(request['source'])

@@ -96,7 +96,7 @@ def _preferred_routes(classes,groups,routes):
                        or list(routes[str(group)])) for group in classes}
 
 
-def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
+def train(cohort, destination, *, epochs=60, seed=89113, threads=4,_segment_seconds=None,_resume=None):
     import torch
     if type(epochs) is not int or not 1 <= epochs <= 1000 or type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError('Bounded training epochs and random seed are required')
@@ -104,7 +104,10 @@ def train(cohort, destination, *, epochs=60, seed=89113, threads=4):
     features = feature_rows(cohort['features']); targets = np.asarray(cohort['compatible_labels'])
     if features.shape[1]==3:
         from .structural_paired_training import train as train_pairs
-        return train_pairs(cohort,destination,epochs=epochs,seed=seed,threads=threads)
+        return train_pairs(cohort,destination,epochs=epochs,seed=seed,threads=threads,
+            _segment_seconds=_segment_seconds,_resume=_resume)
+    if _segment_seconds is not None or _resume is not None:
+        raise ValueError('Numerical continuation requires the three-curve attention training contract')
     split = np.asarray(cohort['split'])
     if (not 2 <= len(classes) <= 230 or features.ndim != 3 or features.shape[1] != 8
             or features.dtype != np.float32

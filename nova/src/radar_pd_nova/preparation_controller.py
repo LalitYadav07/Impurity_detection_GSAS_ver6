@@ -421,7 +421,11 @@ class PreparationMixin:
             store=self._preparation_store()
             library=store.registry.get(s.prep_library);coverage=library.coverage();counts=coverage['counts']
             queue=store._queues.get(s.prep_library)
-            paused=queue.snapshot()['paused'] if queue else True
+            queue_state=queue.snapshot() if queue else None
+            paused=queue_state['paused'] if queue_state else True
+            continuing={member['entry']:job['reason'] for job in (queue_state or {}).get('jobs',[])
+                for member in job['members']
+                if job['outcomes'].get(member['entry'],{}).get('reason')=='training_checkpoint_available'}
             unfinished=bool(counts['pending'] or counts['preparing'])
             s.prep_can_pause=bool(unfinished and queue and not paused)
             from gpx_recipe.preparation.structural_dependencies import ready
@@ -444,6 +448,8 @@ class PreparationMixin:
                 model=row['model'];candidate=model.get('settings',{}).get('candidate',{})
                 display=entry_label(model,labels)
                 reason=row['reason']
+                if model['kind']=='structural-training' and row['state']=='preparing' and not reason:
+                    reason=continuing.get(row['id'],'Training job submitted; a completed model will appear after all epochs and held-out checks.')
                 if model['kind']=='structural-training' and row['state']=='pending' and not reason:
                     keys=model['settings']['dependencies']
                     completed=sum(library.row(key)['state']=='prepared' for key in keys)

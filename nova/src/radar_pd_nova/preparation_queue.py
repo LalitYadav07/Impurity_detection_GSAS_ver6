@@ -108,8 +108,27 @@ class PreparationQueue:
             return batch.stage(self.library,[(m['entry'],m['attempt']) for m in job['members']],
                 self.root/'batches'/job['id'],workers=4,seconds=480)
         member=job['members'][0]
-        return stage_entry(self.library,member['entry'],member['attempt'],
+        resume=None
+        if self.library.row(member['entry'])['model']['kind']=='structural-training':
+            from gpx_recipe.preparation import structural_training_segments as segments
+            for previous in reversed(self._read()['jobs']):
+                outcome=previous['outcomes'].get(member['entry'],{})
+                if (previous['id']==job['id'] or previous['phase']!='collected'
+                        or outcome.get('state')!='pending' or outcome.get('reason')!=segments.REASON):continue
+                requests,_=self._inputs(previous)
+                result,_=self.runtime.collect_native(previous['handle'],self.root)
+                if stable_digest(result,self.root)!=previous['result_sha256']:
+                    raise ValueError('Acknowledged training continuation changed')
+                request=requests[member['entry']]
+                segments.validate(result,request,file_sha(request['plan']))
+                resume=Path(result['output'])/'continuation'
+                break
+        # Each continuation has a distinct immutable packet and destination,
+        # while all segments keep one logical library attempt and curriculum.
+        directory=(self.root/'training-continuations'/job['id'] if resume is not None else
             self.root/'attempts'/member['entry']/('attempt-'+str(member['attempt'])))
+        return stage_entry(self.library,member['entry'],member['attempt'],
+            directory,training_resume=resume)
 
     def _submit(self,state,job):
         payload=self._stage(job)
@@ -166,7 +185,7 @@ class PreparationQueue:
     def _collect(self,state,job):
         requests,plan=self._inputs(job)
         result,_=self.runtime.collect_native(job['handle'],self.root)
-        rows=outcomes(job,result,self.root,plan);checksum=stable_digest(result,self.root)
+        rows=outcomes(job,result,self.root,plan,requests=requests);checksum=stable_digest(result,self.root)
         if job['result_sha256'] is not None and job['result_sha256']!=checksum:
             raise ValueError('Recovered preparation receipt changed')
         job['result_sha256']=checksum;self._save(state)
@@ -201,6 +220,9 @@ class PreparationQueue:
         if cancelled:
             state['paused']=True;self._paused.set()
         job.update(phase='collected',reason='Native work was cancelled; preparation is paused for review.' if cancelled else '')
+        if result.get('schema')=='radar-structural-training-continuation-worker/v1':
+            job['reason']=(f"Training checkpoint saved: {result['epochs_completed']} / {result['epochs']} epochs; "
+                f"{result['warmup_completed']} warmup updates. Continuing the same complete training run.")
         self._save(state,remote=True)
         self._verified.add(job['id'])
 

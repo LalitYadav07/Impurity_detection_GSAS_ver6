@@ -100,9 +100,16 @@ the parameters, AdamW moments, learning-rate schedule, random streams, visited
 rows and validation-selected incumbent. Changes to data, partitions, numerical
 allocation or implementation require a new run. Completed published outputs
 are verified and returned unchanged; damaged published files are not silently
-replaced. These worker-local checkpoints and feature caches are excluded from
-downloadable libraries. This does not yet provide portable optimizer recovery
-after an NDIP worker directory is lost, or structural fit-optimizer recovery.
+replaced. Feature caches stay in worker scratch. For a long three-curve training
+run, a worker yields at a complete warmup or epoch checkpoint before its native
+deadline. Only two bounded data files containing numeric optimizer state and
+its typed receipt enter the acknowledged job output. The queue verifies the
+creating job and captured input hashes, then starts a fresh worker with the
+same logical attempt and full epoch target. Every continuation must advance
+the checkpoint counter; damaged, changed or nonadvancing states remain visible
+failures. Partial work is not a trained model or scientific qualification.
+These optimizer files do not enter downloadable model libraries. This recovery
+does not apply to the separate structural fit optimizer.
 
 Structural Model and Live acquisition receipts separate the current worker's
 preparation from fitting and independent GPX checks. The displayed combined
@@ -1143,7 +1150,8 @@ checksums to one parent CIF and exact instrument profile. NOVA captures those
 assets without loading their arrays in the interactive process; the worker
 checks the numerical blocks, builds a bounded local feature file, then trains
 under the actual allocation guard. The Galaxy wrapper collects only the
-model JSON, numeric weights and training receipt. Large feature working files
+model JSON, numeric weights and training receipt on completion, or the two
+typed checkpoint files at a complete continuation boundary. Large feature working files
 and native scratch do not leave the worker. Portable metadata must fit the
 same bound enforced by its reader before a completed model is published.
 
@@ -1155,8 +1163,11 @@ the selected k/OPD scope remains explicit. The library records the complete
 sample denominator. Missing or overlapping trajectory slices, omitted
 dependencies and different profile contexts cannot form a completed training
 declaration. The existing preparation queue admits training only after every
-declared block is prepared. A trainer owns a single Galaxy job and its own
-allocation-sized tensor pool, rather than nesting under a native batch pool.
+declared block is prepared. Each training segment owns one Galaxy job and its
+own allocation-sized tensor pool, rather than nesting under a native batch
+pool. Successive segments rebuild and verify the same feature data and restore
+the original optimizer, random streams and full curriculum; they do not train
+separate models or reduce the epoch target.
 
 Libraries show separate starting-curve, pattern-block and ranking-model
 counts, with a stage filter and an explicit dependency-wait message. Completed
@@ -1202,8 +1213,9 @@ job. The cross-process file lock remains in place.
 These application dependencies do not grant permission to prune candidates.
 Complete real-NDIP Live/Webmon acceptance, portable recovery after worker loss,
 broader sampling and scientific qualification remain required. Identical
-training requests can now recover worker-local atomic optimizer checkpoints.
-Interrupted jobs do not publish successful training receipts.
+training requests recover worker-local atomic optimizer checkpoints; verified
+complete segments also continue through fresh workers. Interrupted jobs and
+partial segments do not publish successful training receipts.
 
 ## Three-curve attention development
 
@@ -1353,10 +1365,14 @@ the exact native candidate routes and require a freshly calculated reference.
 
 Offline structural training has a separate 7,200-second native deadline,
 checked by the same installed contract in NOVA and the Galaxy entry point.
-The queue uses that deadline for a trainer's single allocated job. Other
+The queue uses that deadline for each allocated training segment. Three-curve
+training cooperatively saves a complete checkpoint at an internal 5,400-second
+budget, allowing time for input checks, collection and cleanup. The budget
+does not reduce the declared training work or trigger test-holdout scoring.
+Other
 native operations retain their 600-second limit, and native generation batches
 retain their existing scheduling and cleanup limits. The longer ceiling is
-not a wall-time guarantee or portable optimizer recovery. Real NDIP queue,
+not a wall-time guarantee. Real NDIP queue,
 allocation, full-data training and experimental acceptance remain to be tested.
 
 Large native paired blocks also support lossless byte-plane storage. The

@@ -202,6 +202,7 @@ jobs:
           PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
             /validation-tests/test_preparation_registry.py \
             /validation-tests/test_preparation_queue.py \
+            /validation-tests/test_preparation_training_continuation.py \
             /validation-tests/test_preparation_batch_queue.py \
             /validation-tests/test_preparation_history.py \
             /validation-tests/test_preparation_workspace.py \

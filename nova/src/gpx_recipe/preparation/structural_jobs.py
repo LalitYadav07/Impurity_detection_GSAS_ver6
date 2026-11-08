@@ -1,7 +1,8 @@
 """Closed scientific-worker operations for structural ranking preparation.
 
-Native example blocks and trained weights are portable data. Feature caches,
-native construction projects and optimizer state stay in the owned worker.
+Native example blocks and trained weights are portable data. Feature caches
+and native construction projects stay in the owned worker. A bounded optimizer
+checkpoint can continue the same captured training run on another worker.
 Neither operation qualifies a classifier to remove refinement candidates.
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ from .structural_training_blocks import (
 
 PLAN_SCHEMA = 'radar-structural-training-plan/v1'
 PAIRED_PLAN_SCHEMA = 'radar-structural-training-plan/v2'
+CONTINUED_PLAN_SCHEMA = 'radar-structural-training-plan/v3'
 MAX_PLAN_BYTES = 8*1024**2
 MAX_INPUT_BYTES = 480*1024**2
 # The shared packet admits parent, profile, plan, and two files per block.
@@ -116,11 +118,12 @@ def publish_result(kind, request, detail, names):
 
 def read_plan(path):
     value = json.loads(read_bounded(path, MAX_PLAN_BYTES))
-    paired=isinstance(value,dict) and value.get('schema')==PAIRED_PLAN_SCHEMA
+    continued=isinstance(value,dict) and value.get('schema')==CONTINUED_PLAN_SCHEMA
+    paired=isinstance(value,dict) and value.get('schema') in {PAIRED_PLAN_SCHEMA,CONTINUED_PLAN_SCHEMA}
     value = fields(value, ['schema', 'parent_sha256', 'instrument_sha256', 'blocks']+
-                   (['representation'] if paired else []))
+                   (['representation'] if paired else [])+(['resume_state'] if continued else []))
     if paired:validate_representation(value)
-    if (value['schema'] not in {PLAN_SCHEMA,PAIRED_PLAN_SCHEMA} or not checksum(value['parent_sha256'])
+    if (value['schema'] not in {PLAN_SCHEMA,PAIRED_PLAN_SCHEMA,CONTINUED_PLAN_SCHEMA} or not checksum(value['parent_sha256'])
             or not checksum(value['instrument_sha256']) or not isinstance(value['blocks'], list)
             or not 1 <= len(value['blocks']) <= MAX_BLOCKS):
         raise ValueError('Training requires a bounded parent/profile example inventory')
@@ -131,17 +134,38 @@ def read_plan(path):
         if name in seen or any(not checksum(row[k]) for k in ('manifest_sha256', 'examples_sha256')):
             raise ValueError('Training blocks need unique directories and exact content identities')
         seen.add(name)
+    if continued:
+        resume=fields(value['resume_state'],['directory','state_sha256','receipt_sha256'])
+        if (resume['directory']!='resume' or not checksum(resume['state_sha256'])
+                or not checksum(resume['receipt_sha256']) or len(value['blocks'])>MAX_BLOCKS-1):
+            raise ValueError('A training continuation needs its bounded numerical resume inventory')
     return value
 
 
 def plan_inputs(path):
     """One packet inventory for NOVA capture and worker-side verification."""
     plan = read_plan(path)
-    return [str(Path(row['directory'])/name) for row in plan['blocks']
+    result=[str(Path(row['directory'])/name) for row in plan['blocks']
             for name in ('examples.json', 'examples.npz')]
+    if plan['schema']==CONTINUED_PLAN_SCHEMA:
+        from .structural_training_transfer import STATE,RECEIPT
+        result.extend(str(Path('resume')/name) for name in (STATE,RECEIPT))
+    return result
 
 
-def create_plan(source, directories, destination, *, recover_identical=False):
+def resume_directory(plan_path,plan):
+    if plan['schema']!=CONTINUED_PLAN_SCHEMA:return None
+    from ..symmetry.compiler import confined
+    from .structural_training_transfer import STATE,RECEIPT,read
+    directory=Path(plan_path).parent/'resume';record=plan['resume_state']
+    for name,key in ((STATE,'state_sha256'),(RECEIPT,'receipt_sha256')):
+        if file_sha(confined(Path(plan_path).parent,str(Path('resume')/name)))!=record[key]:
+            raise ValueError('Captured training continuation changed')
+    read(directory)
+    return directory
+
+
+def create_plan(source, directories, destination, *, recover_identical=False,resume=None):
     """Bind existing observation-free blocks without copying large arrays."""
     destination = Path(destination).resolve()
     source = Path(source)
@@ -173,6 +197,20 @@ def create_plan(source, directories, destination, *, recover_identical=False):
     value = dict(schema=PLAN_SCHEMA, parent_sha256=parent, instrument_sha256=profile, blocks=rows)
     if formats=={REPRESENTATION}:
         value.update(schema=PAIRED_PLAN_SCHEMA,representation=REPRESENTATION)
+    if resume is not None:
+        from .structural_training_transfer import STATE,RECEIPT,read
+        if formats!={REPRESENTATION} or len(directories)>MAX_BLOCKS-1:
+            raise ValueError('Only a bounded three-curve training plan can continue numerical state')
+        resume=Path(resume);receipt,raw=read(resume);target=destination.parent/'resume'
+        if target.is_symlink():raise ValueError('Training resume directory must be owned')
+        target.mkdir(parents=True,exist_ok=True)
+        for name,data in ((STATE,raw),(RECEIPT,read_bounded(resume/RECEIPT,8192))):
+            path=target/name
+            if path.is_symlink() or (path.exists() and path.read_bytes()!=data):
+                raise ValueError('An immutable training resume input changed')
+            if not path.exists():path.write_bytes(data)
+        value.update(schema=CONTINUED_PLAN_SCHEMA,resume_state=dict(directory='resume',
+            state_sha256=file_sha(target/STATE),receipt_sha256=file_sha(target/RECEIPT)))
     # Validate before publishing, including duplicate logical block paths.
     if len((json.dumps(value, indent=2)+'\n').encode()) > MAX_PLAN_BYTES:
         raise ValueError('Training plan exceeds its metadata budget')
@@ -206,6 +244,7 @@ def checked_blocks(plan_path, plan, *, validate_arrays=True):
         if block_representation(metadata)!=plan.get('representation') or len(contexts)!=1:
             raise ValueError('Training block representation or parent trajectory context differs from its plan')
         directories.append(paths[0].parent)
+    resume_directory(plan_path,plan)
     return directories
 
 
@@ -312,6 +351,9 @@ def execute_training(request):
         if paired:
             completed=_completed_training(request,out,plan_sha)
             if completed is not None:return completed
+            from . import structural_training_segments as segments
+            completed=segments.completed(request,out,plan_sha)
+            if completed is not None:return completed
         began = time.monotonic()
         write_json(out/'progress.json', dict(state='assembling_examples', blocks=len(directories)))
         controls = settings['augmentation']
@@ -333,13 +375,16 @@ def execute_training(request):
             write_json(out/'progress.json', dict(state='training', examples=len(cohort['features']),
                                                 independent_groups=len(set(cohort['groups']))))
             model = train(cohort, out/'model', epochs=settings['epochs'], seed=settings['seed'],
-                          threads=settings['workers'])
+                          threads=settings['workers'],**(dict(_segment_seconds=segments.SEGMENT_SECONDS,
+                              _resume=resume_directory(plan_path,plan)) if paired else {}))
         finally:
             cohort['features'].close()
         if (file_sha(plan_path) != plan_sha or file_sha(source) != plan['parent_sha256']
                 or file_sha(instrument)!=plan['instrument_sha256']):
             raise ValueError('Training source or declared plan changed during the job')
         checked_blocks(plan_path, plan)
+        if paired and model.get('schema')=='radar-attention-training-segment/v1':
+            return segments.publish(request,out,plan_sha,model,seconds=time.monotonic()-began)
         receipt = dict(schema='radar-structural-training-worker/v1', status='trained',
             plan_sha256=plan_sha, settings=copy.deepcopy(settings),
             parent_sha256=plan['parent_sha256'], instrument_sha256=plan['instrument_sha256'],
