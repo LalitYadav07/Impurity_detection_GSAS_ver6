@@ -222,8 +222,10 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
         hoverongaps=False, showscale=True,
         meta={**identity, "run_ids": [row["run_id"] for row in view_rows]},
         hovertemplate="Sorted row %{y}<br>x=%{x:.5g}<br>Measured intensity=%{text}<extra></extra>",
-        colorbar={"orientation": "h", "x": .53, "y": -.18, "len": .77,
-                  "thickness": 12, "tickvals": tickvals,
+        colorbar={"orientation": "v", "x": 1.01,
+                  "y": row_heights[1] * (1 - .045) / 2,
+                  "len": min(.52, row_heights[1] * (1 - .045) * .86),
+                  "thickness": 10, "tickvals": tickvals,
                   "ticktext": ticktext, "tickfont": {"size": 10}},
     ), row=2, col=1)
     selected_position = next((i for i, row in enumerate(view_rows)
@@ -293,7 +295,7 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
     fig.update_xaxes(title_text=COORDINATES.get(current.scope.coordinate,
                                                current.scope.coordinate), row=2, col=1)
     fig.update_layout(template="plotly_white", height=height,
-                      margin={"l": 170, "r": 24, "t": 25, "b": 82},
+                      margin={"l": 170, "r": 90, "t": 25, "b": 82},
                       hovermode="closest", barmode="overlay", dragmode="zoom",
                       legend={"orientation": "h", "y": 1.12},
                       uirevision=f"{series}:{revision}")
@@ -824,7 +826,7 @@ class UnetTransitionMixin:
             with html.Div(classes="radar-tracker-header"):
                 html.H3("U-Net feature review", classes="radar-card-title")
                 vuetify.VBtn(text=("setup_collapsed ? 'Show setup' : 'Focus plots'",),
-                             click="setup_collapsed = !setup_collapsed; $nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))",
+                             click="setup_collapsed = !setup_collapsed; $nextTick(() => window.setTimeout(() => { window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && window.Plotly && window.Plotly.Plots.resize(el)); if (setup_collapsed) window.document.querySelector('.radar-tracker-map-shell')?.scrollIntoView({block:'center'}); }, 80))",
                              variant="text", size="small")
                 vuetify.VBtn(text=("unet_transition_follow ? 'Following latest' : 'Return to latest'",),
                              click=self.follow_unet_transition_latest, variant="tonal", size="small",
@@ -1536,10 +1538,9 @@ class UnetTransitionMixin:
         view_rows = rows[start:start + width]
         map_height = _inline_map_height(len(view_rows))
         state.unet_transition_map_height = map_height
-        state.unet_transition_map_scroll_padding = round(
-            25 + (.5 if len(view_rows) <= 8 else .38 if len(view_rows) <= 30 else .3)
-            * (map_height - 107) + .045 * (map_height - 107)
-        )
+        heatmap_top = 25 + ((.5 if len(view_rows) <= 8 else .38 if len(view_rows) <= 30 else .3)
+                            + .045) * (map_height - 107)
+        state.unet_transition_map_scroll_padding = max(0, round(heatmap_top - 48))
         state.unet_transition_map_start = start + 1
         state.unet_transition_map_scroll_max = max_start + 1
         state.unet_transition_map_scan_position = position + 1

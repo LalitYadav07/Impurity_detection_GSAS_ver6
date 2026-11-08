@@ -420,7 +420,7 @@ trees must remain read-only.
 
 ## Transition tracking (0.4.11)
 
-In 0.6.58, **Full-Q U-Net (experimental)** is the default transition evidence
+In 0.6.59, **Full-Q U-Net (experimental)** is the default transition evidence
 view. Each compatible measured pair is transformed with its checksum-verified
 instrument profile, rebinned once onto 1,024 Q bins from 0.25 to 12 Å⁻¹,
 and evaluated in one pass. The before, after and signed-difference curves use

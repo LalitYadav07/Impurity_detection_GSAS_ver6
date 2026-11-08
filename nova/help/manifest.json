@@ -1,6 +1,6 @@
 {
   "schema": "radar-pd-user-guide/v2",
-  "application_version": "0.6.58",
+  "application_version": "0.6.59",
   "pages": [
     "index.html",
     "reference-0.4.34.html"
@@ -506,7 +506,7 @@
     "assets/ff2125e34a54ca4330be.jpg": "ff2125e34a54ca4330be10216af2b81c44e4bc4ed2ed09fe7ef801d7bc53795d",
     "guide.css": "5c42c1e1efb87a99c78d01e726a5856492245faff6eae738f116da679777ce1a",
     "guide.js": "4ab14ce0c86f67a2d8b3f8cbe29a2f49e62ca1e03bd6d1bcd9aba264c118930e",
-    "index.html": "d81fa38436cf77ffec66826603101b3d6dba668fe400e56dac890ba08b68341d",
+    "index.html": "c3d7e1c06e32b253e096d9877a80005b731fad38d5f8c53242a5bce14b32c956",
     "inputs/ages-analysis-settings.yaml": "fbbff1d875b7b38f963c7edfe55ef019bdc01acc5e649c2918b3ae8e428656fc",
     "inputs/approved-refinement-recipe.json": "4e8e9d6365a47df527566ad20caaa4eb3a53b87e6d34bd7360ff0aeca94855fd",
     "inputs/llm-refinement-request.txt": "8bb6e275e5e675c32442279b246b1eaf38632fd6689b07133ce2c06139291283",
