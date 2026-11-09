@@ -100,7 +100,7 @@ class Ranker:
             from .structural_domain import validate
             validate(d['training_domain'])
         validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
-        mode_model=d['architecture']==weights.MODE_ARCHITECTURE
+        mode_model=d['architecture'] in weights.MODE_ARCHITECTURES
         with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
             from . import structural_joint_modes as joint
             expected=ARRAYS|({joint.ARRAY} if mode_model else set())

@@ -15,8 +15,25 @@ from .symmetry_mode_normalization import transform,physical
 
 SCHEMA='radar-conditional-mode-family-readout/v1'
 OBJECTIVE='class-balanced-conditional-interval-pinball-10-90/v1'
+SCALE_METHOD='fitting-distinct-alias-family-amplitude-envelope/v2'
 MAX_FAMILIES=4096
 MAX_QUERIES=16*1024**2//40
+
+
+def _fitting_scale(values):
+    """Condition one family's loss without deleting small native targets.
+
+    A median of positive amplitudes can be dominated by roundoff-sized values
+    in numerical null components, leaving ordinary amplitudes tens of asinh
+    units away. Use the complete fitting envelope instead. Every fitting
+    endpoint then lies in [0, asinh(1)]; held-out endpoints are never clipped.
+    Unknown targets remain absent, and an all-zero family keeps unit scale.
+    """
+    values=np.asarray(values)
+    if values.dtype!=np.float64 or values.ndim!=1 or not np.isfinite(values).all() or np.any(values<0):
+        raise ValueError('Finite nonnegative native float64 fitting endpoints required')
+    maximum=float(values.max(initial=0.))
+    return maximum if maximum>0 else 1.
 
 
 @dataclass(frozen=True)
@@ -70,11 +87,11 @@ def fit(table,cohort):
     np.add.at(counts,(c,f),1);np.add.at(positive,(c[low>0],f[low>0]),1);np.add.at(zero,(c[high==0],f[high==0]),1)
     scales=np.ones(len(families),np.float64)
     for family in range(len(families)):
-        values=high[(f==family)&(high>0)]
-        if len(values):scales[family]=np.median(values)
+        scales[family]=_fitting_scale(high[f==family])
     if not np.isfinite(scales).all() or np.any(scales<=0):raise ValueError('Finite positive fitting-only mode scales required')
     metadata=dict(schema=SCHEMA,targets_identity=table.metadata['identity'],
         classes=list(classes),families=[v['id'] for v in families],normalization=table.metadata['normalization'],
+        target_scale_method=SCALE_METHOD,
         fitting_split_sha256=hashlib.sha256(split.tobytes()).hexdigest(),fitting_rows=len(selected),
         fitting_alias_groups=len(aliases),scales=scales.tolist(),known_intervals=counts.tolist(),
         positive_intervals=positive.tolist(),exact_zero_intervals=zero.tolist(),

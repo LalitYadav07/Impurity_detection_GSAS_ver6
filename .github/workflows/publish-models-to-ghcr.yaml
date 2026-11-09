@@ -189,6 +189,13 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_ranker_training_native.py \
             /validation/tests/gpx_recipe/test_structural_attention_portable_native.py \
             /validation/tests/gpx_recipe/test_structural_attention_metrics_native.py \
+            /validation/tests/gpx_recipe/test_structural_reference_normalization_native.py \
+            /validation/tests/gpx_recipe/test_structural_linear_attention_native.py \
+            /validation/tests/gpx_recipe/test_structural_mode_readout.py \
+            /validation/tests/gpx_recipe/test_structural_mode_readout_native.py \
+            /validation/tests/gpx_recipe/test_structural_joint_modes_native.py \
+            /validation/tests/gpx_recipe/test_structural_mode_calibration.py \
+            /validation/tests/gpx_recipe/test_structural_mode_calibration_native.py \
             /validation/tests/gpx_recipe/test_structural_readout_health_native.py \
             /validation/tests/gpx_recipe/test_structural_paired_training_native.py \
             /validation/tests/gpx_recipe/test_structural_pair_packing.py \

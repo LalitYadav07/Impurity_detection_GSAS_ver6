@@ -28,7 +28,13 @@ def validate(spec):
     d=fields(spec,['schema','classes','families','normalization','scales','known_intervals',
         'targets_identity','fitting_split_sha256','fitting_alias_groups','quantiles',
         'mode_head_trained','intervals_calibrated','experimental_mode_absence_qualified',
-        'candidate_pruning_authorized'])
+        'candidate_pruning_authorized'],{'target_scale_method':None})
+    if 'target_scale_method' not in spec:
+        # Preserve the exact encoded metadata of already-trained median-scale
+        # models. Their saved numerical scales continue to control decoding.
+        d.pop('target_scale_method')
+    elif d['target_scale_method']!=readout.SCALE_METHOD:
+        raise ValueError('Unknown conditional-mode target scaling method')
     classes=d['classes'];families=d['families'];scales=d['scales'];counts=d['known_intervals']
     if (d['schema']!=SCHEMA or not isinstance(classes,list) or not 1<=len(classes)<=230
             or any(type(c)is not int or not 1<=c<=230 for c in classes) or classes!=sorted(set(classes))
@@ -96,6 +102,7 @@ def prepare(cohort,split):
         raise ValueError('Mode and class training must share the exact independent reservation')
     spec=validate(dict(schema=SCHEMA,classes=table.metadata['classes'],families=table.metadata['families'],
         normalization=normal.metadata['normalization'],scales=normal.metadata['scales'],
+        target_scale_method=normal.metadata['target_scale_method'],
         known_intervals=normal.metadata['known_intervals'],targets_identity=table.metadata['identity'],
         fitting_split_sha256=normal.metadata['fitting_split_sha256'],
         fitting_alias_groups=normal.metadata['fitting_alias_groups'],quantiles=[.1,.9],

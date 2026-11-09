@@ -10,7 +10,8 @@ def network(class_count, *, attention=True, tokens=128, architecture=None,family
     import torch
     from torch import nn
     from .structural_attention_pool import adaptive
-    from .structural_attention_weights import ARCHITECTURE,ARCHITECTURES,NORMALIZED_ARCHITECTURE,MODE_ARCHITECTURE
+    from .structural_attention_weights import (ARCHITECTURE,ARCHITECTURES,NORMALIZED_ARCHITECTURE,
+        MODE_ARCHITECTURE,MODE_ARCHITECTURES,PER_CHANNEL_ARCHITECTURE)
     architecture=ARCHITECTURE if architecture is None else architecture
     # One class is meaningful for a mode-only isostructural control. The
     # published class ranker still requires multiple supported SG classes.
@@ -18,20 +19,24 @@ def network(class_count, *, attention=True, tokens=128, architecture=None,family
             or type(attention) is not bool or tokens not in (64, 128, 256)
             or not isinstance(architecture,str) or architecture not in ARCHITECTURES):
         raise ValueError('Explicit bounded three-curve attention architecture required')
-    if architecture==MODE_ARCHITECTURE:
+    if architecture in MODE_ARCHITECTURES:
         from .structural_mode_readout import network as conditional
-        model=network(class_count,attention=attention,tokens=tokens,architecture=ARCHITECTURE)
+        base_architecture=ARCHITECTURE if architecture==MODE_ARCHITECTURE else PER_CHANNEL_ARCHITECTURE
+        model=network(class_count,attention=attention,tokens=tokens,architecture=base_architecture)
         model.mode_head=conditional(class_count,family_count)
+        if architecture==MODE_ARCHITECTURE:model._portable_architecture=architecture
         return model
     if family_count is not None:raise ValueError('Conditional mode tensors require their explicit shared architecture')
-    if architecture==ARCHITECTURE:
+    if architecture in {ARCHITECTURE,PER_CHANNEL_ARCHITECTURE}:
         if tokens!=128:
             raise ValueError('The portable full-local attention readout has exactly 128 tokens')
         from .structural_linear_attention import full_local
         # Reuse the installed convolution/readout and its controlled initial
         # random stream. Legacy model tensors retain their exact old layouts.
         base=network(class_count,attention=False,tokens=128,architecture=NORMALIZED_ARCHITECTURE)
-        return full_local(base,attention=attention)
+        model=full_local(base,attention=attention,shared_reference=architecture==ARCHITECTURE)
+        if architecture==ARCHITECTURE:model._portable_architecture=architecture
+        return model
 
     class AveragePool(nn.Module):
         def forward(self,values):return adaptive(values,tokens)

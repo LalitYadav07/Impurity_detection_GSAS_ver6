@@ -19,7 +19,7 @@ def attend(q,k,v,valid=None):
     return result
 
 
-def full_local(base,*,attention=True):
+def full_local(base,*,attention=True,shared_reference=False):
     import torch
     from torch import nn
     from .structural_attention_pool import adaptive
@@ -76,7 +76,12 @@ def full_local(base,*,attention=True):
                 values=values.masked_fill((coverage==0)[:,None,:],0.)
             rms=values.square().mean(-1).sqrt()
             floor=rms[:,:2].amax(1,keepdim=True).clamp_min(1e-4)*1e-4
-            local=self.local(values/torch.maximum(rms,floor).unsqueeze(-1))
+            # The signed difference retains its amplitude relative to the
+            # parent/current curves. Independently scaling that channel to
+            # unit RMS can amplify a tiny residual or background error.
+            denominator=(rms[:,:2].amax(1,keepdim=True).clamp_min(1e-4)
+                         if shared_reference else torch.maximum(rms,floor))
+            local=self.local(values/denominator.unsqueeze(-1))
             length=local.shape[-1]
             if coverage is not None:
                 valid=adaptive(coverage[:,None,:],length,maximum=True).squeeze(1)>0
@@ -89,7 +94,9 @@ def full_local(base,*,attention=True):
             else:
                 encoded=local if valid is None else local.masked_fill(~valid[:,None,:],0.)
             pooled=self.pool(encoded)
-            hidden=self.head[1](self.head[0](pooled))+self.amplitude(torch.log(rms.clamp_min(1e-8)))
+            amplitude=(torch.log1p(rms/denominator) if shared_reference
+                       else torch.log(rms.clamp_min(1e-8)))
+            hidden=self.head[1](self.head[0](pooled))+self.amplitude(amplitude)
             for layer in list(self.head.children())[2:-1]:hidden=layer(hidden)
             return hidden
 

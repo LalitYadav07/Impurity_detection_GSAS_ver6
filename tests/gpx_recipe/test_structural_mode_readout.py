@@ -42,6 +42,27 @@ def test_changed_holdout_amplitudes_cannot_change_fitting_scales(tmp_path):
     with pytest.raises(ValueError):before.targets(other,np.array([0]))
 
 
+def test_roundoff_majority_cannot_magnify_physical_mode_endpoints():
+    values=np.r_[np.zeros(5),np.full(600,1e-33),[.003,.03]].astype(np.float64)
+    scale=modes._fitting_scale(values)
+    assert scale==.03
+    encoded=transform(values,scale)
+    assert encoded.max()==pytest.approx(np.arcsinh(1.))
+    assert np.array_equal(encoded>0,values>0)
+    np.testing.assert_allclose(physical(encoded,scale),values,rtol=5e-14,atol=0)
+    # This is an invertible unit choice, not a censoring or detection bound.
+    assert transform(np.array([.3]),scale)[0]>np.arcsinh(1.)
+    assert modes._fitting_scale(np.zeros(6,np.float64))==1.
+    assert modes._fitting_scale(np.array([],np.float64))==1.
+    assert modes._fitting_scale(np.array([1e-200,2e-200],np.float64))==2e-200
+
+
+@pytest.mark.parametrize('values',[np.array([np.nan]),np.array([np.inf]),np.array([-.1]),
+    np.array([.1],np.float32),np.array([[.1]])])
+def test_fitting_envelope_rejects_invalid_native_endpoints(values):
+    with pytest.raises(ValueError):modes._fitting_scale(values)
+
+
 @pytest.mark.parametrize('scale,amplitude',[(1.,0.),(2e-200,1e-200),(1e-300,1e200),(1e300,1e200)])
 def test_amplitude_transform_retains_finite_scale_cancellation(scale,amplitude):
     encoded=transform(np.array([amplitude]),scale)

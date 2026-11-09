@@ -37,6 +37,7 @@ def test_shared_joint_training_publishes_bound_mode_weights_and_round_trips_infe
     path,value=cohort(tmp_path/'source')
     result=training.train(value,tmp_path/'model',epochs=2,threads=1)
     assert result['architecture']==weights.MODE_ARCHITECTURE and result['mode_head_trained']
+    assert result['mode_readout']['target_scale_method']==joint.readout.SCALE_METHOD
     assert result['training_objective']==joint.OBJECTIVE and result['checkpoint_selection']==joint.SELECTION
     assert all(row['validation']['mode_validation']['available'] for row in result['history'])
     assert result['test']['mode_validation']['known_rows']>0
@@ -85,6 +86,20 @@ def test_missing_fitting_conditions_stay_unknown_and_never_become_absent(tmp_pat
     assert output['rows'][0]['lower_estimate'] is not None
     assert output['rows'][1]['lower_estimate'] is None and output['rows'][1]['upper_estimate'] is None
     assert all(row['status']=='unresolved' for row in output['rows'])
+
+
+def test_target_scale_method_is_bound_and_legacy_specs_keep_exact_bytes(tmp_path):
+    _,value=cohort(tmp_path/'source');context=joint.prepare(value,value['split'])
+    spec=context.spec
+    assert spec['target_scale_method']==joint.readout.SCALE_METHOD
+    legacy=copy.deepcopy(spec);legacy.pop('target_scale_method')
+    assert joint.validate(legacy)==legacy
+    encoded=joint.encode(legacy)
+    assert joint.decode(encoded,legacy)==legacy
+    assert joint.encode(joint.decode(encoded,legacy)).tobytes()==encoded.tobytes()
+    for invalid in [None,'positive-median/v1','unknown']:
+        with pytest.raises(ValueError,match='scaling method'):
+            joint.validate(dict(spec,target_scale_method=invalid))
 
 
 def test_joint_checkpoint_selection_accounts_for_mode_validation_without_using_test_scores(tmp_path):

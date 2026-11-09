@@ -60,7 +60,7 @@ def test_null_three_curve_input_has_finite_logits_and_weight_gradients():
 def test_old_and_new_architecture_names_cannot_reinterpret_numeric_planes(source,target):
     torch.manual_seed(91)
     def construct(architecture):
-        return network(4,architecture=architecture,**(dict(family_count=3) if architecture==weights.MODE_ARCHITECTURE else {}))
+        return network(4,architecture=architecture,**(dict(family_count=3) if architecture in weights.MODE_ARCHITECTURES else {}))
     plane,layout=weights.pack(construct(source))
     with pytest.raises(ValueError,match='installed architecture'):
         weights.restore(construct(target),plane,layout)

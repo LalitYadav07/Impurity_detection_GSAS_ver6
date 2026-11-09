@@ -7,10 +7,13 @@ import numpy as np
 SCHEMA='radar-three-curve-structural-ranking-model/v1'
 LEGACY_ARCHITECTURE='parent-q-convolution-attention-3-24-32-t128-h4/v1'
 NORMALIZED_ARCHITECTURE='parent-q-convolution-attention-3-24-32-t128-h4-normalized-readout/v2'
-ARCHITECTURE='parent-q-convolution-linear-attention-3-24-32-full-local-h4-readout128/v3'
-MODE_ARCHITECTURE='parent-q-convolution-linear-attention-shared-conditional-modes/v4'
-CLASS_ARCHITECTURES=frozenset({LEGACY_ARCHITECTURE,NORMALIZED_ARCHITECTURE,ARCHITECTURE})
-ARCHITECTURES=CLASS_ARCHITECTURES|{MODE_ARCHITECTURE}
+PER_CHANNEL_ARCHITECTURE='parent-q-convolution-linear-attention-3-24-32-full-local-h4-readout128/v3'
+PER_CHANNEL_MODE_ARCHITECTURE='parent-q-convolution-linear-attention-shared-conditional-modes/v4'
+ARCHITECTURE='parent-q-convolution-linear-attention-shared-reference-rms/v5'
+MODE_ARCHITECTURE='parent-q-convolution-linear-attention-shared-reference-rms-conditional-modes/v6'
+CLASS_ARCHITECTURES=frozenset({LEGACY_ARCHITECTURE,NORMALIZED_ARCHITECTURE,PER_CHANNEL_ARCHITECTURE,ARCHITECTURE})
+MODE_ARCHITECTURES=frozenset({PER_CHANNEL_MODE_ARCHITECTURE,MODE_ARCHITECTURE})
+ARCHITECTURES=CLASS_ARCHITECTURES|MODE_ARCHITECTURES
 REPRESENTATION='reference-current-signed-difference/shared-Q-asinh/v1'
 REFERENCE_KIND='calculated_parent_at_shared_parent_compatible_cell'
 NORMALIZATION='training-channel-standard-deviation/no-centering/v1'
@@ -20,6 +23,13 @@ def _layout(model):
     """Derive layout from installed code; a saved file cannot choose tensors."""
     state=model.state_dict()
     layout=[(name,list(value.shape)) for name,value in state.items()]
+    architecture=getattr(model,'_portable_architecture',None)
+    if architecture is not None:
+        # New semantics must not accept legacy tensors just because their
+        # shapes match. Older architectures retain their exact layout digest.
+        if architecture not in {ARCHITECTURE,MODE_ARCHITECTURE}:
+            raise ValueError('Unknown shared-reference encoder architecture')
+        layout.insert(0,('architecture',architecture))
     digest=hashlib.sha256(json.dumps(layout,separators=(',',':')).encode()).hexdigest()
     return state,digest
 
