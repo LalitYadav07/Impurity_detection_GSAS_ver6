@@ -26,6 +26,8 @@ def terms(logits,compatible):
 def checkpoint_key(metrics):
     """New runs retain rare aliases; old numerical checkpoints stay readable."""
     if not isinstance(metrics,dict):raise ValueError('A checked validation metric is required')
+    from .structural_label_retention import validate_metrics
+    validate_metrics(metrics)
     if metrics.get('loss_method')==OBJECTIVE:
         values=(metrics.get('macro_compatible_nll'),metrics.get('loss'))
     elif 'loss_method' not in metrics:
@@ -57,6 +59,13 @@ def validate_policy(metadata):
             or not isinstance(history,list) or len(history)!=epochs):
         raise ValueError('All-compatible training needs its exact objective and validation history')
     eligible=[]
+    from .structural_label_retention import validate_metrics
+    def retention(metric,role):
+        dataset=metadata.get('dataset');parts=dataset.get('partitions') if isinstance(dataset,dict) else None
+        partition=parts.get(role) if isinstance(parts,dict) else None
+        counts=metadata.get('counts')
+        validate_metrics(metric,classes=metadata.get('classes'),rows=partition.get('rows') if isinstance(partition,dict) else None,
+            class_rows=counts.get(role) if isinstance(counts,dict) else None)
     for i,row in enumerate(history):
         if (not isinstance(row,dict) or row.get('epoch')!=i+1
                 or type(row.get('checkpoint_eligible'))is not bool
@@ -65,6 +74,7 @@ def validate_policy(metadata):
                 or ('mode_validation' in row['validation'])!=joint):
             raise ValueError('All-compatible training history changed its selection policy')
         checkpoint_key(row['validation'])
+        retention(row['validation'],'validation')
         if row['checkpoint_eligible']:eligible.append(row)
     if not eligible or metadata.get('selected_epoch')!=min(eligible,key=lambda row:checkpoint_key(row['validation']))['epoch']:
         raise ValueError('The structural model lost its all-compatible validation-selected checkpoint')
@@ -72,3 +82,4 @@ def validate_policy(metadata):
             or ('mode_validation' in metadata['test'])!=joint):
         raise ValueError('The structural test uses a different objective from training')
     checkpoint_key(metadata['test'])
+    retention(metadata['test'],'test')

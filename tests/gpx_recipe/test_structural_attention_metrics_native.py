@@ -15,6 +15,10 @@ def test_prior_baseline_reports_rare_family_failures_and_set_valued_hits():
     assert result['per_class']['7']['top5']==pytest.approx(1/3)
     assert result['macro_top5']==pytest.approx((5+.5+1/3)/7)
     assert result['worst_class_top5']==pytest.approx(1/3)
+    actual=result['label_retention']['top5']
+    assert actual['any_compatible_hit_rate']==result['top5']
+    assert actual['per_class']['7']['retention']==0.
+    assert actual['all_compatible_retention']==.25
     with pytest.raises(ValueError,match='Every scored family'):
         evaluate(None,rows,targets,np.arange(3),np.zeros((3,1),np.float32),
             np.ones((3,1),np.float32),np.arange(1,8),prior=np.arange(7,0,-1))
@@ -40,5 +44,7 @@ def test_clean_and_noisy_diagnostics_share_exactly_one_forward_pass():
     parts=result.pop('observation_metrics')['partitions']
     assert parts['clean_native']['rows']==2 and parts['clean_native']['top5']==0.
     assert parts['simulated_observation']['rows']==4 and parts['simulated_observation']['top5']==1.
+    assert parts['clean_native']['label_retention']['top5']['all_compatible_retention']==0.
+    assert parts['simulated_observation']['label_retention']['top5']['all_compatible_retention']==1.
     assert result==evaluate(*args)
     assert model.calls==2
