@@ -150,7 +150,26 @@ def test_common_classes_cannot_hide_weak_class_recovery_in_validation(tmp_path):
         rows=1000,top5=.98,macro_top5=.51,worst_class_top5=.02)))
     row=training_validation(library,entry)[0]
     assert row['value']=='98.0%'
-    assert row['detail']=='Class-balanced: 51.0% · Lowest class: 2.0%'
+    assert row['detail']=='Class-balanced compatible hit: 51.0% · Lowest class compatible hit: 2.0%'
+
+
+def test_ambiguous_pattern_hit_cannot_hide_loss_of_a_compatible_label(tmp_path):
+    import numpy as np
+    from gpx_recipe.preparation.structural_label_retention import LabelRetention
+    meter=LabelRetention([1,2,3,4,5,6],5)
+    meter.add(np.array([[True,False,False,False,False,True]]),np.array([[0,1,2,3,4,5]]))
+    library,entry,_=validation_entry(tmp_path,dict(clean_native=dict(
+        rows=1,top5=1.,macro_top5=1.,worst_class_top5=1.,
+        label_retention=dict(top5=meter.finish()))))
+    row=training_validation(library,entry)[0]
+    assert row['value']=='100.0%'
+    assert row['detail']=='Each compatible label: 50.0% average · Lowest label: 0.0% · All labels retained: 0.0% of patterns'
+    path=tmp_path/'entries/train/entry.json'
+    document=json.loads(path.read_text())
+    document['detail']['test']['observation_metrics']['partitions']['clean_native']['top5']=.5
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError,match='same top-five counts'):
+        training_validation(library,entry)
 
 
 @pytest.mark.parametrize('bad',[True,float('nan'),-.1,1.1])

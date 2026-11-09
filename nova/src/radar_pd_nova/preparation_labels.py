@@ -136,12 +136,24 @@ def training_validation(library, entry):
             raise ValueError('Held-out simulation counts and recall need finite bounded values')
         if count:
             balanced=[]
-            for field,label in [('macro_top5','Class-balanced'),('worst_class_top5','Lowest class')]:
+            for field,label in [('macro_top5','Class-balanced compatible hit'),('worst_class_top5','Lowest class compatible hit')]:
                 if field not in row:continue
                 value=row[field]
                 if (type(value) not in (int,float) or not math.isfinite(value) or not 0<=value<=1):
                     raise ValueError('Per-class simulation recall needs finite bounded values')
                 balanced.append(f'{label}: {value:.1%}')
+            if 'label_retention' in row:
+                from gpx_recipe.preparation.structural_label_retention import validate
+                retention=row['label_retention']
+                if not isinstance(retention,dict) or 'top5' not in retention:
+                    raise ValueError('Complete compatible-label retention diagnostics required')
+                retained=validate(retention['top5'],rows=count)
+                if retained['requested_top_k']!=5 or not math.isclose(
+                        retained['any_compatible_hit_rate'],recall,rel_tol=0.,abs_tol=1e-12):
+                    raise ValueError('Compatible-label retention needs the same top-five counts and depth')
+                balanced=[f"Each compatible label: {retained['macro_label_retention']:.1%} average",
+                    f"Lowest label: {retained['worst_class_label_retention']:.1%}",
+                    f"All labels retained: {retained['all_compatible_retention']:.1%} of patterns"]
             result.append(dict(title=title, value=f'{recall:.1%}',
                 count=f'{count:,} held-out patterns',detail=' · '.join(balanced)))
     return result

@@ -137,7 +137,7 @@ def libraries_panel(app):
                                 html.Strong('{{ metric.title }}: {{ metric.value }}')
                                 html.Span(' · {{ metric.count }}')
                                 html.Div('{{ metric.detail }}',v_if='!!metric.detail')
-                            html.P('Class-balanced recall gives each represented class equal weight; the lowest-class value exposes weakly recovered classes.',classes='my-2',style='max-width:560px')
+                            html.P('Each-label retention checks that label itself is among the five, including ambiguous alternatives. All-label retention requires every compatible label. Older compatible-hit metrics count any valid alternative as a success.',classes='my-2',style='max-width:560px')
                             html.P('The model prioritizes native refinement. Every reviewed candidate remains available.',classes='my-2',style='max-width:560px')
                         with html.Details(v_if='!!item.candidate',classes='text-caption'):
                             html.Summary('Model identity',style='cursor:pointer')
