@@ -49,13 +49,25 @@ def test_native_paired_data_keep_every_geometric_family_amplitude_and_origin(tmp
     assert table.metadata['native_points']==paired.manifest['examples']
     assert table.metadata['intervals']>0 and table.metadata['opaque_native_axes']==0
     model=FamilyProjection(paired.mode_projection)
+    context=paired.mode_projection.metadata.get('strain')
+    strain=None
+    if context is not None:
+        from gpx_recipe.preparation.structural_strain_cif import from_metadata
+        strain=from_metadata(context['map'])
     for row in range(min(20,len(table))):
         batch=table.batch(np.array([row],np.int64))
         for column,family,low,high in zip(batch['space_group'],batch['family'],batch['lower'],batch['upper']):
             identifier=table.metadata['families'][family]['id'];values=[]
             for _,index in cohort['references'][row]:
                 if table.metadata['classes'][column] not in paired.arrays['geometry_groups'][index]:continue
-                actual=model.project(paired.arrays['parameters'][index:index+1,:model.mode_dimensions])
+                entry=table.metadata['families'][family]
+                if entry.get('quantity')=='lattice_strain':
+                    assert strain is not None and entry['units']=='dimensionless'
+                    actual=strain.project_native(paired.arrays['parameters'][index:index+1],
+                        paired.arrays['parent_a'][index:index+1],baseline_a=context['baseline_a'],
+                        cell_mapping=context['cell_mapping'],mode_dimensions=model.mode_dimensions)
+                else:
+                    actual=model.project(paired.arrays['parameters'][index:index+1,:model.mode_dimensions])
                 values.append(actual['amplitudes'][0,actual['families'].index(identifier)])
             assert low==min(values) and high==max(values)
     assert file_sha(path/'examples.npz')==before
