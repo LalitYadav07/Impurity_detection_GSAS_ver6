@@ -4,7 +4,7 @@ import hashlib
 import numpy as np
 import pytest
 
-from gpx_recipe.preparation.structural_features import ThreeCurveProjector
+from gpx_recipe.preparation.structural_features import ThreeCurveProjector, three_curve_features
 
 
 def test_reused_projection_matches_prechange_feature_bytes_across_grids_and_masks():
@@ -51,3 +51,35 @@ def test_grid_and_mask_reuse_cannot_freeze_measurements_or_modify_returned_array
     with pytest.raises(ValueError): projector.features(y, y, valid=np.zeros(101, bool))
     y[40] = np.nan
     with pytest.raises(ValueError, match='nonfinite'): projector.features(y, y)
+
+
+def test_parent_reuse_detects_in_place_values_background_masks_and_signed_zeros():
+    q = np.linspace(.5, 6., 3818); edges = np.linspace(.6, 5.8, 257)
+    parent = 2.+np.exp(-((q-2.)/.03)**2)
+    background = np.ones(len(q))
+    current = parent+.01*np.sin(q)
+    valid = np.ones(len(q), bool)
+    projector = ThreeCurveProjector(q, edges)
+    for step in range(12):
+        if step == 2: parent[60:90] += .05
+        if step == 3: background[60:90] += .02
+        if step == 4: valid[100:130] = False
+        if step == 5: parent[110] = np.nan  # Masked data remain permitted.
+        if step == 6: background[110] = np.nan
+        if step == 7: parent[110] = 0.; background[110] = 0.
+        if step == 8: parent[110] = -0.; background[110] = -0.
+        if step == 9: valid[:] = True
+        current += 1e-6
+        options = dict(reference_background=background, valid=valid, contrast=(1.,30.,1000.)[step%3])
+        actual = projector.features(current, parent, **options)
+        expected = three_curve_features(q, current, parent, edges, **options)
+        for key in ['features', 'coverage', 'q_edges']:
+            assert actual[key].tobytes() == expected[key].tobytes()
+        assert actual['intensity_scale'] == expected['intensity_scale']
+    background[70] = np.nan
+    with pytest.raises(ValueError, match='background'):
+        projector.features(current, parent, reference_background=background)
+    background[70] = 1.
+    projector.features(current, parent, reference_background=background)
+    with pytest.raises(ValueError, match='background'):
+        projector.features(current, parent, reference_background=background.reshape(-1,1))

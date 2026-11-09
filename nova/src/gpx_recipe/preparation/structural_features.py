@@ -29,7 +29,7 @@ class _PatternProjection:
         self.bins = bins; self.usable = usable
         self.coordinate = ((edges[:-1]+edges[1:])*.5-edges[0])/(edges[-1]-edges[0])
 
-    def project(self, intensity, background):
+    def project(self, intensity, background, *, include_peak=True):
         y = np.asarray(np.ma.getdata(intensity), float); mask = self.mask
         if y.shape != self.q.shape:
             raise ValueError('One intensity per native Q point required')
@@ -45,10 +45,13 @@ class _PatternProjection:
         area = np.r_[0., np.cumsum((interpolated[:-1]+interpolated[1:])*.5*self.intervals*self.active)]
         mean = np.divide(np.diff(area[self.locations]), self.bin_length,
             out=np.zeros(len(self.bin_length)), where=self.bin_length > 0)
-        peak = np.full(len(self.bin_length), -np.inf)
-        np.maximum.at(peak, self.bins[self.usable], interpolated[self.usable])
-        peak[~np.isfinite(peak)] = 0.
-        mean[self.coverage == 0] = 0.; peak[self.coverage == 0] = 0.
+        peak = None
+        if include_peak:
+            peak = np.full(len(self.bin_length), -np.inf)
+            np.maximum.at(peak, self.bins[self.usable], interpolated[self.usable])
+            peak[~np.isfinite(peak)] = 0.
+            peak[self.coverage == 0] = 0.
+        mean[self.coverage == 0] = 0.
         scale = max(float(np.max(abs(interpolated[self.usable]), initial=0.)), np.finfo(float).tiny)
         return mean, peak, self.coverage, self.coordinate, scale
 
@@ -98,16 +101,20 @@ def pattern_features(q, intensity, edges, *, background=None, valid=None, contra
 class ThreeCurveProjector:
     """Reuse Q-bin geometry for native pairs and their observation siblings.
 
-    Only grid and mask work is reused. Current/reference intensities,
-    backgrounds, normalization and signed residuals are recalculated on every
-    call. One mask plan is retained, so changing validity never grows a cache
-    or reuses a projection across a different missing-data pattern.
+    One exact parent projection is retained for observation siblings. Its key
+    owns the converted intensity/background bytes and its mask plan; in-place
+    changes cannot reuse stale values. Current intensity, shared normalization
+    and signed residuals are recalculated on every call. The cache is bounded
+    to one parent and one mask plan.
     """
     def __init__(self, q, edges):
         q, edges = _grid(q, edges)
         self.q = np.frombuffer(q.tobytes(), dtype=q.dtype)
         self.edges = np.frombuffer(edges.tobytes(), dtype=edges.dtype)
         self._projection = None
+        self._reference_key = None
+        self._reference_projection = None
+        self._reference = None
 
     def features(self, current, reference, *, background=None, reference_background=None,
                  valid=None, contrast=30.):
@@ -125,8 +132,20 @@ class ThreeCurveProjector:
             raise ValueError('At least two valid pattern points are required')
         if self._projection is None or not np.array_equal(common, self._projection.mask):
             self._projection = _PatternProjection(self.q, self.edges, common)
-        before = self._projection.project(reference, reference_background)
-        after = self._projection.project(current, background)
+        reference_values = np.asarray(np.ma.getdata(reference), float)
+        reference_bg = None if reference_background is None else np.asarray(reference_background, float)
+        if reference_bg is not None and reference_bg.shape != self.q.shape:
+            raise ValueError('One finite supplied background value per valid pattern point required')
+        key = (reference_values.tobytes(), None if reference_bg is None else reference_bg.tobytes())
+        if self._reference_projection is not self._projection or self._reference_key != key:
+            # The three-curve representation uses means, coverage and scale,
+            # so computing the legacy peak-envelope channel is unnecessary.
+            before = self._projection.project(reference_values, reference_bg, include_peak=False)
+            self._reference = before
+            self._reference_key = key
+            self._reference_projection = self._projection
+        before = self._reference
+        after = self._projection.project(current, background, include_peak=False)
         coverage = np.minimum(before[2], after[2]); scale = max(before[4], after[4])
         transform = lambda v: np.arcsinh(contrast*(v/scale))/np.arcsinh(contrast)
         values = np.asarray([transform(before[0]), transform(after[0]), transform(after[0]-before[0])], np.float32)

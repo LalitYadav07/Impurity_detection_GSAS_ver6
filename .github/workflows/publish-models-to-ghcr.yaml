@@ -180,6 +180,7 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_parent_reference_native.py \
             /validation/tests/gpx_recipe/test_structural_pairs_native.py \
             /validation/tests/gpx_recipe/test_structural_three_curve_features.py \
+            /validation/tests/gpx_recipe/test_structural_projection_reuse.py \
             /validation/tests/gpx_recipe/test_structural_three_curve_attention.py \
             /validation/tests/gpx_recipe/test_structural_partitions.py \
             /validation/tests/gpx_recipe/test_structural_paired_blocks.py \
