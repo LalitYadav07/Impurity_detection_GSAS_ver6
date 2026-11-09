@@ -146,21 +146,35 @@ def test_paired_training_cannot_mix_old_features_or_unrelated_parent_trajectorie
         create_plan(request['source'],[directory,other],tmp_path/'plan.json')
 
 
-def completed_library(root):
+def completed_library(root, *, known_modes=False):
     request,directory=inputs(root)
+    if known_modes:
+        from test_structural_mode_projection import attach,rewrite_projection
+        attach(directory,names='examples')
+        rewrite_projection(directory,change=lambda d:d.update(native_mode_labels=[
+            'R-3m[0,0,0]GM1+(a)[A:c:dsp]A(a)','unresolved origin']))
+        metadata=json.loads((directory/'examples.json').read_text())
+        metadata['mode_projection']['metadata_sha256']=file_sha(directory/'mode-projection.json')
+        (directory/'examples.json').write_text(json.dumps(metadata))
     library=create_library(root/'library',name='Paired default preparation',source=request['source'],
         banks={'bank 1':dict(instrument=request['instrument'],grid=request['grid'])},
         models=[dict(kind=EXAMPLES,bank='bank 1',child=request['child'],settings=request['settings'])])
     row=next(r for r in library.document['entries'] if r['model']['kind']==EXAMPLES)
     attempt=library.start(row['id']);staged=stage_entry(library,row['id'],attempt,root/'example-attempt')
     out=Path(staged['destination']);shutil.copytree(directory,out)
-    result=publish_result(EXAMPLES,staged,dict(seconds=.1),['examples.json','examples.npz'])
+    files=['examples.json','examples.npz']+(['mode-projection.json','mode-projection.npz'] if known_modes else [])
+    detail=dict(seconds=.1)
+    if known_modes:
+        from gpx_recipe.preparation.structural_mode_projection import descriptor
+        detail['mode_projection']=descriptor(read(out,names='examples').mode_projection)
+    result=publish_result(EXAMPLES,staged,detail,files)
     publish_entry(library,row['id'],attempt,staged,result)
     return library
 
 
-def test_library_stages_and_recovers_three_curve_training_without_losing_any_dependency(tmp_path):
-    library=completed_library(tmp_path)
+@pytest.mark.parametrize('known_modes',[False,True])
+def test_library_stages_and_recovers_three_curve_training_without_losing_any_dependency(tmp_path,known_modes):
+    library=completed_library(tmp_path,known_modes=known_modes)
     row=next(r for r in library.document['entries'] if r['model']['kind']==TRAINING)
     assert row['model']['settings']['representation']==REPRESENTATION
     assert pending_entries(library)==[row['id']]

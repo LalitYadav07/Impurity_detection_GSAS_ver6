@@ -95,6 +95,27 @@ def test_failed_example_dependencies_explain_why_resume_cannot_start_training(ap
     assert '0 / 2 blocks prepared' in s.prep_entries[0]['reason']
 
 
+def test_compiled_import_explains_archived_training_without_losing_source_notices(app,tmp_path):
+    from test_preparation_structural_ranking_hints import prepared
+    application,store,_,service=app;s=application.server.state
+    library,_=prepared(tmp_path/'compiled-control')
+    for row in library.document['entries']:
+        if row['model']['kind']=='structural-examples':row['reason']='Retained native notice.'
+    library._save()
+    archive=tmp_path/'compiled.zip';library.export(archive)
+    submitted=len(service.submissions)
+    s.prep_library=store.import_archive(archive)['library'];application._prep_refresh()
+    assert not s.prep_can_resume and not s.prep_can_pause
+    assert s.prep_library_kind=='Compiled model library'
+    assert 'training arrays remain in the original preparation History' in s.prep_coverage
+    # Use entry identities rather than relying on candidate display formatting.
+    keys={r['id'] for r in library.document['entries'] if r['model']['kind']=='structural-examples'}
+    examples=[r for r in s.prep_entries if r['id'] in keys]
+    assert len(examples)==2
+    assert all('Retained native notice.' in r['reason'] and 'Training arrays archived' in r['reason'] for r in examples)
+    assert len(service.submissions)==submitted
+
+
 def test_read_only_selection_caption_does_not_initialize_any_preparation_service():
     class ReadOnlyHistory:
         def __getattr__(self,name):raise AssertionError('A caption must not access the service: '+name)

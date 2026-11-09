@@ -76,6 +76,40 @@ def test_total_viewer_loss_restores_inputs_and_verified_arrays_without_new_jobs(
     assert reference.reference['queue_id']==history.reference['queue_id']
 
 
+def test_compiled_library_recovers_from_history_after_both_local_copies_are_gone(remote,tmp_path):
+    import shutil
+    from radar_pd_nova.preparation_workspace import PreparationWorkspace
+    from test_preparation_structural_ranking_hints import prepared
+    from gpx_recipe.preparation import hints
+    # Install the same bounded History download/search adapter used by the
+    # other viewer-loss controls; no jobs are started in this seed queue.
+    (tmp_path/'adapter').mkdir()
+    history_setup(remote,tmp_path/'adapter')
+    runtime,service,_=remote
+    source,protocol=prepared(tmp_path/'original-preparation')
+    original=copy.deepcopy(source.document)
+    archive=tmp_path/'compiled.zip';source.export(archive)
+    workspace=PreparationWorkspace(tmp_path/'first-viewer',runtime)
+    key=workspace.import_archive(archive)['library']
+    workspace.start(key);workspace.pause(key)
+    dataset=saved_preparations(service)[0]['dataset_id']
+    submissions=len(service.submissions)
+    shutil.rmtree(tmp_path/'original-preparation')
+    shutil.rmtree(workspace.root);archive.unlink()
+    fresh=PreparationWorkspace(tmp_path/'fresh-viewer',
+        GalaxyModelRuntime(tmp_path/'fresh-runtime',service))
+    key=fresh.recover(dataset);library=fresh.registry.get(key)
+    assert library.document['storage']['deferred_assets']
+    assert library.document['id']==original['id']
+    assert library.document['entries']==original['entries']
+    assert fresh.queue(key).snapshot()['paused']
+    assert fresh.tick(key)['coverage']['all_prepared']
+    assert len(service.submissions)==submissions
+    packet=hints.capture(library,protocol,tmp_path/'recovered-packet')
+    assert packet['ranking_models']['eligible_entries']==1
+    assert len(packet['ranking_models']['entries'])==1
+
+
 def test_native_batch_finishing_after_viewer_loss_recovers_all_siblings(remote,tmp_path,monkeypatch):
     import shutil
     from radar_pd_nova.models import RunStatus

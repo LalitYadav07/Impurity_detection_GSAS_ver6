@@ -21,6 +21,10 @@ def test_dependency_training_and_portable_import_keep_the_model_usable(tmp_path)
     assert publish_entry(library,training['id'],attempt,request,result)['all_prepared']
     library.export(tmp_path/'complete.zip')
     restored=import_library(tmp_path/'complete.zip',tmp_path/'restored')
+    assert restored.document.get('storage',{}).get('deferred_assets')
+    assert restored.document['entries']==library.document['entries']
+    assert not list((restored.root/'entries').rglob('examples.npz'))
+    assert list((library.root/'entries').rglob('examples.npz'))
     assets=restored.prepared_assets(training['id'])
     metadata=next(p for p in assets.values() if p.name=='model.json')
     ranker=Ranker(metadata.parent)

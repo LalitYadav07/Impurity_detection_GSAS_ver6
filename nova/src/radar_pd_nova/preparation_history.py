@@ -10,7 +10,7 @@ import uuid
 import zipfile
 
 from gpx_recipe.execution import write_json
-from gpx_recipe.preparation.library import MAX_BYTES, validate_manifest
+from gpx_recipe.preparation.library import MAX_ARCHIVE_BYTES as MAX_BYTES, validate_manifest
 from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
 from .model_runtime import document_label, identifier

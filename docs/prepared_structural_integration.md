@@ -7,6 +7,17 @@ service, complete-mode geometry and independent GPX checks. Live snapshots use
 the existing acquisition owner and bounded Galaxy transport. Prepared native
 starting banks and compatible profile tables can travel with both paths.
 
+Completed structural training exports a compiled analysis copy by default.
+It retains the original model and candidate identities, weights, native fitting
+assets, example metadata, and every example-array checksum. The large example
+arrays remain in the original preparation records; export does not delete or
+thin them. The working library has an 8 GiB aggregate bound, while portable ZIPs
+retain the 2 GiB archive and extraction bounds. Imported compiled libraries can
+analyze new scans and complete or retry native preparation entries, but cannot
+regenerate examples or retrain without recovering the original preparation.
+The library panel identifies archived arrays explicitly. This storage change
+does not qualify model accuracy, authorize pruning, or establish NDIP latency.
+
 The preparation workspace now generates paired examples and trains the
 three-channel attention model by default. Clean pairs, noisy feature rows and
 independent trajectory holdouts have separate receipts. Trained rankings can

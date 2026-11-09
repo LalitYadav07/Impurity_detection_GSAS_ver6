@@ -13,7 +13,7 @@ import uuid
 from urllib.parse import urlsplit,urlunsplit
 
 from gpx_recipe.preparation.reference import validate_grid
-from gpx_recipe.preparation.library import MAX_BYTES
+from gpx_recipe.preparation.library import MAX_ARCHIVE_BYTES as MAX_BYTES
 from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.structural_live.defaults import DEFAULT_CELL_RADIUS
@@ -434,7 +434,10 @@ class PreparationMixin:
             s.prep_can_resume=bool(runnable and paused)
             kinds={r['model']['kind'] for r in library.document['entries']}
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
+            if library.document.get('storage'):s.prep_library_kind='Compiled model library'
             s.prep_coverage=f"{counts['prepared']} prepared · {counts['preparing']} in preparation · {counts['pending']} pending · {counts['failed']+counts['cancelled']+counts['unsupported']} need attention · {coverage['total']} total"
+            if library.document.get('storage'):
+                s.prep_coverage+=' · Compiled analysis copy; training arrays remain in the original preparation History.'
             titles={'reference':'Parent/profile inspection','magnetic':'Magnetic responses',
                 'structural':'Native starting curves','structural-examples':'Training pattern blocks',
                 'structural-training':'Ranking models'}
@@ -448,6 +451,8 @@ class PreparationMixin:
                 model=row['model'];candidate=model.get('settings',{}).get('candidate',{})
                 display=entry_label(model,labels)
                 reason=row['reason']
+                if library.document.get('storage') and model['kind']=='structural-examples':
+                    reason=(reason+' ' if reason else '')+'Training arrays archived; checksums retained.'
                 if model['kind']=='structural-training' and row['state']=='preparing' and not reason:
                     reason=continuing.get(row['id'],'Training job submitted; a completed model will appear after all epochs and held-out checks.')
                 if model['kind']=='structural-training' and row['state']=='pending' and not reason:
@@ -541,7 +546,8 @@ class PreparationMixin:
                     label='RADAR-PD prepared library '+store.registry.get(key).document['id'],wait_ready=True))
             finally:path.unlink(missing_ok=True)
             if s.prep_library==key:s.prep_download_href=download_url(self.service.galaxy_url,dataset)
-            s.prep_message='The portable library is saved in this Galaxy History. Download it using the link below.'
+            s.prep_message=('The portable library is saved in this Galaxy History. Download it using the link below. '
+                'Completed training is exported as a compiled analysis copy; its original arrays stay in the preparation History.')
         return self._prep_action(saved(),'Saving the portable library to History')
 
     async def _preparation_shutdown(self):

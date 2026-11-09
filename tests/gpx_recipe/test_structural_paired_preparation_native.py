@@ -144,17 +144,25 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
     assert not list((tmp_path/'job/native/trained/working-features').iterdir())
 
 
-def test_default_paired_library_training_remains_usable_after_export_and_model_handoff(tmp_path):
+@pytest.mark.parametrize('known_modes',[False,True])
+def test_default_paired_library_training_remains_usable_after_export_and_model_handoff(tmp_path,known_modes):
     from gpx_recipe.preparation.operations import stage_entry,publish_entry
     from gpx_recipe.preparation.library import import_library
     from gpx_recipe.preparation import hints,structural_ranking_hints as ranking
-    library=completed_library(tmp_path)
+    library=completed_library(tmp_path,known_modes=known_modes)
     trainer=next(r for r in library.document['entries'] if r['model']['kind']=='structural-training')
     attempt=library.start(trainer['id']);request=stage_entry(library,trainer['id'],attempt,tmp_path/'training-attempt')
     assert request['settings']['bins']==4096 and request['settings']['epochs']==60
     result=execute('structural-training',request)
     assert publish_entry(library,trainer['id'],attempt,request,result)['all_prepared']
     library.export(tmp_path/'library.zip');restored=import_library(tmp_path/'library.zip',tmp_path/'restored-library')
+    assert restored.document.get('storage',{}).get('deferred_assets')
+    assert restored.document['entries']==library.document['entries']
+    assert not list((restored.root/'entries').rglob('examples.npz'))
+    assert list((library.root/'entries').rglob('examples.npz'))
+    assets=restored.prepared_assets(trainer['id'])
+    metadata=json.loads(next(p for p in assets.values() if p.name=='model.json').read_text())
+    assert bool(metadata.get('mode_head_trained'))==known_modes
     candidate=next(r['model']['settings']['candidate'] for r in restored.document['entries']
         if r['model']['kind']=='structural-examples')
     protocol=dict(kind='structural',candidates=[candidate]);capture=tmp_path/'model-capture'
@@ -171,4 +179,9 @@ def test_default_paired_library_training_remains_usable_after_export_and_model_h
     assert ranked['ranking_available'] and not ranked['discarded_entries']
     assert ranked['candidate_order']==['child'] and ranked['complete_native_search_required']
     assert ranked['candidate_pruning_authorized'] is False
+    if known_modes:
+        estimates=ranked['mode_estimates']
+        assert estimates['available'] and estimates['rows'] and estimates['readout_identity']
+        assert estimates['intervals_calibrated'] is False
+        assert estimates['experimental_mode_absence_qualified'] is False
     assert not list(restored.root.rglob('features.npy'))

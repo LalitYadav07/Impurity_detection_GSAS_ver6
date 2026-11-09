@@ -19,7 +19,12 @@ SCHEMA = 'radar-experiment-preparation-library/v1'
 STATES = {'pending', 'preparing', 'prepared', 'unsupported', 'failed', 'cancelled'}
 TERMINAL = STATES-{'pending', 'preparing'}
 SUFFIXES = {'.json', '.npz', '.cif', '.instprm', '.prm', '.ins', '.inst', '.txt'}
-MAX_BYTES = 2*1024**3
+# The measured complete paired corpus occupies 3.19 GB before model/native
+# assets. Working data and a portable analysis copy have different lifetimes.
+# Keep the untrusted archive/extraction budget at 2 GiB; bound the complete
+# working corpus separately rather than thinning its physical trajectories.
+MAX_BYTES = 8*1024**3
+MAX_ARCHIVE_BYTES = 2*1024**3
 MAX_FILES = 20000
 MAX_MODELS = 5000
 MAX_METADATA = 8*1024**2
@@ -61,7 +66,7 @@ def _asset(value):
 
 def validate_manifest(value):
     required={'schema','id','name','specification','specification_sha256','inputs','entries','observations_included','scientific_result'}
-    if (not isinstance(value, dict) or set(value)-required-{'evidence'} or required-set(value)
+    if (not isinstance(value, dict) or set(value)-required-{'evidence', 'storage'} or required-set(value)
             or value['schema'] != SCHEMA or value['observations_included'] is not False
             or value['scientific_result'] is not False
             or not isinstance(value['name'], str) or not 1 <= len(value['name']) <= 200
@@ -109,6 +114,8 @@ def validate_manifest(value):
     if any(row['model']['kind'] in {'structural-examples','structural-training'} for row in entries):
         from .structural_dependencies import validate_entries
         validate_entries(entries)
+    from .compiled_storage import validate
+    validate(value)
     # JSON values, including nested model/specification fields, remain data.
     # Match the actual stored bytes, including the newline. Pretty-printing
     # repeated native mode inventories could pass admission and then exceed
@@ -190,21 +197,32 @@ class PreparationLibrary:
     def _check_budget(self, extra_paths=()):
         # Retain the aggregate size and confinement checks at every publication.
         # This inspects metadata; it never reads/decompresses unrelated arrays.
-        total = len(json.dumps(self.document, allow_nan=False).encode())
+        total = len((json.dumps(self.document, separators=(',', ':'), allow_nan=False)+'\n').encode())
+        from .compiled_storage import deferred
+        archived = deferred(self.document)
         names = list(dict.fromkeys([a['path'] for a in self._assets()]+list(extra_paths)))
         if len(names)+1 > MAX_FILES:
             raise ValueError('Preparation exceeds its portable file-count budget')
         for name in names:
+            if name in archived:
+                continue
             path = confined(self.root, name)
             if not path.is_file():
                 raise ValueError('A preparation artifact changed: '+name)
             total += path.stat().st_size
-            if total > MAX_BYTES:
+            if total > (MAX_ARCHIVE_BYTES if archived else MAX_BYTES):
                 raise ValueError('Preparation exceeds the library byte budget; split its declared scope')
 
     def _verify_artifacts(self, assets=None):
         self._check_budget()
+        from .compiled_storage import deferred
+        archived = deferred(self.document)
+        if assets is not None and any(a['path'] in archived for a in assets):
+            raise ValueError('Training arrays are archived in the original preparation History; '
+                             'this compiled copy contains the model and native fitting assets')
         for asset in self._assets() if assets is None else assets:
+            if asset['path'] in archived:
+                continue
             path = confined(self.root, asset['path'])
             if not path.is_file() or sha(path) != asset['sha256']:
                 raise ValueError('A preparation artifact changed: '+asset['path'])
@@ -252,7 +270,9 @@ class PreparationLibrary:
 
     def start(self, identifier):
         with self._transaction():
+            from .compiled_storage import require_working_copy
             row = self.row(identifier)
+            require_working_copy(self.document, row['model'])
             if row['state'] != 'pending':
                 raise ValueError('Only a pending preparation entry can start')
             row.update(state='preparing', attempt=row['attempt']+1, reason='', files=[])
@@ -287,7 +307,9 @@ class PreparationLibrary:
 
     def retry(self, identifier):
         with self._transaction():
+            from .compiled_storage import require_working_copy
             row = self.row(identifier)
+            require_working_copy(self.document, row['model'])
             if row['state'] not in {'failed', 'cancelled', 'unsupported'}:
                 raise ValueError('Only a reviewed terminal failure can be retried')
             row.update(state='pending', reason='', files=[])
@@ -361,13 +383,23 @@ class PreparationLibrary:
 
     def _export_snapshot(self, destination):
         self.verify()
-        paths = ['library.json']+[a['path'] for a in self.document['inputs']]
-        paths += [a['path'] for r in self.document['entries'] for a in r['files']]
+        from .compiled_storage import snapshot, deferred
+        document = snapshot(self.document)
+        validate_manifest(document)
+        archived = deferred(document)
+        paths = [a['path'] for a in self._assets() if a['path'] not in archived]
+        raw = (json.dumps(document, separators=(',', ':'), allow_nan=False)+'\n').encode()
+        if len(raw)+sum(confined(self.root, name).stat().st_size for name in paths) > MAX_ARCHIVE_BYTES:
+            raise ValueError('Preparation exceeds the portable byte budget. Complete training '
+                             'to export its compiled model, or split the declared native scope.')
         temporary = Path(destination).with_name(Path(destination).name+'.'+uuid.uuid4().hex+'.partial')
         try:
             with zipfile.ZipFile(temporary, 'x', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+                archive.writestr('library.json', raw)
                 for name in paths:
                     archive.write(confined(self.root, name), name)
+            if temporary.stat().st_size > MAX_ARCHIVE_BYTES:
+                raise ValueError('Preparation archive exceeds its portable byte budget')
             temporary.replace(destination)
         finally:
             temporary.unlink(missing_ok=True)
@@ -378,7 +410,7 @@ def import_library(archive, destination):
     destination = Path(destination)
     if destination.exists():
         raise ValueError('Import into a fresh preparation directory')
-    if Path(archive).stat().st_size > MAX_BYTES:
+    if Path(archive).stat().st_size > MAX_ARCHIVE_BYTES:
         raise ValueError('Preparation archive exceeds its byte budget')
     temporary = destination.with_name(destination.name+'.'+uuid.uuid4().hex+'.partial')
     temporary.mkdir(parents=True)
@@ -387,7 +419,7 @@ def import_library(archive, destination):
             members = packet.infolist()
             names = [m.filename for m in members]
             if (not members or len(members) > MAX_FILES or len(set(n.casefold() for n in names)) != len(names)
-                    or sum(m.file_size for m in members) > MAX_BYTES):
+                    or sum(m.file_size for m in members) > MAX_ARCHIVE_BYTES):
                 raise ValueError('Preparation archive exceeds its declared data budget')
             for member in members:
                 relative(member.filename)
@@ -400,6 +432,8 @@ def import_library(archive, destination):
             document = validate_manifest(json.loads(packet.read('library.json')))
             expected = {'library.json'} | {a['path'] for a in document['inputs']}
             expected.update(a['path'] for r in document['entries'] for a in r['files'])
+            from .compiled_storage import deferred
+            expected -= deferred(document)
             if expected != set(names):
                 raise ValueError('Preparation archive differs from its exact artifact inventory')
             for name in names:
