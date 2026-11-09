@@ -136,28 +136,31 @@ def test_model_plan_inherits_only_profile_dependencies_its_engine_consumes(works
 def test_failed_pattern_dependencies_pause_training_until_explicit_retry(workspace,tmp_path):
     from test_structural_preparation_dependencies import library_inputs
     from gpx_recipe.preparation.structural_dependencies import TRAINING
+    from radar_pd_nova.models import RunStatus
     w,_,service=workspace
     control,_=library_inputs(tmp_path/'structural-control')
     archive=tmp_path/'control.zip';control.export(archive)
     key=w.import_archive(archive)['library'];w.start(key,maximum_jobs=1)
     initial=w.tick(key);assert initial['active']==1
-    job=initial['queue']['jobs'][0]
-    complete(w.queue(key),service,job,tmp_path,
-             states={m['entry']:'failed' for m in job['members']})
-    result=w.tick(key)
+    result=initial
+    for _ in range(2):
+        job=next(j for j in result['queue']['jobs'] if j['phase']!='collected')
+        assert job['mode']=='single' and len(job['members'])==1
+        service.jobs[job['handle']['key']].status=RunStatus.ERROR
+        result=w.tick(key)
     library=w.registry.get(key)
     trainer=next(r for r in library.document['entries'] if r['model']['kind']==TRAINING)
     assert result['active']==0 and result['queue']['paused']
     assert result['coverage']['counts']['failed']==2 and result['coverage']['counts']['pending']==1
     assert result['blocked_training']==[dict(entry=trainer['id'],dependencies=trainer['model']['settings']['dependencies'])]
     assert not result['coverage']['complete']  # No failed block is dropped.
-    assert len(service.submissions)==1
-    assert w.tick(key)['queue']['paused'] and len(service.submissions)==1
+    assert len(service.submissions)==2
+    assert w.tick(key)['queue']['paused'] and len(service.submissions)==2
     for row in library.document['entries']:
         if row['state']=='failed':library.retry(row['id'])
     w.start(key,maximum_jobs=1);resumed=w.tick(key)
     assert not resumed['queue']['paused'] and resumed['active']==1
-    assert len(service.submissions)==2 and not resumed['blocked_training']
+    assert len(service.submissions)==3 and not resumed['blocked_training']
 
 
 @pytest.mark.parametrize('cause',['incomplete','setting','duplicate','empty','ion','bank'])

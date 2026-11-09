@@ -2,6 +2,21 @@
 
 ## Current development status
 
+Complete structural-example units now receive individual Galaxy jobs with a
+one-hour native ceiling. Their full trajectory slices, signed mode coverage,
+attempt identities and output checks remain unchanged. Short inspection and
+model-preparation tasks retain the existing bounded batches. This avoids
+interrupting a legitimate simulation unit at an eight-minute batch remainder;
+captured older batches retain their original recovery semantics. Training has
+its separate two-hour native ceiling and checked optimizer continuations.
+These are execution ceilings, not predicted runtimes or reserved CPU grants.
+
+Structural setup also checks construction coverage separately from server
+enumeration. The all-directions scope cannot start with failed, deferred or
+missing child structures. Incomplete cached construction is retried rather
+than presented as a complete subgroup portfolio. An explicitly selected
+highest-symmetry tier may retain its declared deferred directions.
+
 The development backend also has an explicitly bound fixed-before-transition
 reference contract. It uses the same three-channel encoder and training loop,
 but generates the reference from the original parent anchor rather than

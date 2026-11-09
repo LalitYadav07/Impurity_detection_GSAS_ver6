@@ -11,12 +11,16 @@ from gpx_recipe.symmetry.compiler import file_sha, package_signature
 from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout,native_timeout_limit
 
 
-def test_only_offline_training_has_a_long_native_deadline():
+def test_only_offline_training_and_complete_simulation_units_have_long_deadlines():
     assert native_timeout_limit('preparation-structural-training')==7200
     assert validate_native_timeout('preparation-structural-training',7200)==7200
-    for operation in ('inspect','k-portfolio','preparation-batch','preparation-structural-examples','structural-snapshot'):
+    assert native_timeout_limit('preparation-structural-examples')==3600
+    assert validate_native_timeout('preparation-structural-examples',3600)==3600
+    for operation in ('inspect','k-portfolio','preparation-batch','structural-snapshot'):
         assert native_timeout_limit(operation)==600
         with pytest.raises(ValueError,match='deadline'):validate_native_timeout(operation,601)
+    with pytest.raises(ValueError,match='deadline'):
+        validate_native_timeout('preparation-structural-examples',3601)
 
 
 @pytest.mark.parametrize('value',[True,False,0,-1,7201,float('nan'),float('inf'),'7200'])

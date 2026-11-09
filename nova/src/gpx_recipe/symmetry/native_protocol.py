@@ -28,9 +28,11 @@ FIELDS['structural-snapshot-ranking']=(FIELDS['structural-snapshot'][0],{'prepar
 
 def native_timeout_limit(operation):
     if operation not in FIELDS:raise ValueError('Unsupported native operation')
-    # Offline preparation may train tens of thousands of native pairs. This
-    # dedicated ceiling does not widen fit, discovery or batch deadlines.
-    return 7200 if operation=='preparation-structural-training' else 600
+    # Complete signed-mode simulation units can take longer than a short
+    # multi-model batch. They receive independent jobs, retaining all curves.
+    # These offline ceilings never widen fit, discovery or batch deadlines.
+    return {'preparation-structural-training':7200,
+            'preparation-structural-examples':3600}.get(operation,600)
 
 
 def validate_native_timeout(operation,value):

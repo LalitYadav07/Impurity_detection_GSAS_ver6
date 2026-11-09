@@ -141,6 +141,29 @@ def test_completed_paired_dependencies_dispatch_one_training_job_with_its_own_de
     assert all('PRIVATE-' not in json.dumps(s) for s in snapshots)
 
 
+def test_complete_generation_units_get_independent_jobs_without_short_batch_remainders(remote,tmp_path):
+    from test_structural_preparation_dependencies import library_inputs
+    runtime,service,_=remote;runtime.max_active_jobs=2
+    library,_=library_inputs(tmp_path/'generation')
+    source=library.root/library.document['specification']['source']
+    descriptor=dict(id='generation-parent',source_path=str(source),source_sha256=file_sha(source),
+        dataset_id=service._put(source.read_bytes(),'generation parent CIF'))
+    declared={r['id']:copy.deepcopy(r['model']) for r in library.document['entries']
+              if r['model']['kind']=='structural-examples'}
+    queue=PreparationQueue(library.root/'queue',library,runtime,source=descriptor,checkpoint=lambda _:None)
+    queue.resume(maximum_jobs=2);first=queue.tick();jobs=first['queue']['jobs']
+    assert len(jobs)==2 and first['active']==2
+    for job in jobs:
+        request=job['handle']['request'];member=job['members'][0]
+        assert job['mode']=='single' and len(job['members'])==1
+        assert request['operation']=='preparation-structural-examples' and request['timeout']==3600
+        assert library.row(member['entry'])['model']==declared[member['entry']]
+        assert member['attempt']==1
+    captures=[(j['id'],j['handle']['key']) for j in jobs]
+    assert [(j['id'],j['handle']['key']) for j in queue.tick()['queue']['jobs']]==captures
+    assert len(service.submissions)==2
+
+
 @pytest.mark.parametrize('count,requested,allowed,sizes',[
     (9,2,2,[5,4]),(3,4,2,[2,1]),(3,4,4,[1,1,1]),
     (9,8,1,[9]),(40,2,2,[16,16]),

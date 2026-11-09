@@ -314,6 +314,8 @@ class PreparationQueue:
                     and latest.get(identifier,{}).get('reason')==batch.DEADLINE_INTERRUPTED),None)
                 training=next((identifier for identifier in pending
                     if self.library.row(identifier)['model']['kind']=='structural-training'),None)
+                generation=(pending[0] if pending and
+                    self.library.row(pending[0])['model']['kind']=='structural-examples' else None)
                 # A trainer owns its allocation-sized tensor pool. Never nest
                 # it under a multi-model native batch's process pool.
                 if interrupted is not None:
@@ -321,9 +323,15 @@ class PreparationQueue:
                     # remainder. Start it alone so it receives the initial
                     # full budget exactly once; another timeout is a visible
                     # full-budget failure, never an endless deferral loop.
-                    identifiers=[interrupted];mode='batch'
+                    identifiers=[interrupted]
+                    mode=('single' if self.library.row(interrupted)['model']['kind']=='structural-examples' else 'batch')
                 elif training is not None:
                     identifiers=[training];mode='single'
+                elif generation is not None:
+                    # Do not give a complete simulation unit the remainder
+                    # of an eight-minute batch. Its native portfolio and
+                    # attempt identity stay unchanged; only dispatch differs.
+                    identifiers=[generation];mode='single'
                 else:
                     mode='batch'
                 # A small catalog must not fill one large batch and leave the
@@ -333,7 +341,7 @@ class PreparationQueue:
                 remaining_slots=available-slot
                 members_per_job=min(state['batch_size'],
                     (len(pending)+remaining_slots-1)//remaining_slots)
-                if training is None and interrupted is None:identifiers=pending[:members_per_job]
+                if training is None and interrupted is None and generation is None:identifiers=pending[:members_per_job]
                 if not identifiers:break
                 members=[dict(entry=i,attempt=self.library.row(i)['attempt']+(i not in deferred)) for i in identifiers]
                 job=dict(id=uuid.uuid4().hex,mode=mode,phase='awaiting_submission',handle=None,
