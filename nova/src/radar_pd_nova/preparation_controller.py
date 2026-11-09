@@ -19,7 +19,7 @@ from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.structural_live.defaults import DEFAULT_CELL_RADIUS
 from .battery_preparation import checked_upload, capture_file
 from .model_runtime import GalaxyModelRuntime,identifier
-from .preparation_discovery import PreparationDiscovery,k_vector
+from .preparation_discovery import PreparationDiscovery,k_vector,require_structural_coverage
 from .preparation_workspace import PreparationWorkspace
 from .uploads import inspect_cif_upload
 
@@ -286,6 +286,7 @@ class PreparationMixin:
                 item=await asyncio.to_thread(client.discover,reference,kind,token.split(','),opd_policy=s.prep_opd_policy,
                     maximum=finite_number(s.prep_construct_limit,integer=True))
                 catalog=item['catalog'];ready=catalog.get('coverage',{}).get('discovery_complete') is True
+                if kind=='structural':require_structural_coverage(catalog,policy=s.prep_opd_policy)
                 rows.append(dict(k='('+token+')',count=len(catalog['candidates']),state='Available' if ready else 'Incomplete discovery'))
                 if ready:catalogs.append(item)
             except ValueError as exc:rows.append(dict(k='('+token+')',count=0,state=str(exc)))

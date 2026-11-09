@@ -30,6 +30,35 @@ def k_vector(value):
     return result
 
 
+def require_structural_coverage(catalog, *, policy=None):
+    """Enumeration and successful construction are separate coverage claims."""
+    coverage=catalog.get('coverage',{})
+    selected_policy=coverage.get('opd_policy')
+    rows=coverage.get('candidates')
+    candidates=catalog.get('candidates')
+    if (coverage.get('discovery_complete') is not True
+            or selected_policy not in {'all','highest-symmetry-per-irrep'}
+            or (policy is not None and selected_policy!=policy)
+            or not isinstance(rows,list) or not isinstance(candidates,list)
+            or type(coverage.get('discovered_count')) is not int
+            or coverage['discovered_count']!=len(rows)
+            or type(coverage.get('constructed_count')) is not int
+            or coverage['constructed_count']!=len(candidates)):
+        raise ValueError('Structural discovery coverage is incomplete or differs from the selected scope; retry discovery')
+    ids=[row.get('id') for row in rows if isinstance(row,dict)]
+    selected=[row.get('id') for row in candidates if isinstance(row,dict)]
+    if (len(ids)!=len(rows) or len(selected)!=len(candidates)
+            or any(not isinstance(value,str) or not value for value in ids+selected)
+            or len(set(ids))!=len(ids) or len(set(selected))!=len(selected)):
+        raise ValueError('Structural discovery has an invalid or duplicate candidate inventory')
+    constructed={row['id'] for row in rows if row.get('state')=='constructed'}
+    allowed={'constructed'} if selected_policy=='all' else {'constructed','deferred'}
+    if (not selected or constructed!=set(selected)
+            or any(row.get('state') not in allowed for row in rows)):
+        raise ValueError(f'Structural candidate construction is incomplete ({len(constructed)} / {len(rows)} returned); retry discovery before preparation')
+    return coverage
+
+
 class PreparationDiscovery:
     def __init__(self,workspace):
         self.workspace=workspace
@@ -61,7 +90,11 @@ class PreparationDiscovery:
                         raise ValueError('An authoritative discovery artifact changed')
                 if receipt['catalog']!=json.loads((directory/'catalog.json').read_text()):
                     raise ValueError('Cached discovery differs from its authoritative catalog file')
-                if receipt['catalog'].get('coverage',{}).get('discovery_complete') is True:
+                complete=receipt['catalog'].get('coverage',{}).get('discovery_complete') is True
+                if complete and kind=='structural':
+                    try:require_structural_coverage(receipt['catalog'],policy=opd_policy)
+                    except ValueError:complete=False
+                if complete:
                     return dict(catalog=copy.deepcopy(receipt['catalog']),directory=str(directory),cached=True)
             directory=root/('attempt-'+uuid.uuid4().hex)
             if kind=='magnetic':

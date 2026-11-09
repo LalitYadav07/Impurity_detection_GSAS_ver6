@@ -231,6 +231,24 @@ def test_failed_family_remains_visible_and_cannot_become_a_silent_shortlist(app,
     assert len(service.submissions)==1
 
 
+def test_enumeration_success_does_not_hide_failed_structural_children(app,tmp_path,monkeypatch):
+    app,store,key,service=app;load_context(app,store,key,service,tmp_path);s=app.server.state
+    s.prep_kind='structural';s.prep_opd_policy='all'
+    class Discovery:
+        def __init__(self,store):pass
+        def discover(self,reference,kind,k,**kwargs):
+            c=catalog(PARENT,k,structural=True)
+            c['coverage']['discovered_count']=2
+            c['coverage']['candidates'].append(dict(id='structural:missing',state='construction_failed'))
+            return dict(catalog=c,directory='',cached=False)
+    monkeypatch.setattr(module,'PreparationDiscovery',Discovery)
+    asyncio.run(app._discover_preparation_models())
+    assert not s.prep_discovery_ready and not app._prep_catalogs
+    assert 'construction is incomplete' in s.prep_discovery_rows[0]['state']
+    with pytest.raises(ValueError,match='currently selected'):asyncio.run(app._start_preparation_models())
+    assert len(service.submissions)==1
+
+
 def test_late_discovery_cannot_replace_a_changed_parent_or_k_scope(app,tmp_path,monkeypatch):
     app,store,key,service=app;load_context(app,store,key,service,tmp_path);s=app.server.state
     class Discovery:

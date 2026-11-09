@@ -199,6 +199,9 @@ class PreparationWorkspace:
             if token in seen:raise ValueError('A propagation-vector family was declared twice')
             seen.add(token)
             if not catalog.get('candidates'):raise ValueError('The selected family has no supported candidate models')
+            if kind=='structural':
+                from .preparation_discovery import require_structural_coverage
+                require_structural_coverage(catalog)
             if len(models)+len(catalog['candidates'])*len(labels)>MAX_MODELS:
                 raise ValueError('The declared scope exceeds one portable library’s model limit; split it into named libraries. No candidates were dropped.')
             candidates=[validate_candidate(c) for c in catalog['candidates']]

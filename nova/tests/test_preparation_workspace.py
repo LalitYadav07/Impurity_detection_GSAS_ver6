@@ -24,8 +24,11 @@ def catalog(parent,k,*,structural=False):
         transformation_matrix=[[1,0,0],[0,1,0],[0,0,1]],origin_shift=[0,0,0])
     if structural:candidate.update(irrep='GM1+',child=dict(path='children/child.cif',sha256='0'*64),modes=['mode1'])
     else:candidate.update(magnetic_space_group='P1',bns_number='1.1')
+    coverage=dict(discovery_complete=True,constructed_count=1)
+    if structural:coverage.update(discovered_count=1,opd_policy='all',
+        candidates=[dict(id=candidate['id'],state='constructed')])
     return dict(schema='radar-symmetry-catalog/v1',parent_setting_sha256=parent['setting_sha256'],k=k,
-        candidates=[candidate],coverage=dict(discovery_complete=True,constructed_count=1),provenance={'service':'test'})
+        candidates=[candidate],coverage=coverage,provenance={'service':'test'})
 
 
 @pytest.fixture
@@ -231,6 +234,7 @@ def test_structural_child_and_full_discovery_coverage_are_retained(workspace,tmp
         child=directory/'children/child.cif';child.write_text('data_structure_contract_only\n')
         c=catalog(parent,k,structural=True);c['candidates'][0]['child']['sha256']=file_sha(child)
         c['coverage']['discovered_count']=3
+        c['coverage']['opd_policy']='highest-symmetry-per-irrep'
         c['coverage']['candidates']=[{'id':'structural:one','state':'constructed'},
             {'id':'structural:two','state':'deferred'},{'id':'structural:three','state':'deferred'}]
         (directory/'catalog.json').write_text(json.dumps(c));return c
@@ -250,3 +254,43 @@ def test_structural_child_and_full_discovery_coverage_are_retained(workspace,tmp
     assert scope['searches'][0]['coverage']['discovered_count']==3
     child=Path(c['directory'])/'children/child.cif';child.write_text('changed structure')
     with pytest.raises(ValueError,match='authoritative.*changed'):PreparationDiscovery(w).discover(key,'structural',['0','0','0'])
+
+
+def test_partial_all_opd_construction_is_retried_and_cannot_start_a_smaller_library(workspace,tmp_path,monkeypatch):
+    w,key,service=workspace;finish_inspection(w,key,service,tmp_path);calls=[]
+    def discover(cif,parent,k,directory,**kwargs):
+        calls.append(kwargs['opd_policy'])
+        directory=Path(directory);(directory/'children').mkdir(parents=True)
+        child=directory/'children/child.cif';child.write_text('data_structure_contract_only\n')
+        c=catalog(parent,k,structural=True);c['candidates'][0]['child']['sha256']=file_sha(child)
+        c['coverage']['discovered_count']=2
+        c['coverage']['candidates'].append(dict(id='structural:two',state='construction_failed'))
+        if len(calls)>1:
+            second=copy.deepcopy(c['candidates'][0]);second['id']='structural:two'
+            c['candidates'].append(second);c['coverage']['constructed_count']=2
+            c['coverage']['candidates'][-1]['state']='constructed'
+        (directory/'catalog.json').write_text(json.dumps(c));return c
+    monkeypatch.setattr(discovery,'discover_structural',discover)
+    client=PreparationDiscovery(w)
+    partial=client.discover(key,'structural',['0','0','0'],opd_policy='all')
+    before=len(service.submissions)
+    with pytest.raises(ValueError,match='construction is incomplete'):
+        w.create_models(key,name='Must not silently omit a child',kind='structural',catalogs=[partial])
+    assert len(service.submissions)==before
+    recovered=client.discover(key,'structural',['0','0','0'],opd_policy='all')
+    assert not recovered['cached'] and len(recovered['catalog']['candidates'])==2
+    cached=client.discover(key,'structural',['0','0','0'],opd_policy='all')
+    assert cached['cached'] and calls==['all','all']
+    assert partial['directory']!=recovered['directory'] and Path(partial['directory']).is_dir()
+
+
+@pytest.mark.parametrize('change',['deferred','failed','missing_row','wrong_count','duplicate'])
+def test_all_opd_coverage_requires_each_returned_child(change):
+    c=catalog(PARENT,['0','0','0'],structural=True);coverage=c['coverage']
+    if change in {'deferred','failed'}:
+        coverage['discovered_count']=2
+        coverage['candidates'].append(dict(id='structural:two',state='deferred' if change=='deferred' else 'construction_failed'))
+    elif change=='missing_row':coverage['candidates']=[]
+    elif change=='wrong_count':coverage['constructed_count']=2
+    else:coverage['candidates']*=2;coverage['discovered_count']=2
+    with pytest.raises(ValueError):discovery.require_structural_coverage(c,policy='all')
