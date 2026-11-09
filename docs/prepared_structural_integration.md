@@ -19,6 +19,10 @@ The reference, current and signed difference share one intensity scale and
 asinh compression; no peak registration or separate curve normalization is
 performed. Models trained on the earlier recalculated-parent contract retain
 that contract and cannot silently consume a tagged measured reference.
+If the common foreground bin integrals are exactly unchanged, inference
+reports no difference rather than inventing a learned subgroup ranking. This
+does not establish the reference's space group or exclude changes hidden
+within a bin or outside the measured range; every native candidate remains.
 
 This fixed-reference path is under local experimental qualification. It has
 not been connected to the Model/Live reference-selection UI or deployed to

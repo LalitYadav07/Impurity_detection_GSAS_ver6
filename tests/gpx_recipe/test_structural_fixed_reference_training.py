@@ -74,6 +74,14 @@ def test_model_retains_fixed_reference_contract_and_rejects_a_calculated_referen
     assert ranked['candidate_pruning_authorized'] is False
     assert ranked['complete_native_search_required'] is True
     assert {r['space_group'] for r in ranked['families']} == {12, 166}
+    unchanged = model.rank(a['q'], a['parent_intensity'][0],
+        background=a['parent_background'][0], reference=reference,
+        parent_sha256='a'*64, instrument_sha256='b'*64)
+    assert unchanged['ranking_available'] is False
+    assert 'no difference' in unchanged['reason']
+    assert all(row['model_score'] is None for row in unchanged['families'])
+    assert unchanged['candidate_pruning_authorized'] is False
+    assert unchanged['complete_native_search_required'] is True
     for field in ('kind', 'parent_sha256', 'instrument_sha256', 'source_sha256'):
         wrong = dict(reference, **{field:'wrong'})
         with pytest.raises(ValueError, match='measured before-transition'):

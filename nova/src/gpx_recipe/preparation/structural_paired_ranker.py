@@ -217,7 +217,11 @@ class Ranker:
             nearest_training_rms=distance,validation_maximum_rms=self.support_limit,statistical_coverage_qualified=False)
         scores=None;available=False;reason='This pattern is outside the prepared simulations; retain all families for native refinement'
         embeddings=[]
-        if inside:
+        unchanged=(self.metadata['reference_kind']==weights.FIXED_REFERENCE_KIND
+                   and prepared.get('identical_common_foreground') is True)
+        if unchanged:
+            reason='The measured pair has no difference in the common Q bins; retain the reference and every native hypothesis'
+        elif inside:
             from .structural_readout_health import forward
             with torch.no_grad():logits,active=forward(self.model,torch.from_numpy(feature[None]),
                 _embedding_sink=embeddings.append if self.mode_spec is not None else None)
@@ -243,6 +247,7 @@ class Ranker:
             calibration=self.metadata['adaptive_calibration']
             result['adaptive_work_set']=select(logits.numpy() if scores is not None else np.zeros((1,len(families))),
                 calibration,identities=calibration['identities'],within_support=bool(inside and available))
+            if unchanged:result['adaptive_work_set']['reason']=reason
         if self.mode_spec is not None:
             from .structural_joint_modes import infer,unavailable
             if available:

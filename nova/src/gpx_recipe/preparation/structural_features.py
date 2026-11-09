@@ -236,6 +236,7 @@ class IndependentCurveProjector:
             raise ValueError('Three-curve structural features are not finite')
         return dict(features=features, coverage=coverage.astype(np.float32),
             q_edges=self.edges.copy(), intensity_scale=scale,
+            identical_common_foreground=bool(np.array_equal(before[0],after[0])),
             channels=['reference', 'current', 'current_minus_reference'],
             difference='background-subtracted native intensity difference before shared asinh compression')
 

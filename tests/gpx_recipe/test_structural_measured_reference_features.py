@@ -75,6 +75,8 @@ def test_subtraction_preserves_intensity_changes_split_peaks_and_direction():
     reverse = independent_curve_features(q, before, q, after, edges)
     np.testing.assert_array_equal(first['features'][2], -reverse['features'][2])
     difference = first['features'][2]
+    assert first['identical_common_foreground'] is False
+    assert independent_curve_features(q,before,q,before,edges)['identical_common_foreground'] is True
     centers = (edges[:-1]+edges[1:])*.5
     assert difference[np.argmin(abs(centers-3))] < -.5
     assert difference[np.argmin(abs(centers-2.97))] > .5
