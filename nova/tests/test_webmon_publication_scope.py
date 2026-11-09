@@ -116,20 +116,32 @@ def test_clear_during_checkpoint_array_read_cannot_repaint_reference(view, tmp_p
     assert len(updates) == 1 and not updates[0].data  # Only Clear's empty figure.
 
 
-@pytest.mark.parametrize('change', ['history', 'draft'])
-def test_busy_checkpoint_conflict_is_caught_before_source_read(view, tmp_path, monkeypatch, change):
+def test_busy_checkpoint_history_conflict_is_caught_before_source_read(view, tmp_path, monkeypatch):
     reviewed_checkpoints(view, tmp_path)
     view.server.state.webmon_busy = True
-    if change == 'history':
-        view.service.history_id = 'another-history'
-    else:
-        view.server.state.powgen_ipts = '9999'
+    view.service.history_id = 'another-history'
     monkeypatch.setattr(view._webmon, 'selected_checkpoint', lambda *a: pytest.fail('No conflicting source read'))
     view.webmon_checkpoint_changed('other')
     assert not view.server.state.webmon_context_ready
     assert not view.server.state.webmon_accepted
     assert view.server.state.webmon_checkpoint == ''
-    assert 'another History or IPTS' in view.server.state.webmon_message
+    assert 'another Galaxy History' in view.server.state.webmon_message
+
+
+def test_busy_checkpoint_keeps_saved_watch_when_setup_draft_ipts_changes(view, tmp_path, monkeypatch):
+    reviewed_checkpoints(view, tmp_path)
+    view.server.state.webmon_busy = True
+    view.server.state.powgen_ipts = '9999'
+    selected=[]
+    original=view._webmon.selected_checkpoint
+    def read(*args):
+        selected.append(args)
+        return original(*args)
+    monkeypatch.setattr(view._webmon, 'selected_checkpoint', read)
+    view.webmon_checkpoint_changed('other')
+    assert selected == [('IPTS-2767', '8')]
+    assert view.server.state.webmon_context_ready
+    assert view.server.state.webmon_checkpoint == 'reviewed-8'
 
 
 def saved_result(view, tmp_path):

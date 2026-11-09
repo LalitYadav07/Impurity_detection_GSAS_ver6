@@ -211,6 +211,8 @@ class LiveSetupMixin:
                 persistent_hint=True,
                 update_modelValue=(self._powgen_configuration_changed, "[$event]"),
             )
+            vuetify.VBtn('Refresh History inputs',click=self.refresh_history,disabled=(locked,),
+                         variant='text',size='small',prepend_icon='mdi-refresh')
             vuetify.VAlert(
                 v_show="!!powgen_configuration_error",
                 text=("powgen_configuration_error",),
@@ -230,6 +232,8 @@ class LiveSetupMixin:
                 ):
                     html.Span("{{ item.label }}", classes="radar-preflight-label")
                     html.Span("{{ item.value }}", classes="radar-preflight-value")
+                html.P("Fit limits remain in the original pattern's x-axis units. Review them against this beamline's reduced curve: TOF uses microseconds; HB-2A uses degrees 2θ. Q or d limits are not converted automatically.",
+                       classes="radar-help-copy")
             vuetify.VBtn(
                 "Edit a copy here",
                 click=self.edit_live_configuration,

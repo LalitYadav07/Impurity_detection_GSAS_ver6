@@ -366,7 +366,7 @@ class LiveRestoreMixin:
                 for row in rows if row.get("state") == "ok" and "watch state" in str(row.get("name") or "").lower()]
             state.live_restore_page = page
             state.live_restore_has_more = len(rows) == 100
-            state.live_restore_message = (f"Page {page + 1}: choose one checkpoint, then inspect its saved scope."
+            state.live_restore_message = (f"Page {page + 1}: choose a checkpoint to preview its saved scope."
                 if state.live_restore_options else "No ready Live checkpoints on this page in the current History.")
         except Exception as exc:
             if self._live_restore_owner is owner and context == self._live_restore_context():
@@ -380,8 +380,13 @@ class LiveRestoreMixin:
     async def older_saved_live_watches(self, **_):
         await self.list_saved_live_watches(older=True)
 
-    async def inspect_saved_live_watch(self, **_):
+    async def inspect_saved_live_watch(self, dataset_id=None, **_):
         state = self.server.state
+        # Selecting a checkpoint previews it immediately. Use the event value
+        # rather than relying on a later v-model synchronization round trip.
+        if dataset_id is not None and str(dataset_id or "") != str(state.live_restore_dataset_id or ""):
+            state.live_restore_dataset_id = str(dataset_id or "")
+            state.flush()
         if not self._live_restore_can_read() or state.live_restore_busy:
             return
         dataset_id = str(state.live_restore_dataset_id or "")
@@ -498,8 +503,8 @@ class LiveRestoreMixin:
             with html.Div(classes="radar-button-row"):
                 vuetify.VBtn("List saved watches", click=self.list_saved_live_watches, loading=("live_restore_busy",), disabled=("live_restore_busy || powgen_monitoring || live_launch_busy",), size="small", variant="outlined")
                 vuetify.VBtn("Older checkpoints", click=self.older_saved_live_watches, v_if="live_restore_has_more", disabled=("live_restore_busy || powgen_monitoring || live_launch_busy",), size="small", variant="text")
-            vuetify.VAutocomplete(label="Saved Live checkpoint", v_model="live_restore_dataset_id", items=("live_restore_options",), item_title="title", item_value="id", density="compact", clearable=True, disabled=("live_restore_busy || powgen_monitoring || live_launch_busy",))
-            vuetify.VBtn("Inspect selected checkpoint", click=self.inspect_saved_live_watch, disabled=("!live_restore_dataset_id || live_restore_busy || powgen_monitoring || live_launch_busy",), size="small", variant="outlined")
+            vuetify.VAutocomplete(label="Saved Live checkpoint", v_model="live_restore_dataset_id", items=("live_restore_options",), item_title="title", item_value="id", density="compact", clearable=True, disabled=("live_restore_busy || powgen_monitoring || live_launch_busy",), update_modelValue=(self.inspect_saved_live_watch, "[$event]"))
+            vuetify.VBtn("Recheck selected checkpoint", click=self.inspect_saved_live_watch, disabled=("!live_restore_dataset_id || live_restore_busy || powgen_monitoring || live_launch_busy",), size="small", variant="text")
             with html.Div(v_for="row in live_restore_rows", key="row.label", classes="radar-preflight-row"):
                 html.Span("{{ row.label }}", classes="radar-preflight-label")
                 html.Span("{{ row.value }}", classes="radar-preflight-value")

@@ -335,6 +335,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         self._auto_opened_uids: set[str] = set()
         self._run_visibility_cutoff: datetime | None = None
         self._initialize_state()
+        self._active_live_beamline = self.server.state.live_beamline or 'PG3'
         self._init_webmon()
         self.server.state.change("run_selection")(self._run_selection_changed)
         self.server.state.change(*_SUBMISSION_FIELDS[:-2])(self._submission_form_changed)
@@ -896,7 +897,12 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     with html.Div(
                         classes=("(setup_collapsed ? 'radar-layout is-collapsed' : 'radar-layout') + (workflow_mode === 'powgen' && live_assistant_open && !powgen_monitoring ? ' is-guided-live' : '')",),
                     ):
+                        html.Div(classes="radar-setup-scrim", v_show="!setup_collapsed && !(workflow_mode === 'powgen' && live_assistant_open && !powgen_monitoring)",
+                                 click="setup_collapsed = true", raw_attrs=['aria-hidden="true"'])
                         with html.Aside(classes="radar-setup-rail", v_show="!setup_collapsed"):
+                            vuetify.VBtn("Close setup", classes="radar-drawer-close mb-2",
+                                         prepend_icon="mdi-close", variant="text", size="small",
+                                         click="setup_collapsed = true")
                             self._setup_page()
                         with html.Main(classes="radar-workspace"):
                             self._live_assistant_ui()
@@ -908,7 +914,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         with html.Header(classes="radar-context-header"):
             vuetify.VBtn(
                 icon=("setup_collapsed ? 'mdi-menu-open' : 'mdi-menu'",),
-                title=("setup_collapsed ? 'Show setup' : 'Hide setup'",),
+                title=("setup_collapsed ? 'Open setup' : 'Close setup'",),
                 variant="text",
                 size="small",
                 click="setup_collapsed = !setup_collapsed",
@@ -1217,6 +1223,11 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
 
         # A new IPTS must not inherit the previous profile, CIF library, sample
         # chemistry, or experiment-scoped configuration by accident.
+        # Beamline switching preserves a displayed watch, so Clear must retire
+        # its controller explicitly before invoking the draft reset callback.
+        self._powgen_controller = None
+        self._powgen_controller_configuration = None
+        self._powgen_settings_signature = None
         state.powgen_ipts = ""
         self._active_live_beamline = None
         self._live_beamline_changed()
@@ -1576,6 +1587,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         panel_options: dict[str, Any] = {
             "value": (str(value),),
             "key": f"'{key_prefix}-{number}'",
+            "id": f"radar-{key_prefix}-{number}",
             "classes": "radar-setup-panel",
         }
         if v_show:
@@ -1600,6 +1612,18 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 yield
 
     @staticmethod
+    def _live_fix_chip(label: str, condition: str, panel: int, target: str) -> None:
+        vuetify.VBtn(
+            label, v_if=condition, size="small", variant="tonal", color="#15543c",
+            prepend_icon="mdi-arrow-right-circle-outline",
+            click=(f"live_setup_panels = [{panel}]; $nextTick(() => {{"
+                   f"const el = window.document.getElementById('{target}');"
+                   "const rail = el?.closest('.radar-setup-rail');"
+                   "if (el && rail) rail.scrollTop += el.getBoundingClientRect().top - rail.getBoundingClientRect().top - rail.clientHeight * .28;"
+                   "el?.focus?.(); })"),
+        )
+
+    @staticmethod
     def _number_field(*children: Any, **kwargs: Any) -> Any:
         """Create a keyboard-editable numeric field without browser wheel stepping."""
 
@@ -1608,9 +1632,25 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         return vuetify.VTextField(*children, **kwargs)
 
     def _setup_page(self) -> None:
-        vuetify.VBtn("Guided Live setup", v_show="workflow_mode === 'powgen'", click=self.open_live_assistant,
+        with html.Div(v_if="workflow_mode === 'powgen' && powgen_results_refresh_available",
+                      classes="radar-watch-context mb-3", raw_attrs=['role="status"']):
+            html.Div("DISPLAYED WATCH", classes="radar-micro-label")
+            html.Strong("{{ powgen_dashboard_title }} · {{ powgen_monitoring ? 'Monitoring' : 'Stopped' }}")
+            html.P("The setup below is a separate draft. Editing it does not change this watch, its saved results, or already-submitted Galaxy jobs.")
+            with html.Div(classes="radar-watch-context-actions"):
+                vuetify.VBtn("View watch", click=self.show_powgen_dashboard,
+                             variant="outlined", size="small", prepend_icon="mdi-chart-timeline-variant")
+                vuetify.VBtn("Clear workspace for new watch", click=self.request_clear_workspace,
+                             variant="text", size="small", prepend_icon="mdi-source-fork")
+        html.Div("NEW WATCH DRAFT", v_if="workflow_mode === 'powgen' && !powgen_results_refresh_available",
+                 classes="radar-rail-kicker mb-2")
+        vuetify.VBtn(text=("live_assistant_steps.some(step => step.confirmed) ? 'Resume guided Live setup' : 'Guided Live setup'",),
+                      v_show="workflow_mode === 'powgen'", click=self.open_live_assistant,
                       prepend_icon="mdi-message-text-outline", disabled=("powgen_monitoring || live_launch_busy || live_library_builder_active",),
                       color="#15543c", variant="outlined", block=True, classes="mb-3")
+        html.P("Guided answers and manual Live fields share this draft. Editing a field only reopens steps that depend on it.",
+               v_if="workflow_mode === 'powgen' && live_assistant_steps.some(step => step.confirmed)",
+               classes="radar-rail-help")
         html.Div("SETUP", classes="radar-rail-kicker")
         html.H2("Configure analysis", classes="radar-rail-heading")
         html.P("Work from top to bottom. Earlier choices control the options that follow.", classes="radar-rail-help")
@@ -1729,6 +1769,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         with vuetify.VExpansionPanels(v_model=("live_setup_panels",), multiple=True, variant="accordion", v_show="workflow_mode === 'powgen'", classes="radar-setup-panels mb-3"):
             with self._setup_section(1, "Experiment", 0, "!!powgen_ipts", key_prefix="live-setup"):
                 vuetify.VTextField(
+                    id="radar-live-ipts",
                     label=("live_beamline_label + ' experiment (IPTS)'",),
                     v_model=("powgen_ipts",),
                     placeholder="IPTS-38000",
@@ -1760,6 +1801,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 )
                 html.P("{{ powgen_sample_message }}", classes="radar-help-copy")
                 vuetify.VSelect(
+                    id="radar-live-samples",
                     label="Samples to process", v_model=("powgen_processing_scope",),
                     items=("powgen_processing_options",),
                     item_title="title", item_value="value", density="compact", variant="outlined",
@@ -1810,6 +1852,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     disabled=("powgen_monitoring || live_launch_busy",),
                 )
                 vuetify.VSelect(
+                    id="radar-live-banks",
                     v_show="live_beamline === 'PG3' && powgen_bank_scope === 'selected'", label="Bank selection",
                     v_model=("powgen_processing_banks",), items=("powgen_bank_options",),
                     item_title="title", item_value="value", multiple=True, chips=True,
@@ -1818,6 +1861,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     persistent_hint=True,
                 )
                 vuetify.VSelect(
+                    id="radar-live-source-bank",
                     v_show="live_beamline === 'NOM' || live_beamline === 'SNAP'", label="Source bank / focused histogram to analyze",
                     v_model=("nomad_physical_bank",), items=("powgen_bank_options",),
                     item_title="title", item_value="value", density="compact", variant="outlined",
@@ -1859,6 +1903,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                         classes="mb-2",
                     )
                     vuetify.VSelect(
+                        id="radar-live-profile-source",
                         label=("live_beamline_label + ' instrument profile'",),
                         v_model=("powgen_instrument_source",),
                         items=("powgen_instrument_source_options",),
@@ -1895,6 +1940,9 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                         clearable=True,
                         no_data_text="No GSAS-II instrument profiles are in this Galaxy History",
                     )
+                    vuetify.VBtn("Refresh History inputs",v_show="powgen_instrument_source === 'galaxy'",
+                                 click=self.refresh_history,disabled=("powgen_monitoring || live_launch_busy",),
+                                 variant="text",size="small",prepend_icon="mdi-refresh")
                 self._live_beamline_review_controls()
             with self._setup_section(2, "Candidate structures", 1, "live_database_source === 'builtin' || (live_database_source === 'archive' && ((live_library_archive_source === 'galaxy' && !!powgen_database_dataset_id) || (live_library_archive_source === 'computer' && !!live_database_archive_path)))", key_prefix="live-setup"):
                 self._candidate_library_controls("live")
@@ -1907,7 +1955,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     density="compact",
                     variant="outlined",
                     disabled=("powgen_monitoring || live_launch_busy",),
-                    hint="Supply one dominant structural phase when it is already known.",
+                    hint="Supply the dominant structural phase when known. Put trace impurity CIFs in the candidate library instead.",
                     persistent_hint=True,
                 )
                 with html.Fieldset(
@@ -1936,11 +1984,15 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     clearable=True,
                     no_data_text="No CIF datasets are in this Galaxy History",
                 )
+                vuetify.VBtn("Refresh History inputs",v_show="powgen_main_cif_source === 'galaxy'",
+                             click=self.refresh_history,disabled=("powgen_monitoring || live_launch_busy",),
+                             variant="text",size="small",prepend_icon="mdi-refresh")
             with self._setup_section(3, "Analysis settings", 2, "live_configuration_source === 'history' ? !!powgen_configuration_dataset_id && !powgen_configuration_error : !!live_sample_elements", key_prefix="live-setup"):
                 self._live_analysis_setup()
             with self._setup_section(4, "Review and start", 3, "powgen_preflight_ready", key_prefix="live-setup"):
                 vuetify.VBtn(
                     "Check experiment and inputs",
+                    id="radar-live-review-check",
                     click=self.check_powgen_experiment,
                     prepend_icon="mdi-clipboard-check-outline",
                     variant="outlined",
@@ -2007,6 +2059,25 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 vuetify.VBtn("Test latest scan", click=self.test_live_scan, prepend_icon="mdi-flask-outline", variant="outlined", size="small", block=True, classes="mb-2", disabled=("powgen_monitoring || !powgen_preflight_ready || live_launch_busy || live_library_builder_decision_pending",))
                 html.P("The test submits one analysis for the latest matching scan and selected test bank. Continuous monitoring stays stopped.", classes="radar-help-copy")
                 html.P("{{ live_test_message }}", v_show="!!live_test_message", classes="radar-help-copy")
+                with html.Div(
+                    v_if="!powgen_monitoring && (!powgen_preflight_ready || !!live_restored_checkpoint_id || live_library_builder_decision_pending)",
+                    classes="radar-fix-list mb-3", raw_attrs=['aria-label="Steps needed before monitoring"'],
+                ):
+                    html.Div("NEXT STEPS", classes="radar-micro-label")
+                    self._live_fix_chip("Enter an IPTS", "!powgen_ipts", 0, "radar-live-ipts")
+                    self._live_fix_chip("Choose samples", "powgen_processing_scope === 'selected' && !powgen_processing_sample_ids.length", 0, "radar-live-samples")
+                    self._live_fix_chip("Choose POWGEN banks", "live_beamline === 'PG3' && powgen_bank_scope === 'selected' && !powgen_processing_banks.length", 0, "radar-live-banks")
+                    self._live_fix_chip("Choose a source bank", "['NOM','SNAP'].includes(live_beamline) && !nomad_physical_bank", 0, "radar-live-source-bank")
+                    self._live_fix_chip("Supply a matching profile", "powgen_instrument_source === 'computer' && !powgen_instrument_path || powgen_instrument_source === 'galaxy' && !powgen_instrument_dataset_id", 0, "radar-live-profile-source")
+                    self._live_fix_chip("Choose a candidate library", "live_database_source === 'archive' && (live_library_archive_source === 'computer' && !live_database_archive_path || live_library_archive_source === 'galaxy' && !powgen_database_dataset_id)", 1, "radar-live-setup-2")
+                    self._live_fix_chip("Choose saved analysis settings", "live_configuration_source === 'history' && !powgen_configuration_dataset_id", 2, "radar-live-setup-3")
+                    vuetify.VBtn("Refresh Galaxy inputs", v_if="powgen_instrument_source === 'galaxy' && !history_instrument_datasets.length || live_configuration_source === 'history' && !history_configuration_datasets.length",
+                                 click=self.refresh_history, size="small", variant="tonal", color="#15543c", prepend_icon="mdi-refresh")
+                    self._live_fix_chip("Finish the library decision", "live_library_builder_decision_pending", 1, "radar-live-setup-2")
+                    self._live_fix_chip("Check experiment and inputs", "!!powgen_ipts && !powgen_preflight_ready && powgen_preflight_status !== 'checking'", 3, "radar-live-review-check")
+                    vuetify.VBtn("Review or resume restored watch", v_if="!!live_restored_checkpoint_id",
+                                 click=self.show_powgen_dashboard, size="small", variant="tonal", color="#15543c",
+                                 prepend_icon="mdi-history")
                 with html.Div(classes="radar-button-row"):
                     vuetify.VBtn(
                         "Start monitoring",
@@ -2346,7 +2417,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     item_value="value",
                     density="compact",
                     variant="outlined",
-                    hint="Optional and independent of the diffraction-data source.",
+                    hint="Optional dominant structural phase. Put trace impurity CIFs in the candidate library instead.",
                     persistent_hint=True,
                 )
                 with html.Div(v_show="main_cif_source === 'upload'", key="'radar-main-cif-upload-panel'"):
@@ -2895,6 +2966,14 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     variant="text",
                     size="small",
                 )
+        with html.Div(v_if="powgen_results_refresh_available", classes="radar-watch-summary mb-3",
+                      raw_attrs=['role="status"']):
+            vuetify.VChip(text=("live_restored_checkpoint_id ? 'Restored watch · stopped' : powgen_monitoring ? 'Active watch · monitoring' : 'Watch · stopped'",),
+                          prepend_icon="mdi-access-point", variant="flat", size="small",
+                          color=("powgen_monitoring ? '#dff2e8' : '#eef2ef'",))
+            html.Span("Results and actions here use this watch. The setup rail edits a separate draft.")
+            vuetify.VBtn("Open setup draft", click="setup_collapsed = false",
+                         variant="text", size="small", prepend_icon="mdi-pencil-outline")
         with vuetify.VExpansionPanels(variant="accordion", classes="radar-experiment-meta mb-3",
                                      v_show="experiment_result_view !== 'transitions'"):
             with vuetify.VExpansionPanel(title="Monitor setup and processing summary"):
@@ -2927,7 +3006,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                     title, value=value, v_if="powgen_dashboard_instrument === 'PG3'" if value == "webmon" else None,
                     click=("setup_collapsed = true; $nextTick(() => window.setTimeout(() => { window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)); const map = window.document.querySelector('.radar-tracker-map-actions'); (map && map.getBoundingClientRect().height > 0 ? map : window.document.querySelector('.radar-experiment-result-tabs'))?.scrollIntoView({block:'start'}); }, 80))"
                            if value == "transitions" else
-                           "$nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))"),
+                           "setup_collapsed = true; $nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))"),
                 )
         html.P("{{ experiment_result_view === 'results' ? 'Preliminary fits and trends. Choose a completed scan to inspect its model and open the full fit.' : experiment_result_view === 'webmon' ? 'POWGEN WebMon shows a scan during collection. Live monitoring processes completed reduced scans.' : 'Prepare a reviewed recipe or compare structural and magnetic models. Preliminary fits remain in Results.' }}",
                v_if="experiment_result_view !== 'transitions'", classes='radar-section-help my-3')
@@ -3305,19 +3384,15 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             density="compact",
             classes="mb-3",
         )
-        vuetify.VAlert(
-            v_if="viewed_output_profile === 'monitor'",
-            text=(
-                "Live mode uses a low-latency publication profile: the normalized dashboard, fit plots, "
-                "and any usable GPX checkpoints are published immediately. Run a standard Full "
-                "single-pattern analysis when you need the complete table, phase-CIF, configuration, "
+        html.P("A GSAS-II desktop is already open with its original GPX. Save and close that desktop before opening a different checkpoint.",
+               v_if="gsasii_session_status === 'ready'", classes="radar-section-help mb-3")
+        with html.Details(v_if="viewed_output_profile === 'monitor'", classes="radar-science-notes mb-3"):
+            html.Summary("Live result · fast publication; some exports require a standard Full run")
+            html.P(
+                "Live mode publishes the normalized dashboard, fit plots, and usable GPX checkpoints immediately. "
+                "Run a standard Full single-pattern analysis for the complete table, phase-CIF, configuration, "
                 "and results-archive collections."
-            ),
-            type="info",
-            variant="tonal",
-            density="compact",
-            classes="mb-3",
-        )
+            )
         with html.Div(v_if="selected_run_status !== 'Ok'", classes="radar-result-not-ready"):
             vuetify.VAlert(text="Results will appear here after the selected Galaxy run completes.", type="info", variant="tonal")
         with html.Div(v_show="selected_run_status === 'Ok'"):
@@ -3363,10 +3438,11 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 with html.Div(v_for="metric in result_metrics", key="metric.label", classes="radar-metric-card"):
                     html.Div("{{ metric.label }}", classes="radar-metric-label")
                     html.Div("{{ metric.value }}", classes="radar-metric-value")
-            html.P("Covariance-derived uncertainties are conditional on the fitted model and recorded convergence; they do not establish model adequacy or calibration accuracy.",
-                v_if="viewed_run_mode === 'full'", classes="radar-section-help")
-            with vuetify.VAlert(v_for="warning in result_warnings", key="warning", text=("warning",), type="warning", variant="tonal", density="compact", classes="mb-2"):
-                pass
+            with html.Details(v_if="viewed_run_mode === 'full' || result_warnings.length", classes="radar-science-notes radar-science-notes-warning mb-3"):
+                html.Summary("Scientific qualifications · {{ result_warnings.length }} warning{{ result_warnings.length === 1 ? '' : 's' }} to review")
+                html.P("Covariance-derived uncertainties are conditional on the fitted model and recorded convergence; they do not establish model adequacy or calibration accuracy.",
+                    v_if="viewed_run_mode === 'full'")
+                html.P("{{ warning }}", v_for="warning in result_warnings", key="warning")
             with html.Div(classes="radar-result-overview-grid"):
                 self._phase_fraction_panel()
                 with html.Section(classes="radar-result-card radar-primary-plot-card"):
@@ -3513,6 +3589,8 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             density="compact",
             classes="mb-3",
         )
+        html.P("A GSAS-II desktop is already open with its original GPX. Save and close that desktop before opening a different checkpoint.",
+               v_if="gsasii_session_status === 'ready'", classes="radar-section-help mb-3")
         html.P(
             "Choose a published GPX checkpoint, then open it in the hosted GSAS-II desktop. The RADAR-PD result remains unchanged; saved edits return to Galaxy History.",
             v_show="checkpoint_rows.length > 0",
@@ -4225,6 +4303,12 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             state.powgen_configuration_label = label
             state.powgen_configuration_title = f"{selected.mode.value.title()} configuration details"
             state.powgen_configuration_summary = self._configuration_summary_rows(selected)
+            beamline = self._live_adapter()
+            if selected.radiation.value != 'neutron' or selected.instrument_mode not in {'auto', beamline.instrument_mode}:
+                state.powgen_configuration_error = (
+                    f"This configuration describes {selected.radiation.value} {selected.instrument_mode} data; "
+                    f"{beamline.name} needs neutron {beamline.instrument_mode} settings. Edit a copy and review its fit limits."
+                )
             try:
                 contract = self.service.load_json_document(dataset_id)
             except Exception:
@@ -5223,6 +5307,8 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         """Restore the selected cached result or the stopped Live scope."""
         if value not in {item["value"] for item in self.server.state.workspace_options}:
             return
+        if value != "monitor":
+            self.server.state.setup_collapsed = True
         if value == "experiment":
             self.show_powgen_dashboard()
         else:
@@ -5283,24 +5369,33 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             state.notice = "Stop monitoring before changing the beamline."
             return
         adapter = self._live_adapter()
-        if getattr(self, "_active_live_beamline", None) == adapter.instrument:
+        previous_beamline = getattr(self, "_active_live_beamline", None)
+        if previous_beamline == adapter.instrument:
             return
+        displayed_watch = self._powgen_controller
         self._invalidate_powgen_resume()
         self._active_live_beamline = adapter.instrument
-        if adapter.instrument != 'PG3' and getattr(state,'experiment_result_view','') == 'webmon':
+        if previous_beamline is not None:
+            # An IPTS number from another facility must be chosen deliberately
+            # for the new draft; it is not evidence of a matching experiment.
+            state.powgen_ipts = ""
+        acquisition_instrument = (displayed_watch.settings.instrument if displayed_watch is not None
+                                  else adapter.instrument)
+        if acquisition_instrument != 'PG3' and getattr(state,'experiment_result_view','') == 'webmon':
             state.experiment_result_view = 'results'
             if hasattr(self,'_webmon_stream'):self.webmon_pause_stream()
-        self._init_scan_interpretation()
+        if displayed_watch is None:
+            self._init_scan_interpretation()
         state.live_beamline_label = adapter.name
         state.powgen_processing_options = [
             {'title':'All sample labels' if adapter.instrument=='HB2A' else 'All samples','value':'all'},
             {'title':'Only selected sample labels' if adapter.instrument=='HB2A' else 'Only selected sample IDs','value':'selected'}]
         state.live_instrument_mode = adapter.instrument_mode
         self._powgen_sample_request = object()
-        self._powgen_controller = None
-        self._powgen_controller_configuration = None
-        self._powgen_settings_signature = None
-        self._sync_powgen_rows()
+        if displayed_watch is None:
+            self._powgen_controller_configuration = None
+            self._powgen_settings_signature = None
+            self._sync_powgen_rows()
         self._powgen_form_ipts = None
         self._powgen_ipts_changed()
         state.powgen_source_subfolder = adapter.default_folder
@@ -5911,7 +6006,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         state = self.server.state
         if state.powgen_monitoring or getattr(state, "live_launch_busy", False) or getattr(state, "live_restore_busy", False):
             return
-        if getattr(self._powgen_controller, "restore_checkpoint_dataset_id", ""):
+        if self._powgen_controller is not None:
             if getattr(self._powgen_controller, "restore_requires_explicit_inspection", False):
                 state.error_message = "This saved watch remains read-only. Use Restore a saved Live watch to inspect its restrictions before resuming."
             else:
@@ -6089,13 +6184,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
             self._powgen_wake_event.clear()
             self._powgen_monitor_task = asyncio.create_task(
                 self._powgen_monitor_loop(), name=f"radar-powgen-watch-{controller.settings.ipts.lower()}")
-            try:
-                same_webmon_scope = (state.live_beamline == controller.settings.instrument
-                    and self._normalize_powgen_ipts(state.powgen_ipts) == controller.settings.ipts)
-            except ValueError:
-                same_webmon_scope = False
-            if same_webmon_scope:
-                self.webmon_attach_monitor()
+            self.webmon_attach_monitor()
         except Exception as exc:
             if owns_view():
                 state.error_message = str(exc)
@@ -8991,10 +9080,24 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         .radar-run-chip .v-chip__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .radar-layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); min-height: calc(100vh - 122px); }
         .radar-layout.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+        .radar-setup-scrim { display: none; }
+        .radar-drawer-close { display: none !important; }
         .radar-setup-rail {
           width: 360px; max-height: calc(100vh - 122px); overflow-y: auto; padding: 18px 14px 36px;
           background: #eef5f1; border-right: 1px solid var(--radar-line-strong); scrollbar-gutter: stable;
         }
+        .radar-watch-context, .radar-watch-summary {
+          border: 1px solid #bed8ca; border-left: 4px solid var(--radar-brand-700);
+          border-radius: 8px; background: #f7fbf8; padding: 10px 12px;
+        }
+        .radar-watch-context strong { display: block; margin: 4px 0; color: var(--radar-brand-900); font-size: 14px; }
+        .radar-watch-context p { margin: 3px 0 9px; color: #3c5a4b; font-size: 12px; line-height: 1.4; }
+        .radar-watch-context-actions, .radar-watch-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .radar-watch-summary span { color: #3c5a4b; font-size: 12px; line-height: 1.4; }
+        .radar-fix-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 10px;
+          border: 1px solid #d6e7dd; border-radius: 8px; background: #f7faf8; }
+        .radar-fix-list .radar-micro-label { flex: 1 0 100%; }
+        .radar-fix-list .v-btn { text-transform: none; letter-spacing: 0; }
         .radar-rail-kicker, .radar-kicker, .radar-context-kicker, .radar-micro-label {
           color: var(--radar-brand-700); font-size: 11px; line-height: 1.2; font-weight: 800; letter-spacing: .075em; text-transform: uppercase;
         }
@@ -9158,6 +9261,11 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         .radar-queue-activity .radar-console { max-height: 320px; }
         .radar-config-preview { background: #f5f8f7; color: #263a32; border: 1px solid var(--radar-line); }
         .radar-run-provenance { padding: 12px; background: #fff; border: 1px solid var(--radar-line); border-radius: 8px; }
+        .radar-science-notes { padding: 10px 13px; border: 1px solid #cbded1; border-radius: 8px; background: #f5faf6; font-size: 12px; line-height: 1.5; }
+        .radar-science-notes-warning { border-color: #e4cd9b; background: #fffaf0; }
+        .radar-science-notes summary { cursor: pointer; font-weight: 700; color: #244b37; }
+        .radar-science-notes-warning summary { color: #75521a; }
+        .radar-science-notes p { margin: 8px 0 0; }
         .radar-run-provenance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 8px; }
         .radar-run-provenance-item { min-width: 0; padding: 8px 9px; background: var(--radar-surface-muted); border-radius: 6px; }
         .radar-run-provenance-item span, .radar-run-provenance-item strong { display: block; overflow-wrap: anywhere; }
@@ -9409,7 +9517,12 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
         @media (max-width: 1050px) {
           .radar-context-header { position: static; flex-wrap: wrap; }
           .radar-layout, .radar-layout.is-collapsed { display: block; }
-          .radar-setup-rail { width: 100%; max-height: none; border-right: 0; border-bottom: 1px solid var(--radar-line-strong); }
+          .radar-setup-scrim { display: block; position: fixed; inset: 64px 0 0; z-index: 10; background: rgba(9, 30, 20, .44); }
+          .radar-setup-rail { position: fixed; top: 64px; bottom: 0; left: 0; z-index: 11; width: min(420px, 92vw);
+            max-height: none; border-right: 1px solid var(--radar-line-strong); border-bottom: 0;
+            box-shadow: 12px 0 32px rgba(9, 30, 20, .18); }
+          .radar-drawer-close { display: inline-flex !important; position: sticky; top: -18px; z-index: 2;
+            width: 100%; justify-content: flex-start; background: #eef5f1; }
           .radar-workspace-empty { min-height: 430px; }
           .radar-empty-grid { grid-template-columns: 1fr; }
         }

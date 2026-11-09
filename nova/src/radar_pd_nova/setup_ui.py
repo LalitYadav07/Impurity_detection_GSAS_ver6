@@ -435,6 +435,8 @@ class SetupEditorMixin:
             key=f"'{upload_key}-library-archive-panel'",
             classes="radar-library-panel",
         ):
+            html.P("Use a portable library ZIP produced by RADAR-PD. A ZIP containing raw CIFs belongs in ‘Create a mini-library from my CIFs’; build it there first.",
+                   classes="radar-help-copy")
             vuetify.VSelect(
                 label="Where is the reusable library archive?",
                 v_model=value("library_archive_source"),
@@ -453,7 +455,7 @@ class SetupEditorMixin:
                 NamedFileUpload(
                     key("database_archive_path"),
                     label="RADAR-PD library archive",
-                    help_text="A library previously produced by the RADAR-PD library builder (.zip)",
+                    help_text="A built RADAR-PD portable library (.zip), not a raw CIF ZIP",
                     extensions=[".zip"],
                     optional=False,
                     key=f"{upload_key}-database-upload",
@@ -470,6 +472,8 @@ class SetupEditorMixin:
                 variant="outlined",
                 no_data_text="No library archives are in this history",
             )
+            vuetify.VBtn('Refresh History inputs',v_show=f"{archive_source} === 'galaxy'",
+                         click=self.refresh_history,disabled=(locked,),variant='text',size='small',prepend_icon='mdi-refresh')
             vuetify.VBtn('Review selected library',click=(self.review_candidate_library,f"['{context}']"),
                 loading=value('library_review_loading'),disabled=(locked,),variant='outlined',block=True)
             html.P("{{ "+key('library_review_message')+" }}",classes='radar-help-copy')
@@ -548,6 +552,8 @@ class SetupEditorMixin:
                 density="compact",
                 variant="outlined",
             )
+            vuetify.VBtn('Refresh History inputs',click=self.refresh_history,disabled=(locked,),
+                         variant='text',size='small',prepend_icon='mdi-refresh')
             vuetify.VBtn(
                 text=(
                     f"{prefix}library_builder_active ? 'Building library...' : 'Build and use this library'",

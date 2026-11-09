@@ -260,7 +260,8 @@ def test_powgen_monitor_requires_preflight_and_exposes_safe_backfill_controls() 
     assert "() => setTimeout" not in template
     assert "No GPX checkpoint was published for this run." in template
     assert "checkpoint_rows.length > 0" in template
-    assert "Live mode uses a low-latency publication profile" in template
+    assert "Live result · fast publication; some exports require a standard Full run" in template
+    assert "Scientific qualifications ·" in template
     assert "item.created_display" in template
     assert "job {{ run.job_short }}" in template
     assert "gsasii_session_status !== 'ready'" in template

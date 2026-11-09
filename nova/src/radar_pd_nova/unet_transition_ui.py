@@ -826,9 +826,6 @@ class UnetTransitionMixin:
         with html.Section(classes="radar-result-card radar-transition-workspace my-3"):
             with html.Div(classes="radar-tracker-header"):
                 html.H3("U-Net feature review", classes="radar-card-title")
-                vuetify.VBtn(text=("setup_collapsed ? 'Show setup' : 'Focus plots'",),
-                             click="setup_collapsed = !setup_collapsed; $nextTick(() => window.setTimeout(() => { window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && window.Plotly && window.Plotly.Plots.resize(el)); if (setup_collapsed) window.document.querySelector('.radar-tracker-map-actions')?.scrollIntoView({block:'start'}); }, 80))",
-                             variant="text", size="small")
                 vuetify.VBtn(text=("unet_transition_follow ? 'Following latest' : 'Return to latest'",),
                              click=self.follow_unet_transition_latest, variant="tonal", size="small",
                              v_if="!unet_transition_follow")

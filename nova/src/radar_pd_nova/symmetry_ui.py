@@ -50,6 +50,7 @@ def model_exploration(app):
         .sx-fit{min-width:0;width:100%;height:570px}.sx-overview{min-width:0;width:100%;height:300px}.sx-evidence{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.sx-evidence p{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
         .sx-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0;align-items:start}.sx-settings>.v-input{min-width:0}.sx-bounds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}.sx-bounds>.v-input{min-width:0}.sx-setup{margin-bottom:20px}.sx-status{padding:12px 16px;background:#f2f6f3;border-radius:6px;font-size:13px;line-height:1.8;margin-bottom:18px}
         .sx-choices .v-field__input{max-height:92px;overflow-y:auto}.sx-choices .v-chip{max-width:95%}
+        .sx-next-steps{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:12px}.sx-next-steps strong{flex:1 0 100%;font-size:11px;letter-spacing:.06em;color:#15543c}.sx-next-steps .v-btn{text-transform:none;letter-spacing:0}
         .sx-full-width{grid-column:1/-1}
         @media(max-width:850px){.sx-layout,.sx-evidence,.sx-settings,.sx-bounds{grid-template-columns:1fr}.sx-models{max-height:260px}}
         ''')
@@ -117,7 +118,7 @@ def model_exploration(app):
                     v.VCheckbox(label='Refine shared nuclear/magnetic intensity scale',v_model=('sx_refine_scale',),density='compact',hide_details=True)
                     v.VCheckbox(label='Refine existing background coefficients',v_model=('sx_refine_background',),density='compact',hide_details=True)
                     html.P('Consider these when the starting nuclear-only fit absorbed magnetic intensity. One common scale keeps phase amounts linked; the background basis and coefficient count stay fixed. The same scope applies to every candidate.',classes='rf-notice')
-                v.VTextField(label='Experiment-specific adequate Rwp (%)',v_model=('sx_adequate',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
+                v.VTextField(label='Experiment-specific adequate Rwp (%)',v_model=('sx_adequate',),id='radar-sx-adequate',type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Maximum moment (µB)',v_model=('sx_max_moment',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 v.VTextField(v_if="sx_kind === 'magnetic'",label='Magnetic d cutoff (Å) · 0 uses the full fit range',v_model=('sx_mag_d_min',),type='text',inputmode='decimal',density='compact',variant='outlined',hide_details=True)
                 with html.Details(v_if="sx_kind === 'structural'",classes="sx-full-width mt-3"):
@@ -172,7 +173,7 @@ def model_exploration(app):
             with html.Div(v_if='sx_discovered && sx_candidate_options.length',classes='mt-4'):
                 v.VBtn('Include all catalog embeddings',click='sx_candidates = sx_candidate_options.map(c => c.value)',variant='text',size='small')
                 v.VBtn('Clear model selection',click='sx_candidates = []',variant='text',size='small')
-                v.VAutocomplete(label='Constructed models to explore',v_model=('sx_candidates',),items=('sx_candidate_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='sx-choices',update_modelValue=app._symmetry_unapprove)
+                v.VAutocomplete(label='Constructed models to explore',v_model=('sx_candidates',),items=('sx_candidate_options',),multiple=True,chips=True,closable_chips=True,density='compact',variant='outlined',hide_details=True,classes='sx-choices',id='radar-sx-candidates',update_modelValue=app._symmetry_unapprove)
                 with html.Div(classes='rf-toolbar mt-3'):
                     select('Scans to refine','sx_existing',"[{title:'Current scan only',value:'selected'},{title:'Select scans',value:'custom'},{title:'All matching scans',value:'sample'}]")
                     app._number_field(label='Maximum scans',v_model=('sx_max_scans',),min=1,max=2000,density='compact',variant='outlined')
@@ -180,6 +181,10 @@ def model_exploration(app):
                 html.P('Only the same sample, bank and starting recipe stage are listed. The plan includes the exact scan selection; other samples and checkpoints remain separate.',classes='rf-notice')
                 v.VCheckbox(label='Follow new matching GPXs while this session is open',v_model=('sx_follow_new',),density='compact')
                 html.P('Each new scan is checked against the reviewed parent, sample, bank and recipe. Incompatible inputs wait for review.',classes='rf-notice')
+                with html.Div(v_if='!sx_candidates.length || !sx_adequate',classes='sx-next-steps',raw_attrs=['aria-label="Steps needed before building a model campaign"']):
+                    html.Strong('NEXT STEPS')
+                    v.VBtn('Select models',v_if='!sx_candidates.length',click="window.document.getElementById('radar-sx-candidates')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
+                    v.VBtn('Set an adequate Rwp',v_if='!sx_adequate',click="window.document.getElementById('radar-sx-adequate')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
                 v.VBtn('Build finite plan',click=(app.build_symmetry_plan,form),disabled=('sx_busy || sx_campaign_running || !sx_candidates.length || !sx_adequate',),variant='outlined',color='#15543c',classes='mt-3')
                 html.P('Enter an experiment-specific adequate Rwp above before building the plan. This is a reviewed fit-quality target, not a space-group assignment.',v_if='!sx_adequate',classes='rf-notice mt-2')
             with html.Div(v_if='sx_plan_ready',classes='mt-4'):
@@ -188,8 +193,8 @@ def model_exploration(app):
                     html.Summary('Review every embedding ({{ sx_plan_candidates.length }})')
                     v.VDataTable(items=('sx_plan_candidates',),headers=("[{title:'Model',key:'name'},{title:'BNS',key:'bns'},{title:'Basis',key:'basis'},{title:'Origin',key:'origin'},{title:'Free modes',key:'modes'}]",),items_per_page=8,density='compact')
                 with html.Div(classes='rf-actions'):
-                    v.VBtn('Approve finite plan',click=(app.approve_symmetry,form),disabled=('sx_approved || sx_campaign_running',),variant='outlined',color='#15543c')
-                    v.VBtn('Start approved campaign',click=(app.start_symmetry_campaign,form),disabled=('!sx_approved || sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
+                    v.VBtn('Approve finite plan',v_if='!sx_approved',click=(app.approve_symmetry,form),disabled=('sx_campaign_running',),variant='outlined',color='#15543c')
+                    v.VBtn('Start approved campaign',v_if='sx_approved',click=(app.start_symmetry_campaign,form),disabled=('sx_busy || sx_campaign_running',),variant='flat',color='#15543c')
                 html.P('Fast checked magnetic searches prepare one surrogate per model and verify distinct fitted profiles in GSAS-II. Other searches use isolated native starts. Galaxy jobs share immutable inputs and use the allocated CPU/RAM. Missing allocation information limits the pool to one worker. Model calls run only during setup.',classes='rf-notice')
                 html.P('Structural fit comparisons require a matched parent/nuisance refinement. A lower Rwp alone does not establish a transition.',v_if="sx_kind === 'structural'",classes='rf-notice')
         html.P('{{ sx_scope_progress }}',v_if='!sx_setup && sx_results_current && !!sx_scope_progress',classes='rf-notice')

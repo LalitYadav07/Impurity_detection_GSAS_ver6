@@ -23,6 +23,9 @@ def refinement_dashboard(app):
         .rf-subtitle{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:#61786a;margin-bottom:10px;font-weight:650}
         .rf-stage{border-left:3px solid #31876a;padding:0 0 18px 15px;margin:20px 0 0}.rf-stage ul{margin:8px 0 8px 17px;color:#28493b;font-size:13px;line-height:1.7}.rf-stage summary{font-size:12px;cursor:pointer;color:#577367}
         .rf-source{background:#f4f8f5;border-radius:6px;padding:12px;font-size:12px;line-height:1.7}.rf-source b{font-weight:600;color:#3d6251}
+        .rf-next-steps{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:10px;border:1px solid #d6e7dd;border-radius:8px;background:#f7faf8;margin-top:12px}
+        .rf-next-steps strong{flex:1 0 100%;font-size:11px;letter-spacing:.06em;color:#15543c}
+        .rf-next-steps .v-btn{text-transform:none;letter-spacing:0}
         .rf-results{display:grid;grid-template-columns:300px minmax(0,1fr);gap:20px;align-items:start}.rf-list{max-height:730px;overflow:auto;margin-top:14px}
         .rf-scan{display:block;width:100%;text-align:left;background:white;border:1px solid #dce7df;border-radius:7px;padding:13px;margin-bottom:9px;cursor:pointer;line-height:1.6;color:#214633}.rf-scan:hover{background:#f4f8f5}.rf-scan.active{border-color:#157347;background:#eef8f1;box-shadow:inset 3px 0 #157347}
         .rf-scan strong{font-size:13px;display:block}.rf-scan span{font-size:11px;display:block;color:#6c7c71}.rf-scan .rf-state{font-weight:600;color:#406451}
@@ -96,7 +99,7 @@ def refinement_dashboard(app):
                 html.Div('2 · Describe the refinement',classes='rf-subtitle')
                 select('If a stage fails scientific checks','rf_failure_policy',"[{title:'Restore previous checkpoint and continue independent stages',value:'continue_independent'},{title:'Stop the recipe',value:'stop'}]",v_show="rf_setup_mode === 'expert'",update_modelValue=app.refinement_policy_edited)
                 html.P('Rejected values are discarded. Dependent stages are skipped. Recovered outputs retain the rejected-stage warnings.',v_show="rf_setup_mode === 'expert'",classes='rf-help')
-                select('Representative GPX','rf_source','rf_sources',update_modelValue=app.refinement_policy_edited)
+                select('Representative GPX','rf_source','rf_sources',id='radar-rf-source',update_modelValue=app.refinement_policy_edited)
                 with html.Div(v_if='!!rf_source',classes='rf-source mt-3'):
                     with html.Div(v_for='item in rf_source_details',key='item.label'):
                         html.B('{{ item.label }}: ');html.Span('{{ item.value }}')
@@ -107,16 +110,26 @@ def refinement_dashboard(app):
                     v.VTextField(label='Find phase or atom',v_model=('rf_context_search',),density='compact',variant='outlined',hide_details=True,classes='my-3')
                     v.VDataTable(items=('rf_context_atoms',),search=('rf_context_search',),headers=("[{title:'Phase',key:'phase'},{title:'Atom',key:'atom'},{title:'Element',key:'element'},{title:'ADP',key:'adp'},{title:'Position freedoms',key:'position_dof'}]",),items_per_page=5,density='compact')
                 guided_setup(app)
-                v.VTextarea(v_show="rf_setup_mode === 'expert'",label='Refinement request',v_model=('rf_request',),placeholder='Name the phases and exact atom labels. Refine background and scales, then cells and only symmetry-allowed positions. Keep occupancies fixed; release one Uiso site at a time if needed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
+                v.VTextarea(v_show="rf_setup_mode === 'expert'",id='radar-rf-request',label='Refinement request',v_model=('rf_request',),placeholder='Name the phases and exact atom labels. Refine background and scales, then cells and only symmetry-allowed positions. Keep occupancies fixed; release one Uiso site at a time if needed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
+                with html.Details(v_show="rf_setup_mode === 'expert'",classes='rf-notice mt-2'):
+                    html.Summary('If releasing TOF X/Y/Z width terms')
+                    html.P('Instrument X/Y/Z terms can absorb sample broadening that is part of a physical transition. Keep the instrument profile fixed unless standards support releasing them, and compare the before/after peak widths and residuals.')
                 v.VBtn('Load staged atom + Uiso example',v_show="rf_setup_mode === 'expert'",click=app.load_atomic_refinement_example,variant='text',size='small',prepend_icon='mdi-text-box-outline',classes='mt-2')
                 html.P('Specify stages, phase names, atoms, constraints and anything that must remain fixed. Revisions replace approval and pause future enrollment.',v_show="rf_setup_mode === 'expert'",classes='rf-notice')
-                v.VBtn("{{ rf_cards.length ? 'Revise recipe' : 'Generate recipe' }}",v_show="rf_setup_mode === 'expert'",click=(app.generate_refinement_recipe,'[{experiment: rf_experiment, source: rf_source, request: rf_request}]'),disabled=('rf_busy || rf_guided_busy || !rf_source || !rf_request.trim()',),loading=('rf_busy',),color='#15543c',variant='flat',block=True,prepend_icon='mdi-auto-fix',classes='mt-4')
+                v.VBtn("{{ rf_cards.length ? 'Revise recipe' : 'Generate recipe' }}",v_show="rf_setup_mode === 'expert'",id='radar-rf-generate',click=(app.generate_refinement_recipe,'[{experiment: rf_experiment, source: rf_source, request: rf_request}]'),disabled=('rf_busy || rf_guided_busy || !rf_source || !rf_request.trim()',),loading=('rf_busy',),color='#15543c',variant='flat',block=True,prepend_icon='mdi-auto-fix',classes='mt-4')
             with html.Div(classes='rf-card'):
                 html.Div('3 · Review and approve',classes='rf-subtitle');html.H3('Refinement stages')
                 with html.Div(v_if='rf_recipe_versions.length',classes='rf-toolbar'):
                     select('Saved recipe','rf_saved_recipe','rf_recipe_versions')
                     v.VBtn('Use saved recipe',click=app.reuse_refinement_recipe,disabled=('rf_busy || rf_guided_busy || !rf_saved_recipe || !rf_source',),variant='outlined',size='small')
                 html.P('{{ rf_active_summary }}',v_if='!!rf_active_summary',classes='rf-notice')
+                with html.Div(v_if="rf_future || rf_future_armed || rf_approved",classes='rf-toolbar'):
+                    v.VChip(text=("rf_future_armed ? 'Future enrollment active' : rf_future ? 'Future enrollment requested · approval needed' : 'Existing scans only'",),
+                            prepend_icon='mdi-calendar-clock',size='small',variant='tonal',
+                            color=("rf_future_armed ? '#dff2e8' : '#fff2d8'",))
+                    v.VChip(text=("rf_approved ? 'Current plan approved' : 'Draft not approved'",),
+                            prepend_icon='mdi-check-decagram-outline',size='small',variant='tonal',
+                            color=("rf_approved ? '#dff2e8' : '#fff2d8'",))
                 html.P('{{ rf_message }}',v_if='!!rf_message',classes='rf-muted')
                 html.P('{{ rf_preparation_progress }}',v_if='!!rf_preparation_progress',classes='rf-notice',role='status')
                 html.P('Recipe preparation is separate from polishing. This draft needs approval before it can start polishing jobs.',
@@ -125,7 +138,7 @@ def refinement_dashboard(app):
                     html.H3('Your staged plan will appear here')
                     html.P('Inspect the exact parameters released at each stage before any scan is polished.')
                 v.VAlert(v_for='question in rf_questions',key='question',text=('question',),type='warning',variant='tonal',density='compact',classes='mt-3')
-                with html.Div(v_if='rf_questions.length',classes='rf-source mt-3'):
+                with html.Div(v_if='rf_questions.length',id='radar-rf-questions',classes='rf-source mt-3'):
                     v.VTextarea(label='Answer the questions above',v_model=('rf_question_answer',),rows=3,variant='outlined',disabled=('rf_busy',))
                     v.VBtn('Use answer and revise recipe',click=(app.answer_recipe_questions,'[rf_question_answer]'),disabled=('rf_busy || !rf_question_answer.trim()',),variant='outlined',size='small')
                 html.P('{{ rf_cards.length }} stages · expand each stage to review its complete free set before approval.',v_if='rf_cards.length',classes='rf-notice mt-3')
@@ -153,6 +166,13 @@ def refinement_dashboard(app):
                         html.P('Public GPT-6 Luna Standard rates on 2026-10-28: $0.10 per million ordinary input tokens, $0.01 cached input, $0.125 cache writes, and $0.50 output. Requests above 272,000 input tokens use the published long-context multipliers. This is not an ORNL Azure billing record.')
                         html.A('Published Luna rates',href='https://developers.openai.com/api/docs/models/gpt-6-luna',target='_blank',rel='noopener noreferrer')
                 v.VAlert(v_if='rf_approved',text=('rf_recipe_summary',),type='success',variant='tonal',density='compact',classes='mt-3')
+                with html.Div(v_if='!rf_plan_ready && !rf_busy && !rf_guided_busy',classes='rf-next-steps',raw_attrs=['aria-label="Steps needed before recipe approval"']):
+                    html.Strong('NEXT STEPS')
+                    v.VBtn('Choose a representative GPX',v_if='!rf_source',click="window.document.getElementById('radar-rf-source')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
+                    v.VBtn('Describe the stages',v_if="!!rf_source && rf_setup_mode === 'expert' && !rf_request.trim()",click="window.document.getElementById('radar-rf-request')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
+                    v.VBtn('Answer recipe questions',v_if='rf_questions.length',click="window.document.getElementById('radar-rf-questions')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
+                    v.VBtn('Build the guided plan',v_if="!!rf_source && !rf_questions.length && rf_setup_mode === 'guided'",click="window.document.getElementById('radar-rf-guided')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
+                    v.VBtn('Generate or revise the plan',v_if="!!rf_source && !rf_questions.length && rf_setup_mode === 'expert' && !!rf_request.trim()",click="window.document.getElementById('radar-rf-generate')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
                 with html.Div(classes='rf-actions'):
                     v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token]'),disabled=('!rf_plan_ready || rf_busy || rf_guided_busy || rf_approved',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')
                     v.VBtn('Start refinement',click=app.start_refinement_queue,disabled=('!rf_approved || rf_busy || rf_guided_busy',),variant='flat',color='#15543c',prepend_icon='mdi-play')

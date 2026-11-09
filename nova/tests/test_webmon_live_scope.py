@@ -267,21 +267,21 @@ def test_all_sample_watch_still_requires_reference_and_target_to_match():
     assert not scope.source_error(reference(sample='200'),row)
 
 
-def test_beamline_switch_revokes_scope_even_when_old_controller_remains(view):
+def test_beamline_draft_switch_preserves_saved_watch_scope(view):
     view.webmon_refresh();owner=view._webmon_scope_snapshot()
     view.server.state.live_beamline='NOM'
-    assert not view._webmon_scope_current(owner)
+    assert view._webmon_scope_current(owner)
     view.webmon_scope_changed()
-    assert not view.server.state.webmon_run and not view.server.state.webmon_scope_allowed
+    assert view.server.state.webmon_run == '8' and view.server.state.webmon_scope_allowed
 
 
-def test_changing_scope_away_and_back_does_not_revive_old_permission(view):
+def test_editing_draft_sample_away_and_back_preserves_saved_watch_permission(view):
     view.webmon_refresh();owner=view._webmon_scope_snapshot()
     view.server.state.webmon_accepted=True
     view.server.state.powgen_processing_sample_ids=['200'];view.webmon_scope_changed()
     view.server.state.powgen_processing_sample_ids=['100'];view.webmon_scope_changed()
-    assert not view._webmon_scope_current(owner)
-    assert not view.server.state.webmon_accepted and not view.server.state.webmon_context_ready
+    assert view._webmon_scope_current(owner)
+    assert view.server.state.webmon_accepted
 
 
 @pytest.mark.parametrize('sample',['100','200'])
