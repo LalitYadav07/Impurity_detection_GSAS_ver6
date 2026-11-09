@@ -13,7 +13,7 @@ import numpy as np
 from ..symmetry.contracts import fields,digest
 from . import structural_mode_readout as readout
 from .structural_family_targets import TargetRows
-from .structural_mode_families import NORMALIZATION
+from .structural_mode_families import NORMALIZATION,NORMALIZATIONS,STRAIN_NORMALIZATION
 from .structural_model_files import MAX_METADATA_BYTES
 from .tof_kernel_arrays import checksum
 
@@ -39,7 +39,7 @@ def validate(spec):
     if (d['schema']!=SCHEMA or not isinstance(classes,list) or not 1<=len(classes)<=230
             or any(type(c)is not int or not 1<=c<=230 for c in classes) or classes!=sorted(set(classes))
             or not isinstance(families,list) or not 1<=len(families)<=readout.MAX_FAMILIES
-            or d['normalization']!=NORMALIZATION or not isinstance(scales,list) or len(scales)!=len(families)
+            or d['normalization'] not in NORMALIZATIONS or not isinstance(scales,list) or len(scales)!=len(families)
             or any(type(v)is not float or not math.isfinite(v) or v<=0 for v in scales)
             or not isinstance(counts,list) or len(counts)!=len(classes)
             or any(not isinstance(row,list) or len(row)!=len(families)
@@ -51,16 +51,23 @@ def validate(spec):
             or d['quantiles']!=[.1,.9] or d['mode_head_trained'] is not True
             or any(d[k]is not False for k in ['intervals_calibrated','experimental_mode_absence_qualified','candidate_pruning_authorized'])):
         raise ValueError('Complete unqualified conditional-mode normalization and training identities required')
-    _families(families)
+    _families(families,normalization=d['normalization'])
     return d
 
 
-def _families(values):
+def _families(values,*,normalization=None):
     if not isinstance(values,list) or not 1<=len(values)<=readout.MAX_FAMILIES:
         raise ValueError('A complete bounded mode-family inventory is required')
     identifiers=[];parents=set()
     for family in values:
-        f=fields(family,['id','parent_sha256','parent_convention','k','irrep'])
+        if not isinstance(family,dict):raise ValueError('Complete typed mode-family identity required')
+        extra={'quantity','units','normalization'}
+        typed=bool(extra.intersection(family))
+        if typed and not extra.issubset(family):raise ValueError('Complete strain quantity and unit identity required')
+        f=fields(family,['id','parent_sha256','parent_convention','k','irrep']+(sorted(extra) if typed else []))
+        if typed and (f['quantity']!='lattice_strain' or f['units']!='dimensionless'
+                or f['normalization']!=STRAIN_NORMALIZATION or normalization==NORMALIZATION):
+            raise ValueError('Strain targets cannot use displacement units or normalization')
         k=f['k']
         if (not checksum(f['id']) or not checksum(f['parent_sha256'])
                 or any(not isinstance(f[key],str) or not 1<=len(f[key])<=1000 for key in ['parent_convention','irrep'])
@@ -71,6 +78,7 @@ def _families(values):
         except (ValueError,ZeroDivisionError) as error:raise ValueError('Exact rational mode-family k required') from error
         if canonical!=k or digest({key:value for key,value in f.items() if key!='id'})!=f['id']:
             raise ValueError('Mode family identity changed its parent convention or propagation vector')
+        if typed and k!=['0','0','0']:raise ValueError('Uniform lattice-strain modes require Gamma wave vector')
         identifiers.append(f['id']);parents.add(f['parent_sha256'])
     if identifiers!=sorted(set(identifiers)) or len(parents)!=1:
         raise ValueError('Retain the complete ordered mode-family inventory for one parent')
@@ -260,7 +268,7 @@ def validate_estimates(value,*,space_groups=None):
     d=fields(value,['schema','available','space_groups','families','readout_identity','rows','amplitude_normalization',
         'reason','intervals_calibrated','experimental_mode_absence_qualified','candidate_pruning_authorized'])
     groups=d['space_groups'];families=d['families'];rows=d['rows']
-    if (d['schema']!=SCHEMA or type(d['available'])is not bool or d['amplitude_normalization']!=NORMALIZATION
+    if (d['schema']!=SCHEMA or type(d['available'])is not bool or d['amplitude_normalization'] not in NORMALIZATIONS
             or any(d[k]is not False for k in ['intervals_calibrated','experimental_mode_absence_qualified','candidate_pruning_authorized'])
             or not isinstance(d['reason'],str) or not 1<=len(d['reason'])<=1000
             or not isinstance(groups,list) or any(type(c)is not int or not 1<=c<=230 for c in groups)
@@ -270,7 +278,7 @@ def validate_estimates(value,*,space_groups=None):
         if groups or families or rows or d['readout_identity'] is not None:
             raise ValueError('Unavailable mode estimates cannot claim learned amplitudes')
         return d
-    _families(families)
+    _families(families,normalization=d['amplitude_normalization'])
     if (not groups or not checksum(d['readout_identity']) or len(rows)!=len(groups)*len(families)
             or space_groups is not None and groups!=space_groups):
         raise ValueError('Mode estimates must retain every requested class/family condition')

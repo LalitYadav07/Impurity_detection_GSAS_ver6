@@ -22,13 +22,26 @@ AUDIT_TOLERANCE=1e-10
 LABEL=re.compile(r'^(?P<parent>[^\[\]]+)\[(?P<k>[^\[\]]+)\]'
     r'(?P<irrep>[A-Za-z][A-Za-z0-9_+\-]*)\((?P<opd>[^\[\]]*)\)'
     r'\[(?P<site>[^:\[\]]+):(?P<wyckoff>[^:\[\]]+):dsp\](?P<component>.+)$')
+STRAIN_LABEL=re.compile(r'^(?P<parent>[^\[\]]+)\[(?P<k>[^\[\]]+)\]'
+    r'(?P<irrep>[A-Za-z][A-Za-z0-9_+\-]*)\((?P<opd>[^\[\]]*)\)'
+    r'strain(?:_\d+)?\((?P<component>[^()]*)\)$')
+STRAIN_NORMALIZATION='parent-metric-cartesian-infinitesimal-strain-frobenius/v1'
+TYPED_NORMALIZATION='per-family-displacement-and-lattice-strain/v1'
+NORMALIZATIONS={NORMALIZATION,TYPED_NORMALIZATION}
 
 
-def family_label(label,*,parent_sha256):
-    """Parse only the explicit native displacement grammar; otherwise unknown."""
+def family_label(label,*,parent_sha256,quantity='displacement'):
+    """Parse explicit native labels; unlike-unit families have distinct IDs.
+
+    The default displacement result remains byte-compatible with existing
+    prepared models. Uniform lattice strain uses a separate dimensionless
+    normalization and cannot be mistaken for the same irrep's displacement.
+    """
     if not isinstance(label,str) or not checksum(parent_sha256):
         raise ValueError('Native mode-family labels require their exact parent identity')
-    found=LABEL.fullmatch(label)
+    if quantity not in {'displacement','lattice_strain'}:
+        raise ValueError('Explicit displacement or lattice-strain quantity required')
+    found=(LABEL if quantity=='displacement' else STRAIN_LABEL).fullmatch(label)
     if found is None:return None
     values=found.groupdict();parts=values['k'].split(',')
     if len(parts)!=3 or any(not p.strip() or len(p.strip())>80 for p in parts):return None
@@ -36,6 +49,11 @@ def family_label(label,*,parent_sha256):
     except (ValueError,ZeroDivisionError):return None
     identity=dict(parent_sha256=parent_sha256,parent_convention=values['parent'],
         k=k,irrep=values['irrep'])
+    if quantity=='lattice_strain':
+        if k!=['0','0','0']:return None
+        identity.update(quantity=quantity,units='dimensionless',normalization=STRAIN_NORMALIZATION)
+        return dict(id=digest(identity),**identity,order_parameter_direction=values['opd'],
+            component=values['component'])
     return dict(id=digest(identity),**identity,order_parameter_direction=values['opd'],
         site=values['site'],wyckoff=values['wyckoff'],component=values['component'])
 

@@ -323,7 +323,8 @@ def publish_entry(library, identifier, attempt, request, result):
         if block.mode_projection is None:
             raise ValueError('Portable mode coordinates need their explicit checked paired block')
         expected=dict(source_sha256=checksums[0],instrument_sha256=checksums[1],child_sha256=checksums[2],
-            candidate=model['settings']['candidate'],mode_dimensions=block.manifest['mode_dimensions'])
+            candidate=model['settings']['candidate'],mode_dimensions=block.manifest['mode_dimensions'],
+            cell_dimensions=block.manifest['cell_dimensions'])
         from .structural_mode_projection import read as read_projection
         read_projection(output,expected=expected,stamp=block.manifest['mode_projection'])
         from .structural_mode_projection import descriptor

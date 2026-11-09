@@ -21,6 +21,8 @@ from ..symmetry.contracts import fields,validate_candidate,digest
 from .tof_kernel_arrays import checksum,read_bounded
 
 SCHEMA='radar-native-structural-mode-projection/v1'
+STRAIN_SCHEMA='radar-native-structural-mode-projection/v2'
+SCHEMAS={SCHEMA,STRAIN_SCHEMA}
 RAW_SCHEMA='radar-structural-ranking-paired-pilot/v3'
 PACKED_SCHEMA='radar-structural-ranking-pairs/v3'
 from .structural_supplement_pairs import SCHEMAS as ADDITIVE_SCHEMAS
@@ -44,7 +46,7 @@ class Projection:
 
 def marker(value):
     d=fields(value,['schema','metadata_sha256','arrays_sha256'])
-    if d['schema']!=SCHEMA or not all(checksum(d[k]) for k in ['metadata_sha256','arrays_sha256']):
+    if d['schema'] not in SCHEMAS or not all(checksum(d[k]) for k in ['metadata_sha256','arrays_sha256']):
         raise ValueError('A native mode projection needs its complete typed file identities')
     return d
 
@@ -53,9 +55,10 @@ def _metadata(value):
     d=fields(value,['schema','normalization','source_sha256','instrument_sha256','child_sha256',
         'candidate','native_dimensions','physical_dimensions','native_mode_labels','native_normalization',
         'native_module_sha256','producer_implementation_sha256','geometry_sha256','arrays_sha256',
-        'observations_included','scientific_result','candidate_pruning_authorized'])
+        'observations_included','scientific_result','candidate_pruning_authorized'],{'strain':None})
+    if 'strain' not in value:d.pop('strain')
     n=d['native_dimensions'];m=d['physical_dimensions']
-    if (d['schema']!=SCHEMA or d['normalization']!=NORMALIZATION
+    if (d['schema'] not in SCHEMAS or (d['schema']==STRAIN_SCHEMA)!=('strain' in d) or d['normalization']!=NORMALIZATION
             or type(n)is not int or not 0<=n<=MAX_NATIVE or type(m)is not int or not 0<=m<=n
             or any(not checksum(d[k]) for k in ['source_sha256','instrument_sha256','child_sha256',
                 'producer_implementation_sha256','geometry_sha256','arrays_sha256'])
@@ -73,6 +76,18 @@ def _metadata(value):
     if (candidate!=d['candidate'] or not candidate['child'] or candidate['magnetic_space_group'] is not None
             or candidate['child']['sha256']!=d['child_sha256']):
         raise ValueError('Mode coordinates need their exact normalized nuclear child and embedding')
+    if 'strain' in d:
+        from .structural_strain_cif import from_metadata
+        from ..structural_live.optimization.physical_prior_geometry import native_reciprocal_matrix,metric_matrix
+        s=fields(d['strain'],['map','baseline_a','cell_mapping'])
+        from_metadata(s['map'],parent_sha256=d['source_sha256'],candidate=candidate)
+        baseline=np.asarray(s['baseline_a']);mapping=np.asarray(s['cell_mapping'])
+        if (baseline.shape!=(6,) or baseline.dtype.kind not in 'fi' or not np.isfinite(baseline).all()
+                or mapping.ndim!=2 or mapping.shape[0]!=6 or not 1<=mapping.shape[1]<=6
+                or mapping.dtype.kind not in 'fi' or not np.isfinite(mapping).all()
+                or np.linalg.matrix_rank(mapping)!=mapping.shape[1]):
+            raise ValueError('Every native reciprocal-cell coordinate must join the strain map')
+        metric_matrix(native_reciprocal_matrix(baseline))
     return d
 
 
@@ -100,7 +115,7 @@ def read(directory,*,expected=None,stamp=None):
         if (directory/name).is_symlink():raise ValueError('Native mode projection files must be regular captured data')
     raw=read_bounded(directory/METADATA,MAX_METADATA_BYTES)
     d=_metadata(json.loads(raw));values=read_bounded(directory/ARRAY_FILE,MAX_BYTES)
-    actual=dict(schema=SCHEMA,metadata_sha256=hashlib.sha256(raw).hexdigest(),
+    actual=dict(schema=d['schema'],metadata_sha256=hashlib.sha256(raw).hexdigest(),
         arrays_sha256=hashlib.sha256(values).hexdigest())
     if d['arrays_sha256']!=actual['arrays_sha256'] or stamp is not None and marker(stamp)!=actual:
         raise ValueError('Captured native mode projection bytes changed')
@@ -109,6 +124,8 @@ def read(directory,*,expected=None,stamp=None):
             if d[key]!=expected[key]:raise ValueError('Mode coordinates belong to a different parent, profile, child or embedding')
         if d['physical_dimensions']!=expected['mode_dimensions']:
             raise ValueError('Mode projection does not retain every paired physical coordinate')
+        if 'strain' in d and np.asarray(d['strain']['cell_mapping']).shape[1]!=expected.get('cell_dimensions'):
+            raise ValueError('Strain projection does not retain every paired cell coordinate')
     validate_npz_bytes(values,maximum_bytes=MAX_BYTES)
     with np.load(io.BytesIO(values),allow_pickle=False) as archive:
         if set(archive.files)!=ARRAYS:raise ValueError('Unexpected native mode projection array inventory')
@@ -140,6 +157,12 @@ def write(source,request,directory):
         native_module_sha256=source_meta['native_source_sha256'],producer_implementation_sha256=package_signature(),
         geometry_sha256=source.fast.empirical_constraint.geometry.fingerprint,arrays_sha256='0'*64,
         observations_included=False,scientific_result=False,candidate_pruning_authorized=False)
+    from .structural_strain_cif import read as read_strain
+    strain=read_strain(request['child'],parent_sha256=d['source_sha256'],candidate=d['candidate'])
+    if strain is not None:
+        geometry=source.fast.empirical_constraint.geometry
+        d.update(schema=STRAIN_SCHEMA,strain=dict(map=strain.metadata,baseline_a=geometry.a0.tolist(),
+            cell_mapping=(geometry.cell_mapping@source.lift[nm:,nm:]).tolist()))
     _metadata(d);_arrays(d,arrays)
     stream=io.BytesIO();np.savez_compressed(stream,**arrays);raw=stream.getvalue()
     validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
@@ -174,12 +197,39 @@ def bind_block(source,destination,projection_directory,*,names='examples',stamp)
     All parent/profile/child/embedding identities and physical dimensions are
     checked here; publication still requires its normal creating-job evidence.
     """
+    from .structural_paired_blocks import read as read_block
+    block=read_block(source,names=names)
+    if block.mode_projection is not None:
+        raise ValueError('An already mapped paired block cannot acquire a replacement projection')
+    return _bind_copy(source,destination,projection_directory,names=names,stamp=stamp)
+
+
+def bind_strain(source,destination,projection_directory,*,names='examples',stamp):
+    """Append native strain coordinates while preserving all prior geometry.
+
+    The caller must establish provenance of the creating native context. This
+    format operation alone grants no scientific authority. A prior strain map
+    cannot be replaced, and original displacement maps must match bit for bit.
+    """
+    from .structural_paired_blocks import read as read_block
+    block=read_block(source,names=names);old=block.mode_projection
+    value=read(projection_directory,expected=block.manifest,stamp=stamp)
+    if old is None or 'strain' in old.metadata or value.metadata['schema']!=STRAIN_SCHEMA:
+        raise ValueError('Append strain once to an existing complete displacement projection')
+    compared=['source_sha256','instrument_sha256','child_sha256','candidate','normalization',
+        'native_dimensions','physical_dimensions','native_mode_labels','native_normalization',
+        'native_module_sha256','geometry_sha256']
+    if (any(old.metadata[k]!=value.metadata[k] for k in compared)
+            or any(old.arrays[k].dtype!=v.dtype or old.arrays[k].tobytes()!=v.tobytes() for k,v in value.arrays.items())):
+        raise ValueError('A strain addition cannot replace original native displacement geometry')
+    return _bind_copy(source,destination,projection_directory,names=names,stamp=stamp)
+
+
+def _bind_copy(source,destination,projection_directory,*,names,stamp):
     from .structural_paired_blocks import read as read_block,filenames
     source=Path(source);destination=Path(destination);primary,arrays=filenames(names)
     original_sha=file_sha(source/primary)
     block=read_block(source,names=names)
-    if block.mode_projection is not None:
-        raise ValueError('An already mapped paired block cannot acquire a replacement projection')
     value=read(projection_directory,expected=block.manifest,stamp=stamp)
     if ('mode_coverage' in block.manifest
             and block.manifest['mode_coverage']['labels']!=value.metadata['native_mode_labels']):

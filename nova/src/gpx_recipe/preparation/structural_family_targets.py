@@ -12,7 +12,7 @@ import sys
 
 import numpy as np
 
-from .structural_mode_families import FamilyProjection,NORMALIZATION,MAX_BATCH_ROWS
+from .structural_mode_families import FamilyProjection,NORMALIZATION,NORMALIZATIONS,TYPED_NORMALIZATION,MAX_BATCH_ROWS
 from .structural_mode_projection import descriptor
 from .structural_paired_blocks import PairedBlock
 from .structural_replay_limits import MAX_ROWS
@@ -63,7 +63,7 @@ class TargetRows:
         """A target table cannot be borrowed after source/row/fold changes."""
         d=self.metadata;context={k:d[k] for k in CONTEXT}
         if (d['schema']!=SCHEMA or len(self)!=len(cohort['groups'])
-                or d['normalization']!=NORMALIZATION or d['absence_from_missing_family'] is not False
+                or d['normalization'] not in NORMALIZATIONS or d['absence_from_missing_family'] is not False
                 or d['experimental_mode_absence_qualified'] is not False or d['candidate_pruning_authorized'] is not False
                 or any(d[k]!=cohort[k] for k in ['parent_sha256','instrument_sha256','input_sha256'])
                 or d['mode_projection_references']!=cohort.get('mode_projection_references',[None]*len(d['input_sha256']))
@@ -116,7 +116,7 @@ def build(block_factory,cohort,*,_maximum_bytes=MAX_BYTES):
             or not isinstance(maps,list) or len(maps)!=len(hashes) or any(not checksum(v) for v in hashes)
             or any(not checksum(cohort.get(k)) for k in ['parent_sha256','instrument_sha256'])):
         raise ValueError('Family targets need complete native identities, labels, references and folds')
-    used=n*4;blocks=[];families={};projection_ids=[];opaque=0
+    used=n*4;blocks=[];families={};projection_ids=[];opaque=0;typed=False
     def reserve(size):
         nonlocal used
         used+=size
@@ -135,17 +135,29 @@ def build(block_factory,cohort,*,_maximum_bytes=MAX_BYTES):
         if projection is None:
             blocks.append(_Block(geometry,np.empty((count,0)),np.empty((count,0),bool),()))
             projection_ids.append(None);continue
-        model=FamilyProjection(projection);nf=len(model.families)
+        model=FamilyProjection(projection)
+        entries=[{k:family[k] for k in ['id','parent_sha256','parent_convention','k','irrep']} for family in model.families]
+        strain=None;strain_context=projection.metadata.get('strain')
+        if strain_context is not None:
+            from .structural_strain_cif import from_metadata
+            strain=from_metadata(strain_context['map'],parent_sha256=d['source_sha256'],candidate=d['candidate'])
+            entries.extend(strain.families);typed=True
+            opaque+=len(strain.metadata['opaque_native_axes'])
+        nf=len(entries);nd=len(model.families)
         reserve(count*nf*9)
         values=np.empty((count,nf),np.float64);known=np.empty((count,nf),bool)
         parameters=a['parameters'][:,:model.mode_dimensions]
         if parameters.dtype.kind!='f':raise ValueError('Native family coordinates must retain their floating point values')
         for start in range(0,count,MAX_BATCH_ROWS):
             result=model.project(parameters[start:start+MAX_BATCH_ROWS])
-            values[start:start+MAX_BATCH_ROWS]=result['amplitudes'];known[start:start+MAX_BATCH_ROWS]=result['known']
+            values[start:start+MAX_BATCH_ROWS,:nd]=result['amplitudes'];known[start:start+MAX_BATCH_ROWS,:nd]=result['known']
+            if strain is not None:
+                result=strain.project_native(a['parameters'][start:start+MAX_BATCH_ROWS],
+                    a['parent_a'][start:start+MAX_BATCH_ROWS],baseline_a=strain_context['baseline_a'],
+                    cell_mapping=strain_context['cell_mapping'],mode_dimensions=model.mode_dimensions)
+                values[start:start+MAX_BATCH_ROWS,nd:]=result['amplitudes'];known[start:start+MAX_BATCH_ROWS,nd:]=result['known']
         ids=[]
-        for family in model.families:
-            entry={k:family[k] for k in ['id','parent_sha256','parent_convention','k','irrep']}
+        for entry in entries:
             if entry['id'] not in families:reserve(len(json.dumps(entry).encode())+256)
             previous=families.setdefault(entry['id'],entry)
             if previous!=entry:raise ValueError('One mode-family identity cannot describe different parent conventions')
@@ -200,7 +212,8 @@ def build(block_factory,cohort,*,_maximum_bytes=MAX_BYTES):
         lower=_immutable(lower,np.float64),upper=_immutable(upper,np.float64))
     context=dict(parent_sha256=cohort['parent_sha256'],instrument_sha256=cohort['instrument_sha256'],
         input_sha256=list(hashes),mode_projection_references=projection_ids,
-        classes=classes.tolist(),families=[families[k] for k in ordered],normalization=NORMALIZATION,
+        classes=classes.tolist(),families=[families[k] for k in ordered],
+        normalization=TYPED_NORMALIZATION if typed else NORMALIZATION,
         references_sha256=_json_sha(refs))
     metadata=dict(schema=SCHEMA,**context,arrays_sha256=array_identity(arrays),rows=n,
         native_points=sum(len(b.geometry) for b in blocks),unique_alias_groups=len(aliases),

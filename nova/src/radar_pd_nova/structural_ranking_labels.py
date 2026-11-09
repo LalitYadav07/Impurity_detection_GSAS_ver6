@@ -64,8 +64,9 @@ def mode_rows(evidence):
     result=[]
     for row in value['rows']:
         family=value['families'][row['family_index']];lower=row['lower_estimate'];upper=row['upper_estimate']
-        result.append(dict(space_group='SG '+str(row['space_group']),family=family['irrep'],
-            k=', '.join(family['k']),amplitude='Not learned' if lower is None else f'{lower:.5g} – {upper:.5g}',
+        strain=family.get('quantity')=='lattice_strain';unit='dimensionless' if strain else 'Å RMS'
+        result.append(dict(space_group='SG '+str(row['space_group']),family=family['irrep']+(' · strain' if strain else ''),
+            k=', '.join(family['k']),amplitude='Not learned' if lower is None else f'{lower:.5g} – {upper:.5g} {unit}',
             learned=lower is not None,
             status='Unresolved · uncalibrated' if lower is not None else 'Unresolved · no fitting support',
             reason=row['reason']))
