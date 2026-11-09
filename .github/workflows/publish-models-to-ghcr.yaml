@@ -6,82 +6,7 @@ on:
     paths:
       - Dockerfile.symmetry
       - nova/src/gpx_recipe/**
-      - tests/gpx_recipe/test_prepared_structural_acceptance_native.py
-      - tests/gpx_recipe/test_structural_block_damping.py
-      - tests/gpx_recipe/test_preparation*.py
-      - tests/gpx_recipe/test_live_preparation_authority.py
-      - tests/gpx_recipe/test_prepared_k_series_native.py
-      - tests/gpx_recipe/test_prepared_model_handoff_native.py
-      - tests/gpx_recipe/test_preparation_rendered_magnetic.py
-      - tests/gpx_recipe/test_prepared_rendered_oracle_native.py
-      - tests/gpx_recipe/test_native_background*.py
-      - tests/gpx_recipe/test_native_peak_precision*.py
-      - tests/gpx_recipe/test_native_peak_memo*.py
-      - tests/gpx_recipe/test_native_peak_batch*.py
-      - tests/gpx_recipe/test_native_peak_workload.py
-      - tests/gpx_recipe/test_native_peak_groups.py
-      - tests/gpx_recipe/test_native_peak_records.py
-      - tests/gpx_recipe/test_native_peak_derivative_batch*.py
-      - tests/gpx_recipe/test_structural_live_profiled_native_fit.py
-      - tests/gpx_recipe/test_structural_live_profiled_nuisance.py
-      - tests/gpx_recipe/test_starting_proposal_banks.py
-      - tests/gpx_recipe/test_tof_profile_proposals_native.py
-      - tests/gpx_recipe/test_structural_start_diversity.py
-      - tests/gpx_recipe/test_profiled_qualification.py
-      - tests/gpx_recipe/test_native_profiled.py
-      - tests/gpx_recipe/test_native_window_response*.py
-      - tests/gpx_recipe/test_captured_cell_derivative*.py
-      - tests/gpx_recipe/test_native_profile_capture.py
-      - tests/gpx_recipe/test_native_axis_view*.py
-      - tests/gpx_recipe/test_native_reflection_memo*.py
-      - tests/gpx_recipe/test_native_tof_scalars.py
-      - tests/gpx_recipe/test_native_tof_forward.py
-      - tests/gpx_recipe/test_native_tof_kernels.py
-      - tests/gpx_recipe/test_native_kernel_pass.py
-      - tests/gpx_recipe/test_native_kernel_geometry.py
-      - tests/gpx_recipe/test_native_kernel_bank.py
-      - tests/gpx_recipe/test_kernel_origin.py
-      - tests/gpx_recipe/test_kernel_origin_native.py
-      - tests/gpx_recipe/test_kernel_geometry_storage.py
-      - tests/gpx_recipe/test_native_joint_profiled_fit.py
-      - tests/gpx_recipe/test_tof_kernel_storage.py
-      - tests/gpx_recipe/test_tof_shape*.py
-      - tests/gpx_recipe/test_tof_profile_table_native.py
-      - tests/gpx_recipe/test_tof_profile_arrays.py
-      - tests/gpx_recipe/test_tof_profile_hints.py
-      - tests/gpx_recipe/test_prepared_tof_profile_handoff_native.py
-      - tests/gpx_recipe/test_structural_ranker_sampling.py
-      - tests/gpx_recipe/test_structural_ranker_features.py
-      - tests/gpx_recipe/test_structural_ranker_cohort.py
-      - tests/gpx_recipe/test_structural_ranker_training_native.py
-      - tests/gpx_recipe/test_structural_attention_portable_native.py
-      - tests/gpx_recipe/test_structural_attention_metrics_native.py
-      - tests/gpx_recipe/test_structural_readout_health_native.py
-      - tests/gpx_recipe/test_structural_paired_training_native.py
-      - tests/gpx_recipe/test_structural_training_counts.py
-      - tests/gpx_recipe/test_structural_training_curriculum.py
-      - tests/gpx_recipe/test_structural_training_checkpoint*.py
-      - tests/gpx_recipe/test_structural_training_transfer*.py
-      - tests/gpx_recipe/test_structural_training_continuation.py
-      - tests/gpx_recipe/test_structural_candidate_routing.py
-      - tests/gpx_recipe/test_structural_pair_packing.py
-      - tests/gpx_recipe/test_structural_paired_preparation.py
-      - tests/gpx_recipe/test_structural_paired_preparation_native.py
-      - tests/gpx_recipe/test_structural_ranker_support.py
-      - tests/gpx_recipe/test_structural_ranker_store.py
-      - tests/gpx_recipe/test_structural_ranker_augmentation.py
-      - tests/gpx_recipe/test_structural_ranking_examples_native.py
-      - tests/gpx_recipe/test_structural_training_jobs.py
-      - tests/gpx_recipe/test_structural_training_jobs_native.py
-      - tests/gpx_recipe/test_structural_preparation_dependencies.py
-      - tests/gpx_recipe/test_structural_preparation_dependencies_native.py
-      - tests/gpx_recipe/test_preparation_structural_ranking_hints.py
-      - tests/gpx_recipe/test_structural_ranking_*.py
-      - tests/gpx_recipe/test_preparation_library.py
-      - tests/gpx_recipe/test_native_cell_proposals.py
-      - tests/gpx_recipe/test_structural_background_context*.py
-      - tests/gpx_recipe/test_structural_snapshot_job_native.py
-      - tests/gpx_recipe/data/synthetic-ersi-cmcm-isodistort.cif
+      - tests/gpx_recipe/**
       - scripts/ndip_model_campaign.py
       - scripts/ndip_runtime.py
       - scripts/ndip_symmetry.py
@@ -318,6 +243,10 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_rendered_oracle_native.py \
             /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
             /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
+            /validation/tests/gpx_recipe/test_prepared_structural_handoff_native.py \
+            /validation/tests/gpx_recipe/test_shared_structural_native_execution.py \
+            /validation/tests/gpx_recipe/test_native_termination.py \
+            /validation/tests/gpx_recipe/test_convergence.py \
             /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
           python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=600 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image

@@ -1,4 +1,4 @@
-"""Prospective public numerical control: two k families and five new scans.
+"""Prospective public numerical control: two declared k families and a new series.
 
 Nominal CIF/profile preparation is sealed before observations are generated.
 Every family and declared start is fitted with and without portable factors;
@@ -63,6 +63,13 @@ def test_portable_library_preserves_complete_k_search_across_a_new_series(tmp_pa
     anti.update(id='public:antiferro-p1',magnetic_space_group='P 1',bns_number='1.3',
         bns_lattice='S',transformation_matrix=np.diag([1.,1.,2.]).tolist())
     families={'ferro':(ferro,['0','0','0']),'anti':(anti,['0','0','1/2'])}
+    # This separate native truth is intentionally absent from the preparation
+    # and searched catalog. Its doubled parent a axis maps to the child's c
+    # axis, which carries the P_S1 anti-translation. Native periodicity audits
+    # must accept the actual construction; a label alone is not ground truth.
+    missing=copy.deepcopy(anti)
+    missing.update(id='public:unrepresented-kx',
+        transformation_matrix=[[0.,1.,0.],[0.,0.,1.],[2.,0.,0.]])
     grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1)
     library=create_library(tmp_path/'library',name='Prospective public two-k control',source=nominal/'parent.cif',
         banks={'bank 1':dict(instrument=nominal/'bank.instprm',grid=grid)},
@@ -93,7 +100,8 @@ def test_portable_library_preserves_complete_k_search_across_a_new_series(tmp_pa
     # interpreting a numerically leading k as detected magnetic order.
     scans=[('null',0.,'same',250000.,False),('anti',.25,'width',250000.,False),
         ('anti',.25,'width',2500000000.,True),('anti',1.6,'cell',250000.,True),
-        ('ferro',1.6,'adp',250000.,True)]
+        ('ferro',1.6,'adp',250000.,True),('anti',1.6,'same',250000.,True),
+        ('null',0.,'same',250000.,False),('missing',1.6,'same',250000.,False)]
     records=[]
     for revision,(truth,magnitude,change,weight,separated) in enumerate(scans,1):
         root=tmp_path/f'scan-{revision}';root.mkdir()
@@ -115,7 +123,15 @@ def test_portable_library_preserves_complete_k_search_across_a_new_series(tmp_pa
             result=construct_theory(source,Artifacts(output),protocol,candidate,
                 dict(axis='x',magnitude=1.,parent_direction=None,independent_mode_seed=17,site_signs={}))
             models[label]=output/result['gpx']
-        truth_path=models['ferro' if truth=='null' else truth]
+        if truth=='missing':
+            protocol=copy.deepcopy(construction);protocol['source']['sha256']=file_sha(source)
+            protocol['k']=['1/2','0','0'];protocol['policy'].update(refine_histogram_scale=False,refine_background=False)
+            output=root/'unrepresented-truth';output.mkdir()
+            extra=construct_theory(source,Artifacts(output),protocol,missing,
+                dict(axis='x',magnitude=1.,parent_direction=None,independent_mode_seed=17,site_signs={}))
+            assert extra['audit']['passed'] and extra['periodicity']['passed']
+            truth_path=output/extra['gpx']
+        else:truth_path=models['ferro' if truth=='null' else truth]
         project=G.G2Project(gpxfile=str(truth_path))
         for phase in project.phases():
             if phase.data['General']['Type']=='magnetic':
@@ -146,16 +162,23 @@ def test_portable_library_preserves_complete_k_search_across_a_new_series(tmp_pa
             write_json(tmp_path/'progress.json',dict(revision=revision,truth=truth,change=change,
                 weight=weight,completed_scans=records,current_families=results))
         if truth=='null':assert all(row['best_cost']<1e-5 for row in results.values())
+        elif truth=='missing':
+            # A numerical leader still exists in a misspecified search. It
+            # cannot acquire a recovery claim when every native fit leaves
+            # resolved residual on this control's declared uncertainty scale.
+            assert all(row['best_cost']>1. for row in results.values())
         else:
             assert min(results,key=lambda label:results[label]['best_cost'])==truth
             assert results[truth]['best_cost']<1e-5
             gap=results['anti' if truth=='ferro' else 'ferro']['best_cost']-results[truth]['best_cost']
             if separated:assert gap>1.
             else:assert 0.<gap<1.
-        records.append(dict(revision=revision,truth=truth,change=change,weight=weight,
+        assert set(results)==set(families)
+        records.append(dict(revision=revision,truth=truth,truth_in_declared_portfolio=truth in families,
+            change=change,weight=weight,
             declared_objective_separation=separated,families=results))
         assert file_sha(archive)==frozen
-    write_json(tmp_path/'series-acceptance.json',dict(schema='radar-public-prepared-k-series-control/v1',
+    write_json(tmp_path/'series-acceptance.json',dict(schema='radar-public-prepared-k-series-control/v2',
         preparation_seconds=preparation_seconds,archive_sha256=frozen,scans=records,
         complete_family_denominator=2,starts_per_family=6,measured_scan_before_preparation=False,
         native_checked_fitted_profiles=len(scans)*2*6*2,

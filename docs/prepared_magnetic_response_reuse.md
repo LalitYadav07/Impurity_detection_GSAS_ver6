@@ -95,6 +95,16 @@ native residuals remain checked. Synthetic controls establish numerical and
 integration behavior; real-material identification, uncertainty calibration,
 whole-catalog throughput and NDIP latency require their own acceptance.
 
+The prospective two-k series retains all six starts per family through eight
+native-generated acquisitions: null, weak order at two uncertainty levels,
+cell and ADP changes, return to an earlier magnetic state, return to the null
+parent, and an intentionally unrepresented k. All 192 prepared/cold fitted
+profiles receive ordinary native residual checks. The absent-k case leaves
+residual error in both available families; its numerical leader is not counted
+as recovery. These are noiseless synthetic search-integrity controls with
+declared weights, not experimental detection probabilities or proof that the
+searched catalog contains the true structure.
+
 Numerical build metadata is a conservative reuse boundary; it does not replace
 native checks or promise bitwise equality across different hardware. An older
 response without this runtime identity is rebuilt by the existing checked path.
