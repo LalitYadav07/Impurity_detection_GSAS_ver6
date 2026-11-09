@@ -6,6 +6,24 @@ from .structural_training_backend import forward
 from .structural_compatible_objective import OBJECTIVE,terms
 
 
+def _evaluation_batches(rows,indices,*,prior):
+    """The class-count baseline needs labels and indices, never diffraction.
+
+    Preserve bounded index checks without regenerating native curves or moving
+    feature planes solely to broadcast one fixed ranking. Learned evaluation
+    still uses the ordinary checked feature reader on every batch.
+    """
+    if prior is None:
+        yield from batches(rows,indices)
+        return
+    for start in range(0,len(indices),64):
+        selected=np.asarray(indices[start:start+64])
+        if (selected.ndim!=1 or selected.dtype.kind not in 'iu'
+                or np.any(selected<0) or np.any(selected>=len(rows))):
+            raise ValueError('Read a bounded batch of valid structural feature rows')
+        yield selected,None
+
+
 def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None,_logits_sink=None,
              _mode_context=None,_mode_interval_evaluation=None,_groups=None):
     import torch
@@ -19,7 +37,11 @@ def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=No
         raise ValueError('A class-only model has no conditional mode intervals to evaluate')
     modes=None if _mode_context is None else _mode_context.metrics(interval_evaluation=_mode_interval_evaluation,groups=_groups)
     if modes is not None and prior is not None:raise ValueError('A class prior has no learned mode readout')
-    for selected,values in batches(rows,indices):
+    if prior is not None:
+        prior=np.asarray(prior)
+        if prior.shape!=(len(classes),) or prior.dtype.kind not in 'fiu' or not np.isfinite(prior).all():
+            raise ValueError('One finite class-prior value per scored family required')
+    for selected,values in _evaluation_batches(rows,indices,prior=prior):
         allowed=targets[selected]
         if prior is None:
             with torch.no_grad():
