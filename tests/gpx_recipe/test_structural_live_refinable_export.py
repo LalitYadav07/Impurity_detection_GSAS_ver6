@@ -97,12 +97,14 @@ def test_continuation_keeps_histogram_weight_factor_in_native_objective(monkeypa
                             refine=lambda:calls.append('native'),save=lambda:None)
     monkeypatch.setattr(continuation,'curve',lambda *args:predicted.copy())
     monkeypatch.setattr(continuation,'assess_chemistry',lambda *args:{'feasible':True})
-    monkeypatch.setattr(continuation,'modules',lambda:(SimpleNamespace(
+    monkeypatch.setattr(continuation,'modules',lambda:(None,None,None,None,SimpleNamespace(),SimpleNamespace(
         GetUsedHistogramsAndPhases=lambda *args:({'PWDR public':{}},{})),))
     result=continuation.continue_native_refinement(project,['mode'])
     assert result['objective_verified'] and calls==['native']
     assert result['passes'][0]['native_histogram_weight_factor']==factor
     assert result['passes'][0]['objective_relative_error']==0.
+    assert result['passes'][0]['native_solver_termination']['state']=='unavailable'
+    assert result['passes'][0]['native_reported_converged'] is None
     # Exclusions and original measurement weights stay intact.
     np.testing.assert_array_equal(hist.data['data'][1][2].data,w.data)
     np.testing.assert_array_equal(hist.data['data'][1][2].mask,w.mask)
@@ -126,7 +128,7 @@ def test_continuation_audits_all_used_banks_and_ignores_unused_histograms(monkey
     def fresh(project,hist):calls.append(hist.name);return np.full(5,9.)
     monkeypatch.setattr(continuation,'curve',fresh)
     monkeypatch.setattr(continuation,'assess_chemistry',lambda *args:{'feasible':True})
-    monkeypatch.setattr(continuation,'modules',lambda:(SimpleNamespace(
+    monkeypatch.setattr(continuation,'modules',lambda:(None,None,None,None,SimpleNamespace(),SimpleNamespace(
         GetUsedHistogramsAndPhases=lambda *args:({name:{} for name in [first.name,second.name]},{})),))
     result=continuation.continue_native_refinement(project,['mode'],phase_name='public',histogram_name=first.name)
     assert result['objective_verified'] and calls==[first.name,second.name]
@@ -154,6 +156,10 @@ def test_native_export_refines_perturbed_modes_and_saves_covariance(tmp_path,nat
     apply_modes(p.phases()[0].data,q+np.array([.01,-.01]),m)
     result2=continue_native_refinement(p,result['contract']['native_active_variables'])
     assert result2['objective_verified'] and result2['chemistry_feasible']
+    termination=result2['passes'][-1]['native_solver_termination']
+    assert termination['state']=='observed' and termination['final']['code'] in (1,2,3,4)
+    assert not termination['qualification_changed'] and not termination['final_cycle_shifts_supplied']
+    assert result2['passes'][-1]['native_reported_converged'] is None
     np.testing.assert_allclose(mode_amplitudes(p.phases()[0].data),q,atol=2e-6,rtol=0)
     assert set(p.data['Covariance']['data']['varyList'])==set(result['contract']['native_active_variables'])
     assert sha(native_fixture)==source_hash

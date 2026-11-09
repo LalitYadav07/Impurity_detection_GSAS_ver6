@@ -33,3 +33,12 @@ the original full native rendering; unsupported runtimes or memory limits use
 the original native path. These records supply directions only, with unchanged
 native acceptance, stalled-step retries and final GPX checks. They neither
 interpolate peak profiles nor qualify uncertainty derivatives.
+
+Native continuation receipts retain numerical/Jacobian solver termination
+separately from convergence screening. In the reviewed GSAS-II runtime these
+branches discard MINPACK's termination code when saving `Rvals.converged`.
+An owned-process observer records the exact native return without changing
+arguments, results or the global SciPy function. A parameter-tolerance stop
+does not supply final-cycle shift/sigma evidence or qualify stationarity,
+fit adequacy or a structural model. Missing native evidence remains missing;
+no candidate status or acceptance policy is relaxed by this diagnostic.
