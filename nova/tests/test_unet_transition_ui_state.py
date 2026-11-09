@@ -507,6 +507,30 @@ def test_map_cursor_inspects_visible_rows_without_recentering_or_inference(app):
     assert app._unet_transition_engine.calls == calls
 
 
+def test_show_all_types_includes_later_arrivals_but_manual_filters_stay_fixed(app):
+    rows = [scan(i) for i in (1, 2)]
+    app.refresh(rows)
+    app.show_all_unet_transition_overlays()
+    assert app.server.state.unet_transition_overlay_types == []
+    later = scan(3)
+    later['fake_events'] = [dict(x0=2., x1=2.2, attention_score=.8,
+                                 feature_types=['peak_disappearance'])]
+    rows.append(later)
+    app.refresh(rows)
+    assert app.server.state.unet_transition_overlay_types == ['peak_disappearance']
+    assert trace(app.server.state.unet_transition_map, 'U-Net overlays')['base'] == [2.]
+    app.select_unet_transition_overlay_types(['peak_emergence'])
+    newest = scan(4)
+    newest['fake_events'] = [dict(x0=3., x1=3.2, attention_score=.8,
+                                  feature_types=['peak_splitting'])]
+    rows.append(newest)
+    app.refresh(rows)
+    assert app.server.state.unet_transition_overlay_types == ['peak_emergence']
+    app.clear_unet_transition_overlays()
+    app.refresh([*rows, scan(5)])
+    assert app.server.state.unet_transition_overlay_types == []
+
+
 @pytest.mark.parametrize('count', [1, 3, 12, 30, 55, 100])
 def test_map_cursor_geometry_matches_rendered_heatmap_row_centers(app, count):
     app.refresh([scan(i) for i in range(1, count + 1)])

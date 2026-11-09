@@ -13,7 +13,7 @@ def refinement_dashboard(app):
         client.Style('''
         .rf-workspace{color:#183c31;padding:22px 0;max-width:1680px;margin:auto}
         .rf-heading,.rf-toolbar,.rf-actions,.rf-stats{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-        .rf-heading{justify-content:space-between;margin-bottom:18px}.rf-heading h2{font-size:27px;margin:0 0 5px}
+        .rf-heading{justify-content:space-between;margin-bottom:10px}.rf-heading h2{font-size:25px;margin:0 0 3px}
         .rf-heading p,.rf-muted{color:#64766d;font-size:13px;line-height:1.6;margin:0}
         .rf-stats{gap:28px;margin:16px 0 20px}.rf-stat strong{font-size:24px;font-weight:650;display:block;color:#163d30}.rf-stat span{font-size:12px;color:#64766d}
         .rf-grid{display:grid;grid-template-columns:minmax(300px, .9fr) minmax(450px,1.6fr);gap:20px;align-items:start}
@@ -29,6 +29,7 @@ def refinement_dashboard(app):
         .rf-result-title{display:flex;align-items:start;justify-content:space-between;gap:12px}.rf-result-title h3{margin:0 0 6px}.rf-plot{height:620px;width:100%}.rf-trend{height:450px;width:100%}
         .rf-empty{padding:54px 25px;text-align:center;border:1px dashed #c7d8cb;border-radius:8px;color:#667e6d;line-height:1.8}
         .rf-workspace .v-btn{letter-spacing:.3px}.rf-notice{font-size:12px;color:#62766a;line-height:1.6;margin:8px 0}.rf-tabs{margin:15px 0;border-bottom:1px solid #dce6df}
+        .rf-context-details{margin:3px 0 10px;color:#62766a;font-size:12px;line-height:1.45}.rf-context-details summary{cursor:pointer;color:#315f48;font-weight:650}.rf-context-details p{margin:6px 0 0}
         .rf-parameter-caveats{font-size:13px;line-height:1.5}.rf-parameter-caveats ul{margin:4px 0;padding-left:20px}.rf-parameter-caveats li+li{margin-top:4px}
         .rf-overlay{position:fixed;inset:80px 18px 28px;z-index:2400;background:white;padding:22px;box-shadow:0 0 0 25px #102e2988;border-radius:10px;overflow:auto}
         @media(max-width:1100px){.rf-grid{grid-template-columns:1fr}.rf-results{grid-template-columns:240px minmax(0,1fr)}.rf-card{padding:17px}}
@@ -37,19 +38,23 @@ def refinement_dashboard(app):
         with html.Div(classes='rf-heading'):
             with html.Div():
                 html.H2('Refinement')
-                html.P('Review a recipe once. Apply it to selected RADAR-PD projects as scans become available.')
-                html.P('LLM assistance is sponsored by the Illumine project. Token usage and estimated cost appear with each generated plan.',classes='rf-notice')
+                html.P("{{ rf_mode === 'recipe' ? 'Prepare and review a recipe for saved diffraction projects.' : rf_mode === 'results' ? 'Inspect completed refinement jobs and trends.' : 'Test structural or magnetic models from a published GPX.' }}")
             with html.Div(classes='rf-actions',style='margin-top:0'):
                 v.VChip('{{ rf_provider }}',v_if="rf_mode === 'recipe'",variant='tonal',color='#15543c',size='small')
                 v.VBtn('Refresh projects',click=app.refresh_refinement_sources,loading=('rf_loading',),variant='text',prepend_icon='mdi-refresh',size='small')
-        html.P("{{ 'Service credentials in this session: Illumine ' + (rf_illumine_configured ? 'configured' : 'unavailable') + ' · Bilbao ' + (rf_bilbao_configured ? 'configured' : 'unavailable') + '. A completed request verifies service access; configured credentials alone do not verify network availability.' }}",classes='rf-notice mb-3')
+        with html.Details(classes='rf-context-details'):
+            html.Summary('Service access and model costs')
+            html.P("{{ 'Illumine ' + (rf_illumine_configured ? 'configured' : 'unavailable') + ' · Bilbao ' + (rf_bilbao_configured ? 'configured' : 'unavailable') + '. A completed request verifies access; configured credentials alone do not verify network availability.' }}")
+            html.P('Illumine sponsors LLM assistance. Token usage and estimated cost appear with each generated plan.')
         v.VProgressLinear(v_if='rf_loading || rf_busy',indeterminate=True,color='#287654',height=3,classes='mb-4')
         v.VAlert(v_if='rf_loading',text=('rf_catalog_message',),type='info',variant='tonal',density='compact',classes='mb-3')
         v.VAlert(v_if="rf_mode !== 'models' && !!rf_error",text=('rf_error',),type='error',variant='tonal',density='compact',classes='mb-3',closable=True)
         with html.Details(v_if='rf_source_warnings.length',classes='mb-4'):
             html.Summary('{{ rf_source_warnings.length }} completed project(s) need attention before refinement',style='cursor:pointer;color:#8b6028;font-size:13px')
             v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')
-        v.VAlert(v_if="rf_mode === 'recipe' && !!rf_source_qualification",text=('rf_source_qualification',),type='info',variant='tonal',density='compact',classes='mb-3')
+        with html.Details(v_if="rf_mode === 'recipe' && !!rf_source_qualification",classes='rf-context-details'):
+            html.Summary('Starting model qualification')
+            html.P('{{ rf_source_qualification }}')
         with html.Div(classes='rf-toolbar'):
             select('Experiment','rf_experiment','rf_experiments')
             with v.VBtnToggle(v_model=('rf_mode',),mandatory=True,color='#15543c',variant='outlined',divided=True):
@@ -161,8 +166,8 @@ def refinement_dashboard(app):
                 select('Status','rf_job_status',"[{title:'All statuses',value:'all'},{title:'Completed jobs',value:'completed'},{title:'Queued',value:'queued'},{title:'Active / submitting',value:'running'},{title:'Needs review',value:'needs_review'},{title:'Different model',value:'needs_recipe'},{title:'Paused',value:'paused'},{title:'Interrupted',value:'interrupted'},{title:'Failed',value:'failed'}]",classes='mt-3')
                 v.VCheckbox(label='Follow newly completed results',v_model=('rf_follow',),density='compact',hide_details=True,classes='mt-2')
                 with html.Div(classes='rf-actions'):
-                    v.VBtn('Pause',click=app.pause_refinement_queue,variant='text',size='small',prepend_icon='mdi-pause')
-                    v.VBtn('Resume queued',click=app.resume_refinement_queue,variant='text',size='small',prepend_icon='mdi-play')
+                    v.VBtn('Pause',click=app.pause_refinement_queue,disabled=('!rf_jobs.length',),variant='text',size='small',prepend_icon='mdi-pause')
+                    v.VBtn('Resume queued',click=app.resume_refinement_queue,disabled=('!rf_jobs.length',),variant='text',size='small',prepend_icon='mdi-play')
                 html.P('Pause stops new enrollment. Active jobs finish. Resume runs queued scans; future enrollment requires Start refinement.',classes='rf-notice')
                 with html.Div(classes='rf-list'):
                     with html.Button(v_for="job in rf_jobs.filter(j => (rf_job_status === 'all' || j.filter_statuses.includes(rf_job_status)) && (rf_recipe_filter === 'all' || j.recipe_ids.includes(rf_recipe_filter)) && (j.scan + ' ' + j.sample).toLowerCase().includes(rf_job_search.toLowerCase()))",key='job.id',classes=("'rf-scan ' + (job.id === rf_selected_job ? 'active' : '')",),click=(app.select_refinement_job,'[job.id]'),title=('job.review_message',)):

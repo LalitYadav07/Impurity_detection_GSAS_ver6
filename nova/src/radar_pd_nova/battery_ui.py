@@ -14,7 +14,7 @@ def battery_dashboard(app):
                 html.H2("Battery experiments")
                 html.P("Bind a cell and its exposure history before comparing evolving electrode models.", classes="text-body-2")
             v.VBtn("Export input evidence", click=app.export_battery_evidence, disabled=("!battery_export_ready || battery_busy",), variant="outlined", size="small", prepend_icon="mdi-download")
-        v.VBtn("Back to analysis setup", click=app.close_battery_workspace, variant="text", size="small", prepend_icon="mdi-arrow-left", classes="mb-3")
+        v.VBtn("Back to previous view", click=app.close_battery_workspace, variant="text", size="small", prepend_icon="mdi-arrow-left", classes="mb-3")
         v.VAlert("Input qualification is separate from refinement acceptance. A folder name, voltage channel or low Rwp does not establish a valid battery model.", type="info", variant="tonal", density="compact", classes="mb-3")
         v.VAlert(v_if="!!battery_error", text=("battery_error",), type="error", variant="tonal", density="compact", classes="mb-3")
         html.P("{{ battery_message }}", role="status", aria_live="polite", classes="text-body-2")

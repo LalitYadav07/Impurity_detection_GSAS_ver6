@@ -213,7 +213,7 @@ class WebmonMixin(StructuralLiveMixin):
         return command
 
     def _webmon_ui(self):
-        with html.Section(v_show="experiment_result_view === 'webmon' && live_beamline === 'PG3'",classes='radar-result-card wm-workspace'):
+        with html.Section(v_show="experiment_result_view === 'webmon' && powgen_dashboard_instrument === 'PG3'",classes='radar-result-card wm-workspace'):
             client.Style("""
               .radar-workspace-inner:has(.wm-workspace:not([style*="display: none"])) {max-width:1920px;}
               .wm-workspace {grid-column:1/-1;min-width:0;padding:18px!important;}

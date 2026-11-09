@@ -158,14 +158,19 @@ class BatteryMixin(BatteryPreparationMixin, BatteryCampaignMixin):
             "battery_offset", "battery_clock_uncertainty", "battery_gap", "battery_cycler", "battery_cycler_path", "battery_echem_source", "battery_date_format", "battery_timezone")(self._battery_binding_changed)
 
     def open_battery_workspace(self, **_):
-        self.server.state.workspace_view = "battery"
-        self.server.state.setup_collapsed = True
-        self.server.state.flush()
+        state = self.server.state
+        if state.workspace_view != "battery":
+            self._battery_return_view = state.workspace_view
+            self._battery_return_setup_collapsed = bool(state.setup_collapsed)
+        state.workspace_view = "battery"
+        state.setup_collapsed = True
+        state.flush()
 
     def close_battery_workspace(self, **_):
-        self.server.state.workspace_view = "monitor"
-        self.server.state.setup_collapsed = False
-        self.server.state.flush()
+        state = self.server.state
+        state.workspace_view = getattr(self, "_battery_return_view", "monitor")
+        state.setup_collapsed = getattr(self, "_battery_return_setup_collapsed", False)
+        state.flush()
 
     def _battery_context_changed(self, **_):
         self._battery_generation += 1

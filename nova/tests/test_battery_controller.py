@@ -26,6 +26,18 @@ def app(monkeypatch):
     return app
 
 
+@pytest.mark.parametrize(('view','collapsed'), [('experiment', True), ('results', True), ('monitor', False), ('preparation', True)])
+def test_battery_detour_returns_to_displayed_workspace(app, view, collapsed):
+    state=app.server.state
+    state.workspace_view=view
+    state.setup_collapsed=collapsed
+    app.open_battery_workspace()
+    assert state.workspace_view=='battery' and state.setup_collapsed
+    app.open_battery_workspace()  # Reopening must not replace the return destination.
+    app.close_battery_workspace()
+    assert state.workspace_view==view and state.setup_collapsed==collapsed
+
+
 def test_one_unreadable_run_does_not_hide_other_acquisitions(app,tmp_path,monkeypatch):
     monkeypatch.setattr(module,'family_runs',lambda *args:[1,2])
     def inspect(instrument,ipts,run,**kwargs):

@@ -456,6 +456,7 @@ class LiveRestoreMixin:
         self._result_open_owner = None
         state.selected_run_uid = ""
         state.selected_run_name = "No run selected"
+        state.selected_run_display_name = "No run selected"
         self._reset_result_state()
         state.powgen_monitoring = False
         state.powgen_retry_requested = state.powgen_retry_busy = False
