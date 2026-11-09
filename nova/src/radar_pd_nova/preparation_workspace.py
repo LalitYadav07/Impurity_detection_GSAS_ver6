@@ -21,6 +21,7 @@ from .native_operations import intent_lock
 from .preparation_history import PreparationHistory, saved_preparations
 from .preparation_queue import PreparationQueue
 from .preparation_registry import PreparationRegistry
+from .preparation_limits import PREPARATION_JOBS
 
 
 class PreparationWorkspace:
@@ -90,7 +91,7 @@ class PreparationWorkspace:
         return self.inspect(name=library.document['name'][:160]+' · input inspection',
             source=confined(library.root,library.document['specification']['source']),banks=banks)
 
-    def start(self,key,*,maximum_jobs=2):
+    def start(self,key,*,maximum_jobs=PREPARATION_JOBS):
         queue=self.queue(key);queue.resume(maximum_jobs=maximum_jobs)
         return queue.snapshot()
 

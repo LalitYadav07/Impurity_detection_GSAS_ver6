@@ -51,6 +51,16 @@ def test_new_preparation_defaults_match_the_shared_structural_refinement_domain(
     assert s.prep_opd_policy=='all'
 
 
+def test_selected_preparation_concurrency_can_reach_every_offered_job_slot(app,tmp_path,monkeypatch):
+    application,_,_,service=app
+    application._preparation_workspace=None
+    monkeypatch.setenv('RADAR_PD_PREPARATION_ROOT',str(tmp_path/'bounded-workspace'))
+    store=application._preparation_store()
+    assert application.server.state.prep_parallel_jobs==8
+    assert store.runtime.max_active_jobs==8
+    assert not service.submissions
+
+
 def test_structural_training_is_visible_and_separately_filterable(app,tmp_path):
     from gpx_recipe.symmetry.compiler import file_sha
     application,store,key,service=app;s=application.server.state

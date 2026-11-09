@@ -167,6 +167,7 @@ def test_complete_generation_units_get_independent_jobs_without_short_batch_rema
 @pytest.mark.parametrize('count,requested,allowed,sizes',[
     (9,2,2,[5,4]),(3,4,2,[2,1]),(3,4,4,[1,1,1]),
     (9,8,1,[9]),(40,2,2,[16,16]),
+    (9,8,8,[2,1,1,1,1,1,1,1]),
 ])
 def test_default_batches_distribute_unowned_models_across_allowed_jobs(
         remote,tmp_path,count,requested,allowed,sizes):

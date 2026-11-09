@@ -21,6 +21,7 @@ from .battery_preparation import checked_upload, capture_file
 from .model_runtime import GalaxyModelRuntime,identifier
 from .preparation_discovery import PreparationDiscovery,k_vector,require_structural_coverage
 from .preparation_workspace import PreparationWorkspace
+from .preparation_limits import PREPARATION_JOBS
 from .uploads import inspect_cif_upload
 
 
@@ -59,7 +60,7 @@ class PreparationMixin:
             prep_site_rows=[],prep_maximum_moment='6',prep_mode_radius='.05',prep_cell_radius=format(DEFAULT_CELL_RADIUS,'g'),
             prep_opd_policy='all',prep_construct_limit='100',prep_discovery_rows=[],
             prep_discovery_ready=False,prep_candidate_count=0,prep_selected_banks=[],prep_inspected_banks=[],
-            prep_parallel_jobs=2,prep_library='',prep_library_options=[],prep_entries=[],prep_coverage='',prep_active_jobs=0,
+            prep_parallel_jobs=PREPARATION_JOBS,prep_library='',prep_library_options=[],prep_entries=[],prep_coverage='',prep_active_jobs=0,
             prep_library_kind='',prep_can_pause=False,prep_can_resume=False,
             prep_page=1,prep_pages=1,prep_entry_filter='all',prep_stage_filter='all',prep_stage_rows=[],
             prep_entry_search='',prep_table_count=0,
@@ -80,7 +81,7 @@ class PreparationMixin:
             base=Path(os.environ.get('RADAR_PD_PREPARATION_ROOT') or
                 Path(getattr(self.service,'output_root',None) or tempfile.gettempdir())/'experiment-preparation')
             root=base/digest([str(self.service.history_id or 'unconfigured')])[:16]
-            runtime=GalaxyModelRuntime(root/'runtime',self.service,max_active_jobs=2)
+            runtime=GalaxyModelRuntime(root/'runtime',self.service,max_active_jobs=PREPARATION_JOBS)
             self._preparation_workspace=PreparationWorkspace(root,runtime)
         return self._preparation_workspace
 
