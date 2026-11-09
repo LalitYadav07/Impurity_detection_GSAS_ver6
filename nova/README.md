@@ -434,6 +434,11 @@ The transition tab brings the map into view when opened. Its inline chart uses
 less height for short series, while **Expand map** retains a larger inspection
 view. **Focus plots** toggles the setup rail; monitor and fit qualifications
 remain available from the Results tab and fit note.
+The vertical scan cursor matches the visible heatmap rows and keeps that page
+fixed while inspecting scans. **Page** browses the next or previous rows and
+keeps the selected scan visible; **Inspect scan** can jump anywhere in the
+series. The raw curves and both fit panels follow the same selection. A fixed
+chart layout keeps the cursor aligned when the window size or row count changes.
 
 Live experiments open on **Results**, with the familiar phase-fraction,
 refinement-quality and composition plots, completed-scan selector and full-result

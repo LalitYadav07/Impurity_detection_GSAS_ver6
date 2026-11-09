@@ -2909,7 +2909,7 @@ class RadarPdNovaApp(PreparationMixin, FeedbackMixin, WebmonMixin, BatteryMixin,
                     continue
                 vuetify.VTab(
                     title, value=value, v_if="live_beamline === 'PG3'" if value == "webmon" else None,
-                    click=("$nextTick(() => window.setTimeout(() => { if (window.innerWidth < 1100) setup_collapsed = true; window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)); window.document.querySelector('.radar-experiment-result-tabs')?.scrollIntoView({block:'start'}); }, 80))"
+                    click=("setup_collapsed = true; $nextTick(() => window.setTimeout(() => { window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)); const map = window.document.querySelector('.radar-tracker-map-shell'); (map && map.getBoundingClientRect().height > 0 ? map : window.document.querySelector('.radar-experiment-result-tabs'))?.scrollIntoView({block:map && map.getBoundingClientRect().height > 0 ? 'center' : 'start'}); }, 80))"
                            if value == "transitions" else
                            "$nextTick(() => window.setTimeout(() => window.document.querySelectorAll('.js-plotly-plot').forEach(el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.Plotly && window.Plotly.Plots.resize(el)), 80))"),
                 )
@@ -9185,12 +9185,18 @@ class RadarPdNovaApp(PreparationMixin, FeedbackMixin, WebmonMixin, BatteryMixin,
         .radar-tracker-overlay-select .v-field__input { max-height:42px; overflow-x:auto; overflow-y:hidden; flex-wrap:nowrap; white-space:nowrap; }
         .radar-tracker-overlay-select .v-chip { flex:0 0 auto; }
         .radar-tracker-map-actions { display:flex; justify-content:space-between; align-items:center; gap:7px; flex-wrap:wrap; margin:0 0 4px; }
-        .radar-tracker-map-frame { min-width:0; width:100%; border:1px solid var(--radar-line); border-radius:7px; background:#fff; overflow:hidden; }
+        .radar-tracker-map-frame { min-width:0; width:100%; border-radius:7px; background:#fff; box-shadow:inset 0 0 0 1px var(--radar-line); overflow:hidden; }
         .radar-tracker-map-shell { display:grid; grid-template-columns:58px minmax(0,1fr); align-items:start; gap:7px; }
-        .radar-tracker-map-scroll { box-sizing:border-box; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; padding:0 2px 7px; border:1px solid var(--radar-line); border-radius:7px; background:#f8faf8; }
-        .radar-tracker-map-scroll .v-slider { flex:1 1 auto; min-height:0; width:42px; }
+        .radar-tracker-map-scroll { box-sizing:border-box; position:relative; min-width:0; border-radius:7px; background:#f8faf8; box-shadow:inset 0 0 0 1px var(--radar-line); }
+        .radar-tracker-map-cursor { position:absolute; top:var(--map-cursor-top); height:var(--map-cursor-height); width:42px; left:50%; transform:translateX(-50%); }
+        .radar-tracker-map-scroll .v-slider { height:100%; min-height:0; width:42px; margin:0; }
+        .radar-tracker-map-scroll .v-slider .v-input__control, .radar-tracker-map-scroll .v-slider .v-slider__container { min-height:0; height:100%; }
+        .radar-tracker-map-scroll .v-slider .v-input__prepend { position:absolute; width:1px; height:1px; margin:0; overflow:hidden; clip-path:inset(50%); }
+        .radar-tracker-map-scroll .v-btn { position:absolute; width:100%; min-width:0; }
+        .radar-tracker-page-back { top:calc(var(--map-data-top) - 28px); }
+        .radar-tracker-page-forward { top:calc(var(--map-data-bottom) + 4px); }
         .radar-tracker-map-scroll .v-slider .v-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-        .radar-tracker-map-scroll > span { width:100%; color:var(--radar-muted); font-size:10px; line-height:1.2; text-align:center; overflow-wrap:anywhere; }
+        .radar-tracker-map-scroll > span { position:absolute; top:calc(var(--map-data-bottom) + 30px); width:100%; color:var(--radar-muted); font-size:10px; line-height:1.2; text-align:center; overflow-wrap:anywhere; }
         .radar-tracker-fit-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:10px; }
         .radar-tracker-fit-card { min-width:0; border:1px solid var(--radar-line); border-radius:8px; padding:8px 10px; background:#fff; }
         .radar-tracker-fit-card h4 { margin:3px 5px 4px; color:var(--radar-brand-900); font-size:14px; }
