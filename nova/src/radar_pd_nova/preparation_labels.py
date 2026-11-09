@@ -97,7 +97,7 @@ def training_description(library,entry):
         if type(candidates) is int and candidates>0:
             text+=f" · {candidates} original constructions retained"
         if type(families) is int and families>0:
-            text+=f" · {families} irrep/k displacement families"
+            text+=f" · {families} irrep/k mode families"
     return text
 
 

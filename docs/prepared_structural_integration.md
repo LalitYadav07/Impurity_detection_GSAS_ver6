@@ -24,13 +24,27 @@ reports no difference rather than inventing a learned subgroup ranking. This
 does not establish the reference's space group or exclude changes hidden
 within a bin or outside the measured range; every native candidate remains.
 
-This fixed-reference path is under local experimental qualification. It has
-not been connected to the Model/Live reference-selection UI or deployed to
-NDIP. The existing native GPX consumer supplies a recalculated reference and
-therefore rejects a fixed-reference model until an explicitly captured
-measured reference is supplied through a future reviewed handoff. All native
-candidates remain available; passing feature, transport or training tests does
-not authorize candidate pruning or claims of experimental mode absence.
+New preparation libraries train this fixed-reference contract by default.
+In Model exploration, select **Before-transition reference GPX** before
+candidate discovery and plan review. The approved protocol captures that GPX
+and its exact checksum; subsequent scans and live revisions use the same
+captured reference. The measured reference stays in the experiment inputs,
+not in the portable simulation library. Native admission checks both scans
+against the prepared parent, profile and sampled lattice envelope. Reference
+histograms are matched by their physical bank/profile and sample corrections,
+not by names that often contain different run numbers. Multiple compatible
+reference histograms require a single-bank reference rather than an arbitrary
+choice. An absent or incompatible reference retains the complete native search
+with a reason; it never substitutes a calculated curve for measured data.
+
+Model campaigns and structural Live snapshots consume the captured reference
+through the same native ranking function. Earlier models continue to use their
+own recalculated-reference contract. The fixed-reference library export/import,
+actual worker wrapper, native count/mask extraction and both consumer paths
+have local/native regression coverage. This integration has not been deployed
+to NDIP or accepted through its complete browser workflow. Passing transport or
+training tests does not authorize candidate pruning or experimental mode
+absence claims. Every declared native candidate remains available.
 
 An externally completed structural trainer can also produce a compact,
 read-only `structural-ranking-model` library. Import its ZIP with the existing
@@ -70,9 +84,11 @@ they retain the complete candidate list. An attached model also supplies an
 advisory search order for structural live snapshots. The first existing native
 point-fit job owns ranking for that acquisition revision, reusing its nuclear
 transfer. Ranking uses the current captured counts and masks, the reviewed
-producer conversion and the transferred nuclear parent. It recalculates the
-parent reference and background on the current grid through the same admission
-and inference engine as completed-scan Model campaigns. It cannot reuse a
+producer conversion and the transferred nuclear parent. It evaluates native
+background on each scan's own grid and selects the reference contract declared
+by the model: captured measured before-transition data for new libraries, or a
+recalculated parent for archived models trained with that contract. It uses the
+same admission and inference engine as completed-scan Model campaigns. It cannot reuse a
 completed-GPX score for a live revision or filter the reviewed model portfolio.
 
 The live panel shows ranking within the first fit, the leading space-group
@@ -179,6 +195,9 @@ estimates before exporting portable CPU inference weights. Exact local device
 recovery and transported numerical-worker continuations are different: existing
 segmented/transported worker training remains CPU-owned and allocation-guarded.
 A faster measured GPU update is not an end-to-end preparation-time guarantee.
+The shared backend currently implements CPU and MPS placement only; NDIP CUDA
+training and GPU job routing are not implemented or qualified. Visible GPU
+hardware alone does not prove that a CUDA worker can initialize or run.
 
 Paired example generation draws shared parent cells before testing individual
 children. Child trajectories are now admitted at those fixed parent contexts,
