@@ -517,7 +517,8 @@ class SymmetryMixin(KSearchMixin):
     def _symmetry_publish_source(self):
         s=self.server.state;groups=self._symmetry_groups;rows=self._symmetry_rows
         from .structural_ranking_labels import visible_rows
-        s.sx_structural_priority_rows=visible_rows(getattr(self,'_symmetry_ranking_evidence',{}),rows)
+        s.sx_structural_priority_rows=visible_rows(getattr(self,'_symmetry_ranking_evidence',{}),rows,
+            previous=getattr(s,'sx_structural_priority_rows',None) or ())
         s.sx_groups=[dict(id=g['id'],title=g['representative']['name'] if g['representative']['has_view'] else display_status(g['representative']['status']).capitalize(),count=len(g['members']),rwp=(f"{g['representative']['rwp']:.3f}%" if g['representative']['rwp'] is not None else '—'),status=display_status(g['representative']['status'])) for g in groups]
         s.sx_overview=plots.overview(rows,s.sx_selected)
         s.sx_pin_options=[dict(title=pin_label(r,include_start=True),value=r['id']) for r in rows if r['has_view']]
@@ -525,6 +526,12 @@ class SymmetryMixin(KSearchMixin):
         s.sx_pins=[uid for uid in s.sx_pins if uid in pinnable][-2:]
         s.sx_group=choose_group(groups,s.sx_selected,explicit=self._symmetry_explicit_selection)
         self._symmetry_group_changed()
+
+    def select_structural_mode_group(self,protocol,group):
+        from .structural_ranking_labels import mode_view
+        s=self.server.state
+        s.sx_structural_priority_rows=[dict(row,**mode_view(row.get('mode_rows',[]),group))
+            if row['id']==protocol else row for row in s.sx_structural_priority_rows]
 
     def _symmetry_source_changed(self,**_):
         # Inspection consumes only the last verified snapshot. It neither

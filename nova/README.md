@@ -84,6 +84,13 @@ amplitudes while preserving exact site-symmetry couplings. They retain a finite,
 reviewed portfolio, rather than claiming exhaustive orientation coverage. Old
 sealed plans keep their original starts and require their original worker.
 
+Prepared structural mode estimates use the same inspection table in Model
+exploration and Live acquisition. **Symmetry to inspect** shows one space
+group's distortion families, retaining unsupported families as **Not learned**.
+The selection survives a refresh of the same context and changes only the
+display; it does not change the native search. Learned ranges remain unresolved
+and are not calibrated experimental confidence intervals.
+
 NOMAD normalized sliced and summed products are explicit source families.
 Separate slices of one parent have separate lifecycle and plotting identities.
 Filtered pulse intervals are checked against duration and parent NeXus bounds;

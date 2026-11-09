@@ -15,6 +15,8 @@ from gpx_recipe.symmetry.compiler import compile_shared_job,prepare_shared_input
 from gpx_recipe.symmetry.contracts import digest,iter_trials,trial_id
 from ..symmetry_workspace import candidate_display_name,structural_timing_summary
 from .. import symmetry_plots
+from ..structural_ranking_labels import mode_view
+from ..structural_mode_ui import mode_table
 from .scope import ScopeCancellation
 from .stream import LatestQueue,scope_of
 from .structural_stream import StructuralObservationStream,analyse_snapshot
@@ -29,12 +31,16 @@ STATES={'pending':'Waiting for dispatch','submitting':'Submitting job','new':'Su
 
 
 class StructuralLiveMixin:
+    def webmon_select_structural_mode_group(self,group):
+        s=self.server.state
+        s.webmon_structural_modes=mode_view(s.webmon_structural_modes['mode_rows'],group)
+
     def _init_structural_live(self):
         self._webmon_structural_plan=None;self._webmon_structural_results={}
         self._webmon_display_kind='magnetic';self._webmon_kind_headers={}
         self.server.state.update(dict(webmon_analysis_kind='magnetic',webmon_structural_ready=False,
             webmon_structural_recovery=False,
-            webmon_structural_ranking='',webmon_structural_mode_rows=[],
+            webmon_structural_ranking='',webmon_structural_modes=mode_view([]),
             webmon_structural_summary='',webmon_structural_message='Use a reviewed structural plan from Model exploration.',
             webmon_structural_rows=[],webmon_structural_choices=[],webmon_structural_selected='',
             webmon_structural_axis='d',webmon_structural_scale='linear',webmon_structural_has_result=False,
@@ -44,7 +50,7 @@ class StructuralLiveMixin:
         self._webmon_structural_plan=None;self._webmon_structural_results={}
         s=self.server.state
         for name,value in dict(webmon_structural_ready=False,webmon_structural_summary='',webmon_structural_rows=[],
-                webmon_structural_ranking='',webmon_structural_mode_rows=[],
+                webmon_structural_ranking='',webmon_structural_modes=mode_view([]),
                 webmon_structural_recovery=False,
                 webmon_structural_choices=[],webmon_structural_selected='',webmon_structural_has_result=False,
                 webmon_structural_parameters=[],webmon_structural_timing='',
@@ -185,10 +191,7 @@ class StructuralLiveMixin:
             html.P('{{ webmon_stream_message }}',v_if='webmon_stream_active')
             html.P('Point fits require optimization and scientific review. A current Rwp leader is not a uniquely identified structure; no structural posterior or counting-stop recommendation is produced.')
             html.P('{{ webmon_structural_ranking }}',v_if='webmon_structural_ranking')
-            with html.Details(v_if='webmon_structural_mode_rows.length',classes='mb-3'):
-                html.Summary('Conditional mode estimates')
-                html.P('Learned ranges from prepared simulations, not refined values or calibrated confidence intervals. Native confirmation is required.',classes='rf-notice')
-                v.VDataTable(items=('webmon_structural_mode_rows',),headers=("[{title:'Symmetry',key:'space_group'},{title:'Distortion family',key:'family'},{title:'k',key:'k'},{title:'Learned range (Å RMS)',key:'amplitude'},{title:'Evidence',key:'status'}]",),items_per_page=8,density='compact')
+            mode_table(prefix='webmon_structural_modes',on_select=self.webmon_select_structural_mode_group,arguments='[$event]')
             v.VDataTable(headers=([dict(title='Priority',key='priority'),dict(title='Model',key='name'),dict(title='State',key='display_state'),dict(title='Rwp (%)',key='rwp'),dict(title='Revision',key='revision')],),items=('webmon_structural_rows',),items_per_page=8,density='compact')
             with html.Details(v_if='webmon_structural_rows.some(row => !!row.reason)'):
                 html.Summary('View job messages',style='cursor:pointer')
@@ -283,14 +286,15 @@ class StructuralLiveMixin:
         if not current():return
         plan['last_item']=item
         s.webmon_busy=True;s.webmon_stale=bool(s.webmon_structural_has_result);s.webmon_calculation_status='Submitting structural models'
-        s.webmon_structural_ranking='';s.webmon_structural_mode_rows=[];s.flush()
+        selected_mode=s.webmon_structural_modes.get('mode_group')
+        s.webmon_structural_ranking='';s.webmon_structural_modes=mode_view([]);s.flush()
         def ranking_progress(row):
             if not current():return
             if row['state']=='ranked':
                 evidence=row['result']['ranking']
                 from ..structural_ranking_labels import describe,mode_rows
                 s.webmon_structural_ranking=describe(evidence)
-                s.webmon_structural_mode_rows=mode_rows(evidence)
+                s.webmon_structural_modes=mode_view(mode_rows(evidence),selected_mode)
                 s.webmon_calculation_status='Fitting structural models'
             elif row['state'] in {'failed','cancelled','not_available','not_started'}:
                 s.webmon_structural_ranking=row.get('reason','Prepared ranking unavailable; the full native portfolio is retained.')
