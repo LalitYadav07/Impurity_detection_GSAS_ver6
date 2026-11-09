@@ -14,6 +14,8 @@ from gpx_recipe.preparation.structural_jobs import (
 )
 from gpx_recipe.preparation.structural_paired_blocks import read,pack_block
 from gpx_recipe.preparation.structural_training_blocks import REPRESENTATION,PARENT_RANGE
+from gpx_recipe.preparation.structural_mode_coverage import TARGETED_SCHEMA
+from gpx_recipe.preparation.structural_attention_weights import FIXED_REFERENCE_KIND,REFERENCE_KIND
 from gpx_recipe.preparation.worker import validate_request
 from gpx_recipe.preparation.operations import create_library,stage_entry,publish_entry,pending_entries
 from gpx_recipe.preparation.library import import_library
@@ -55,6 +57,7 @@ def test_app_default_expands_to_three_curves_with_shared_parent_sampling():
     for row in rows:
         assert row['kind']==EXAMPLES and row['settings']['representation']==REPRESENTATION
         assert row['settings']['parent_relative_metric_range']==list(PARENT_RANGE)
+        assert row['settings']['mode_coverage']==TARGETED_SCHEMA
         validate_examples(dict(source='parent.cif',instrument='profile.instprm',child='child.cif',
             grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=101,bank=1),
             settings=row['settings'],destination='output'))
@@ -99,6 +102,30 @@ def test_paired_names_keep_lossless_arrays_and_default_training_contract(tmp_pat
         settings=dict(representation=REPRESENTATION)))['settings']
     assert settings['bins']==4096 and settings['split_seed']==69271
     assert settings['representation']==REPRESENTATION
+    assert 'reference_kind' not in settings  # Existing captured requests keep their original identity.
+
+
+@pytest.mark.parametrize('kind',[FIXED_REFERENCE_KIND,REFERENCE_KIND,None,'measured',[],True])
+def test_training_reference_contract_is_explicit_and_cannot_change_silently(tmp_path,kind):
+    request,_=inputs(tmp_path)
+    value=dict(source=request['source'],instrument=request['instrument'],grid=request['grid'],
+        plan='plan.json',destination='trained',settings=dict(representation=REPRESENTATION,reference_kind=kind))
+    if isinstance(kind,str) and kind in (FIXED_REFERENCE_KIND,REFERENCE_KIND):
+        assert validate_training(value)['settings']['reference_kind']==kind
+    else:
+        with pytest.raises(ValueError,match='reference contract'):validate_training(value)
+
+
+def test_new_library_training_uses_measured_reference_contract():
+    from gpx_recipe.preparation.structural_dependencies import append_training
+    candidate=dict(id='one',transformation_matrix=np.eye(3).tolist(),origin_shift=[0,0,0],
+        child=dict(path='child.cif',sha256='c'*64))
+    models=example_models([dict(kind='structural',bank='one',child='child.cif',
+        settings=dict(candidate=candidate,mode_radius=.05,cell_radius=.01))])
+    profile=dict(instrument='profile.instprm',grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=101,bank=1))
+    append_training(models,{'one':profile})
+    assert models[-1]['kind']==TRAINING and models[-1]['settings']['reference_kind']==FIXED_REFERENCE_KIND
+    assert len(models[-1]['settings']['dependencies'])==len(models)-1
 
 
 @pytest.mark.parametrize('case',['wrong_representation','missing_seed','range_zero','range_too_large','foreign_fields'])

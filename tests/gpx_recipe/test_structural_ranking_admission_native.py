@@ -113,7 +113,9 @@ def test_outside_cell_message_explains_current_and_trained_ranges(tmp_path):
     assert 'Generate training examples over the wider parent-cell range' in str(caught.value)
 
 
-@pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain','live_counts','paired_adaptive','live_adaptive','paired_bad_adaptive','paired_recover_adaptive'])
+@pytest.mark.parametrize('change',['same','profile','no_model','constraint','paired_parent_within','paired_parent_outside','paired_legacy_domain','live_counts','paired_adaptive','live_adaptive','paired_bad_adaptive','paired_recover_adaptive',
+    'fixed_before','fixed_missing','fixed_profile','fixed_positions','fixed_constraint','live_fixed_before',
+    'fixed_renamed','fixed_ambiguous'])
 def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_path,monkeypatch,change):
     """Inference is a controlled stub here; native input admission is real."""
     from gpx_recipe.preparation import structural_hints,structural_ranking_hints as hints
@@ -144,12 +146,39 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
         candidates=[candidate],seeds=[dict(id='admission-control')],sites=[],policy=dict(cycles=3,timeout_seconds=60,
             maximum_trials=1,maximum_cell_multiplier=8,maximum_moment=6.,fit_band_percent=.25,
             maximum_mode=.5,adequate_rwp_percent=12.)))
+    fixed=change.startswith('fixed_') or change=='live_fixed_before'
+    if fixed:
+        from gpx_recipe.preparation.structural_attention_weights import FIXED_REFERENCE_KIND
+        protocol['policy'].update(structural_optimizer='prepared_nonlinear',refine_cell=True,
+            refine_background=True,refine_histogram_scale=True)
+        if change!='fixed_missing':
+            before=root/'before.gpx'
+            before_source=source
+            if change=='fixed_renamed':
+                before_source,_=native_source(tmp_path/'independent-before','PNT',histogram_name='before run 64146')
+            before_project=G.G2Project(gpxfile=str(before_source),newgpx=str(before))
+            bh=before_project.histogram(0);ba=bh.data['data'][1]
+            if change=='fixed_ambiguous':
+                before_project.add_simulated_powder_histogram('another compatible reference bank',str(root/'profile.instprm'),
+                    3.,40.,Npoints=351,phases=[before_project.phase(protocol['parent_phase'])])
+            # Deliberately distinct from the target. Stale calculated arrays
+            # cannot substitute for this reference's observed values or mask.
+            ba[1][50:60]=-17.;ba[2][51:54]=0.;ba[3][:]=-98765.
+            if change=='fixed_profile':bh.InstrumentParameters['X'][1]+=.1
+            elif change=='fixed_positions':
+                bp=before_project.phase(protocol['parent_phase']);cx=bp.data['General']['AtomPtrs'][0]
+                bp.data['Atoms'][0][cx]+=.001
+            elif change=='fixed_constraint':before_project.data['Constraints']['data']['Hist']=[['opaque unprepared mapping']]
+            before_project.save()
+            protocol['structural_reference']=dict(path='before.gpx',sha256=file_sha(before))
+        protocol=validate_protocol(protocol)
     metadata=dict(training_domain=envelope(.001))
-    paired=change.startswith('paired_') or change in {'live_counts','live_adaptive'}
+    paired=change.startswith('paired_') or change in {'live_counts','live_adaptive'} or fixed
     if paired:
         from gpx_recipe.preparation.structural_attention_weights import SCHEMA
         metadata['schema']=SCHEMA
         metadata['training_domain']=envelope(.001,parent_references=change!='paired_legacy_domain')
+        if fixed:metadata['reference_kind']=FIXED_REFERENCE_KIND
     model=tmp_path/'model.json';write_json(model,metadata)
     row=dict(entry='d'*24,bank='bank 1',grid=dict(kind='PNT',lower=3000.,upper=40000.,bins=701,bank=1),
         files=dict(parent=dict(sha256=file_sha(tmp_path/'control/parent.cif')),
@@ -161,7 +190,7 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
         instrument=root/'profile.instprm',model=model))
     calls=[]
     observation=None;override=None;before_source=file_sha(source)
-    if change in {'live_counts','live_adaptive'}:
+    if change in {'live_counts','live_adaptive','live_fixed_before'}:
         override=tmp_path/'current-ranking.gpx'
         live=G.G2Project(gpxfile=str(source),newgpx=str(override))
         arrays=live.histogram(0).data['data'][1]
@@ -169,15 +198,24 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
         live.save()
         observation=dict(snapshot_sha256='0'*64,calculation_source_sha256=file_sha(override),
             acquisition_sha256='1'*64,revision=3)
-        from gpx_recipe.preparation.structural_ranking_native import observed_features
-        expected=observed_features(override,live.histogram(0),include_reference=True)
+        expected=observed_features(override,live.histogram(0),include_reference=not fixed)
     def inference(*args,**kwargs):
         calls.append(kwargs)
         assert ('reference' in kwargs)==paired
-        if change in {'live_counts','live_adaptive'}:
+        if change in {'live_counts','live_adaptive','live_fixed_before'}:
             for key in ('q','intensity','valid','background'):
                 np.testing.assert_array_equal(kwargs[key],expected[key])
             assert np.count_nonzero(kwargs['intensity']<0)>0 and np.count_nonzero(~kwargs['valid'])>=3
+        if fixed:
+            ref=kwargs['reference'];expected_before=observed_features(before,bh)
+            for key in ('q','intensity','valid','background'):
+                np.testing.assert_array_equal(ref[key],expected_before[key])
+            assert ref['kind']=='measured_before_transition'
+            assert ref['source_sha256']==file_sha(before)
+            assert ref['parent_sha256']==row['files']['parent']['sha256']
+            assert ref['instrument_sha256']==row['files']['instrument']['sha256']
+            assert np.count_nonzero(ref['intensity']<0)>=10
+            assert np.count_nonzero(~ref['valid'])>=3
         result=dict(ranking_available=True,candidate_order=['public-ersi'],
             families=[dict(space_group=63,model_score=1.,candidate_ids=['public-ersi'])],
             support=dict(status='within_empirical_synthetic_support',nearest_training_rms=.1,
@@ -190,7 +228,8 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
     monkeypatch.setattr(hints,'rank',inference)
     destination=tmp_path/'ranking';result=rank_gpx(root,protocol,destination,source_override=override,observation=observation)
     assert result==json.loads((destination/'ranking.json').read_text())
-    available=change in {'same','paired_parent_within','live_counts','paired_adaptive','live_adaptive','paired_recover_adaptive'}
+    available=change in {'same','paired_parent_within','live_counts','paired_adaptive','live_adaptive','paired_recover_adaptive',
+        'fixed_before','live_fixed_before','fixed_renamed'}
     assert result['ranking_available']==available
     assert len(calls)==(2 if change=='paired_recover_adaptive' else int(available or change=='paired_bad_adaptive'))
     if change=='paired_recover_adaptive':
@@ -200,6 +239,9 @@ def test_actual_gpx_reaches_source_bound_receipt_through_native_admission(tmp_pa
     assert result['candidate_order']==['public-ersi'] and result['candidate_pruning_authorized'] is False
     assert result['preparation_snapshot_sha256']=='e'*64
     assert file_sha(source)==before_source
+    if change=='fixed_missing':assert 'before-transition reference GPX' in result['checks'][0]['reason']
+    if change=='fixed_ambiguous':assert 'multiple compatible histograms' in result['checks'][0]['reason']
+    if fixed and change!='fixed_missing':assert file_sha(before)==protocol['structural_reference']['sha256']
     if observation is not None:
         from gpx_recipe.preparation.structural_ranking_result import validate
         validate(result,protocol,observation=observation)

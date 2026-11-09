@@ -153,6 +153,48 @@ def observed_features(source,histogram,*,include_reference=False):
     return result
 
 
+def measured_reference(input_root,protocol,prepared,*,maximum_metric):
+    """Read the captured before scan, with the same native admission as the target.
+
+    The reference is an experiment asset in the approved protocol, never part
+    of the portable simulation library. Its observed array is used unchanged;
+    each histogram's own calibration converts its native grid to Q.
+    """
+    from ..structural_live.native import modules
+    asset=protocol.get('structural_reference')
+    if asset is None:
+        raise ValueError('Select a before-transition reference GPX for this prepared ranking model, then rebuild the plan')
+    source=confined(input_root,asset['path'])
+    if source.is_symlink() or file_sha(source)!=asset['sha256']:
+        raise ValueError('The captured before-transition reference GPX changed')
+    G,*_=modules();project=G.G2Project(gpxfile=str(source))
+    require_unconstrained_project(project)
+    parent=project.phase(protocol['parent_phase'])
+    reference,phase_name,histogram_name=prepared
+    compatible=[];reasons=[]
+    # Histogram names often include the run filename. Match the actual bank
+    # profile and physical corrections, not that display name or list index.
+    for histogram in project.histograms():
+        if not parent.data.get('Histograms',{}).get(histogram.name,{}).get('Use'):continue
+        try:
+            require_compatible(parent,histogram,reference.phase(phase_name),reference.histogram(histogram_name),
+                               maximum_metric=maximum_metric)
+        except ValueError as error:reasons.append(str(error));continue
+        compatible.append(histogram)
+    if len(compatible)!=1:
+        if not compatible:
+            raise ValueError('No compatible before-transition reference bank: '+('; '.join(reasons)[:450] or 'parent is not active'))
+        raise ValueError('The before-transition GPX has multiple compatible histograms; select a single-bank reference GPX')
+    histogram=compatible[0]
+    used=[p for p in project.phases() if p.data.get('Histograms',{}).get(histogram.name,{}).get('Use')]
+    if len(used)!=1 or used[0].name!=parent.name:
+        raise ValueError('Prepared ranking needs one active nuclear phase in the before-transition reference')
+    result=observed_features(source,histogram)
+    if file_sha(source)!=asset['sha256']:
+        raise ValueError('The before-transition reference GPX changed during observation extraction')
+    return result
+
+
 def rank_gpx(input_root,protocol,destination,*,source_override=None,observation=None):
     """Read one exact source revision and attached data-only training context."""
     from .structural_hints import read
@@ -203,11 +245,22 @@ def rank_gpx(input_root,protocol,destination,*,source_override=None,observation=
                 reference=G.G2Project(gpxfile=prepared['path'])
                 require_compatible(parent,histogram,reference.phase(prepared['parent_phase']),
                     reference.histogram(prepared['histogram']),maximum_metric=maximum)
-                from .structural_attention_weights import SCHEMA as THREE_CURVE_SCHEMA
+                from .structural_attention_weights import SCHEMA as THREE_CURVE_SCHEMA,FIXED_REFERENCE_KIND
                 paired=metadata.get('schema')==THREE_CURVE_SCHEMA
+                fixed=paired and metadata.get('reference_kind')==FIXED_REFERENCE_KIND
                 if features is None:features={}
-                if paired not in features:features[paired]=observed_features(source,histogram,include_reference=paired)
-                ranked=hints.rank(input_root,protocol,**features[paired],entry_id=row['entry'],
+                calculated=paired and not fixed
+                if calculated not in features:
+                    features[calculated]=observed_features(source,histogram,include_reference=calculated)
+                observed=dict(features[calculated])
+                if fixed:
+                    before=measured_reference(input_root,protocol,
+                        (reference,prepared['parent_phase'],prepared['histogram']),maximum_metric=maximum)
+                    observed['reference']=dict(before,kind='measured_before_transition',
+                        source_sha256=protocol['structural_reference']['sha256'],
+                        parent_sha256=row['files']['parent']['sha256'],
+                        instrument_sha256=row['files']['instrument']['sha256'])
+                ranked=hints.rank(input_root,protocol,**observed,entry_id=row['entry'],
                     parent_sha256=row['files']['parent']['sha256'],instrument_sha256=row['files']['instrument']['sha256'])
                 if not ranked['ranking_available']:
                     support=ranked.get('support')
@@ -223,7 +276,8 @@ def rank_gpx(input_root,protocol,destination,*,source_override=None,observation=
                     from .structural_ranking_result import attach_modes
                     result=attach_modes(result,ranked['mode_estimates'])
                 checks.append(dict(entry=row['entry'],status='compatible',
-                    reason='Native parent, bank profile, sites/ADPs and sample corrections matched within the trained lattice envelope'))
+                    reason='Native parent, bank profile, sites/ADPs and sample corrections matched within the trained lattice envelope'
+                        +('; captured before-transition observations checked independently' if fixed else '')))
                 break
             except (OSError,ValueError,ImportError,KeyError,TypeError,IndexError) as error:
                 checks.append(dict(entry=row['entry'],status='incompatible',reason=str(error)[:600]))

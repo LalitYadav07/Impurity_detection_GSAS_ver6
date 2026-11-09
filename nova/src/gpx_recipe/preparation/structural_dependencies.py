@@ -91,6 +91,7 @@ def validate_entries(entries):
 
 def example_models(models, *, trajectories=64, shard=None, steps=4, seed=89113,bank_grids=None):
     """Expand each structural context into complete, disjoint trajectory slices."""
+    from .structural_mode_coverage import TARGETED_SCHEMA
     if (type(trajectories) is not int or not 1<=trajectories<=4096
             or type(steps)is not int or not 1<=steps<=32
             or (shard is not None and (type(shard) is not int or not 1<=shard<=trajectories))):
@@ -105,7 +106,7 @@ def example_models(models, *, trajectories=64, shard=None, steps=4, seed=89113,b
             row['settings'].update(seed=seed,trajectories=trajectories,steps=steps,
                 trajectory_slice=[first,min(first+size,trajectories)],
                 representation=REPRESENTATION,parent_seed=seed^0x63BC32D9,
-                parent_relative_metric_range=list(PARENT_RANGE))
+                parent_relative_metric_range=list(PARENT_RANGE),mode_coverage=TARGETED_SCHEMA)
             result.append(row)
     return result
 
@@ -123,7 +124,9 @@ def append_training(declared, banks):
             raise ValueError('A bank cannot mix structural training representations')
         profile=banks[bank]
         settings=dict(dependencies=sorted(dependencies))
-        if representations[bank]=={REPRESENTATION}:settings['representation']=REPRESENTATION
+        if representations[bank]=={REPRESENTATION}:
+            from .structural_attention_weights import FIXED_REFERENCE_KIND
+            settings.update(representation=REPRESENTATION,reference_kind=FIXED_REFERENCE_KIND)
         settings=validate_training(dict(source='parent.cif',instrument=profile['instrument'],
             grid=profile['grid'],plan='plan.json',destination='model',
             settings=settings))['settings']

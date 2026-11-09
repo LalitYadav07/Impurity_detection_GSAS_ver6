@@ -14,7 +14,7 @@ from gpx_recipe.structural_live.optimization import profile_cache
 from gpx_recipe.structural_live.optimization.native_profile_capture import CaptureUnavailable
 
 
-def native_source(root, kind):
+def native_source(root, kind, *, histogram_name='public control'):
     """Public artificial structure; counts come from independent GSAS-II."""
     root.mkdir()
     if kind == 'PNC':
@@ -34,7 +34,7 @@ def native_source(root, kind):
                               cell=[4.195, 10.353, 3.779, 90., 90., 90.])
     phase.add_atom(0., .413, .25, 'Si', 'Si1')
     phase.add_atom(0., .142, .25, 'Er', 'Er1')
-    hist = project.add_simulated_powder_histogram('public control', str(instrument),
+    hist = project.add_simulated_powder_histogram(histogram_name, str(instrument),
                 *limits, Npoints=1501, scale=120., phases=[phase])
     hist.data['Background'][0][2] = 3
     hist.data['Background'][0][3:] = [3., .2, .1]

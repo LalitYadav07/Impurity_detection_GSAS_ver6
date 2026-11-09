@@ -19,7 +19,8 @@ import numpy as np
 
 from .structural_augmentation import Controls, ObservationAugmenter
 from .structural_cohort import assemble_into
-from .structural_features import ThreeCurveProjector
+from .structural_features import ThreeCurveProjector,IndependentCurveProjector
+from .structural_attention_weights import FIXED_REFERENCE_KIND
 from .structural_paired_blocks import read, source_paths
 from .structural_training_data import FeatureRows, MAX_BATCH_ROWS, MAX_STORE_BYTES, _PERMIT
 from . import structural_replay_limits as limits
@@ -162,6 +163,12 @@ class ReplayRows(FeatureRows):
         self._provenance = np.frombuffer(provenance.tobytes(), dtype=np.uint8).reshape(provenance.shape)
         self._augmenter = augmenter
         self._bank = bank; self._projectors = OrderedDict(); self._clean = OrderedDict()
+        self._reference = None
+        if cohort['reference_kind']==FIXED_REFERENCE_KIND:
+            origin=cohort.get('reference_native_origin')
+            if type(origin)is not int or not 0<=origin<len(bank.blocks):
+                raise ValueError('Fixed-reference replay needs the exact assembler-selected native origin')
+            self._reference=tuple(map(int,bank.blocks[origin][0][[0,3,4]]))
         self._closed = False; self._regenerated = 0
 
     def _check(self, index):
@@ -183,9 +190,13 @@ class ReplayRows(FeatureRows):
             block_index, native_index, variant = map(int, self._selectors[int(index)])
             locations = self._bank.blocks[block_index][native_index]
             q, current, background, parent, parent_background = (self._bank.get(i) for i in locations)
-            grid = int(locations[0])
+            before_q=q
+            if self._reference is not None:
+                before_q,parent,parent_background=(self._bank.get(i) for i in self._reference)
+            grid = (int(locations[0]),None if self._reference is None else self._reference[0])
             if grid not in self._projectors:
-                self._projectors[grid] = ThreeCurveProjector(q, self._edges)
+                self._projectors[grid] = (ThreeCurveProjector(q,self._edges) if self._reference is None
+                    else IndependentCurveProjector(q,before_q,self._edges))
                 if len(self._projectors) > 8: self._projectors.popitem(last=False)
             self._projectors.move_to_end(grid); projector = self._projectors[grid]
             key = (block_index, native_index)
@@ -202,11 +213,19 @@ class ReplayRows(FeatureRows):
                     raise ValueError('A replay observation has no declared generator')
                 draw = self._augmenter.observation(q, current, background,
                     clean_identity=identity, variant=variant)
-                encoded = json.dumps(dict(kind='simulated_observation', **draw['provenance']), sort_keys=True).encode()
+                provenance=dict(kind='simulated_observation', **draw['provenance'])
+                before,before_background=parent,parent_background
+                if self._reference is not None:
+                    reference_identity=hashlib.sha256(('fixed-before:'+identity).encode()).hexdigest()
+                    other=self._augmenter.observation(before_q,parent,parent_background,
+                        clean_identity=reference_identity,variant=variant)
+                    before,before_background=other['intensity'],other['background']
+                    provenance['reference_observation']=other['provenance']
+                encoded = json.dumps(provenance, sort_keys=True).encode()
                 if hashlib.sha256(encoded).digest() != self._provenance[int(index)].tobytes():
                     raise ValueError('Replay observation provenance differs from cohort assembly')
-                value = projector.features(draw['intensity'], parent,
-                    background=draw['background'], reference_background=parent_background)['features']
+                value = projector.features(draw['intensity'], before,
+                    background=draw['background'], reference_background=before_background)['features']
             if hashlib.sha256(value.tobytes()).digest() != self._hashes[int(index)].tobytes():
                 raise ValueError('Replayed feature bytes differ from the assembled row')
             result[out_index] = value; self._regenerated += 1
@@ -259,7 +278,8 @@ class ReplayRows(FeatureRows):
         self._projectors.clear(); self._clean.clear(); self._moments = None; self._closed = True
 
 
-def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pairs', destination=None):
+def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pairs', destination=None,
+          reference_kind=None):
     """Assemble and replay the same scientific cohort within existing limits.
 
     Working state remains owned by this worker; it is not an alternate upload
@@ -295,7 +315,7 @@ def build(directories, *, bins=4096, split_seed=69271, augmenter=None, names='pa
             yield block
     try:
         cohort = assemble_into(blocks, sink, bins=bins, split_seed=split_seed, augmenter=augmenter,
-                               paired=True,subset_factory=blocks)
+                               paired=True,subset_factory=blocks,reference_kind=reference_kind)
         if ([source_paths(p,names=names) for p in directories]!=paths
                 or tuple(_file_state(p) for p in paths) != states):
             raise ValueError('Native replay sources changed during cohort assembly')

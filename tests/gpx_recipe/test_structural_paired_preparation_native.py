@@ -13,7 +13,7 @@ from gpx_recipe.preparation.worker import execute
 from gpx_recipe.preparation.structural_jobs import create_plan,plan_inputs
 from gpx_recipe.preparation.structural_paired_blocks import read
 from gpx_recipe.preparation.structural_training_blocks import REPRESENTATION,PARENT_RANGE
-from gpx_recipe.preparation.structural_attention_weights import SCHEMA,ARCHITECTURE
+from gpx_recipe.preparation.structural_attention_weights import SCHEMA,ARCHITECTURE,FIXED_REFERENCE_KIND,REFERENCE_KIND
 from gpx_recipe.preparation.structural_ranker import Ranker
 from gpx_recipe.symmetry.bundle import pack,unpack
 from gpx_recipe.symmetry.compiler import file_sha,package_signature
@@ -62,7 +62,8 @@ def test_native_example_worker_returns_lossless_pairs_without_exporting_working_
 
 @pytest.mark.parametrize('multipart',[False,True])
 @pytest.mark.parametrize('native_maps,additive',[(False,False),(True,False),(True,True),('families',True)])
-def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart,native_maps,additive):
+@pytest.mark.parametrize('reference_kind',[None,FIXED_REFERENCE_KIND])
+def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,monkeypatch,multipart,native_maps,additive,reference_kind):
     root=tmp_path/'capture';example,directory=inputs(root)
     if native_maps or additive:
         from test_structural_mode_projection import attach
@@ -83,6 +84,7 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
     request=dict(source=example['source'],instrument=example['instrument'],plan=str(root/'plan.json'),
         grid=example['grid'],destination=str(root/'trained'),
         settings=dict(representation=REPRESENTATION,bins=128,epochs=1,workers=1,augmentation=None))
+    if reference_kind is not None:request['settings']['reference_kind']=reference_kind
     names=['parent.cif','profile.instprm','plan.json']+plan_inputs(root/'plan.json')
     pack(root,tmp_path/'inputs.zip',names)
     payload=dict(request,source='parent.cif',instrument='profile.instprm',plan='plan.json',destination='trained')
@@ -110,6 +112,7 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
         tmp_path/'job',tmp_path/'result.zip',asset_parts=more)
     assert result['result']['status']=='prepared'
     collected=unpack(tmp_path/'result.zip',tmp_path/'collected');model=Ranker(collected/'native/trained/model')
+    assert model.metadata['reference_kind']==(REFERENCE_KIND if reference_kind is None else reference_kind)
     if native_maps or additive:
         supervision=model.metadata['mode_family_supervision']
         assert supervision['mapped_blocks']==supervision['total_blocks']==len(directories)
@@ -172,10 +175,17 @@ def test_default_paired_library_training_remains_usable_after_export_and_model_h
     attached=hints.restore(document,protocol,received,target)
     assert attached['ranking_models']['attached']==1
     d=read(tmp_path/'examples',names='examples');a=d.arrays
+    from gpx_recipe.preparation.structural_attention_weights import FIXED_REFERENCE_KIND
+    assert metadata['reference_kind']==FIXED_REFERENCE_KIND
+    # New libraries train a fixed measured-before contract. A native caller
+    # supplies the independently captured reference and its physical identity.
+    reference=dict(q=a['q'],intensity=a['parent_intensity'][0],background=a['parent_background'][0],
+        kind='measured_before_transition',parent_sha256=d.manifest['source_sha256'],
+        instrument_sha256=d.manifest['instrument_sha256'],source_sha256='a'*64)
     ranked=ranking.rank(target,protocol,a['q'],a['theory_intensity'][2],background=a['background'],
         parent_sha256=d.manifest['source_sha256'],instrument_sha256=d.manifest['instrument_sha256'],
         entry_id=trainer['id'],
-        reference=dict(q=a['q'],intensity=a['parent_intensity'][2],background=a['parent_background'][2]))
+        reference=reference)
     assert ranked['ranking_available'] and not ranked['discarded_entries']
     assert ranked['candidate_order']==['child'] and ranked['complete_native_search_required']
     assert ranked['candidate_pruning_authorized'] is False

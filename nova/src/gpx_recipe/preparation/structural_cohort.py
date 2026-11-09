@@ -135,7 +135,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         raise ValueError('A declared three-curve reference contract is required')
     fixed_reference=paired and reference_kind==FIXED_REFERENCE_KIND
     sources = set(); profiles = set(); metadata = []; count = 0
-    lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None
+    lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None; parent_origin = None
     definitions = {}; candidate_groups = {}; generated_groups = {};mode_maps={};mode_references=[]
     if paired:
         from .structural_training_strata import Inventory
@@ -167,6 +167,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         key = (not preferred, d['child_sha256'])
         if parent_key is None or key < parent_key:
             parent_key = key
+            parent_origin = len(metadata)-1
             parent_arrays = (a['q'].copy(),
                 (a['parent_intensity'][0] if paired else a['theory_intensity'][0]).copy(),
                 (a['parent_background'][0] if paired else a['background']).copy())
@@ -357,6 +358,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
                 mode_targets_inferred=False)) if mode_maps else {}),
         **(dict(partition_anchor=anchor['trace']) if anchor is not None else {}),
         **(dict(additive_pair_inventory=added_inventory) if paired and added_inventory else {}),
+        **(dict(reference_native_origin=parent_origin) if fixed_reference else {}),
         **(dict(channels=3,representation='reference-current-signed-difference/shared-Q-asinh/v1',
             reference_kind=reference_kind,
             partition_method='class-supported-whole-trajectories/v1') if paired else {}))

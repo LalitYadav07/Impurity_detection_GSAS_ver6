@@ -95,8 +95,14 @@ def validate_training(request):
     if paired:validate_representation(request['settings'])
     defaults=dict(bins=4096 if paired else 2048, split_seed=69271 if paired else 3917,
         epochs=60, seed=89113, workers=4, augmentation=asdict(Controls()), dependencies=[])
-    if paired:defaults['representation']=REPRESENTATION
+    if paired:defaults.update(representation=REPRESENTATION,reference_kind=None)
     settings = fields(request['settings'], [], defaults)
+    if paired:
+        from .structural_attention_weights import REFERENCE_KINDS
+        reference_kind=settings['reference_kind']
+        if 'reference_kind' not in request['settings']:settings.pop('reference_kind')
+        elif not isinstance(reference_kind,str) or reference_kind not in REFERENCE_KINDS:
+            raise ValueError('Paired training needs its exact declared reference contract')
     for key, lower, upper in [('bins', 64, 8192), ('split_seed', 0, 2**32-1),
                               ('epochs', 1, 1000), ('seed', 0, 2**32-1), ('workers', 1, 16)]:
         settings[key] = number(settings[key], lower, upper, integer=True)
@@ -473,9 +479,11 @@ def execute_training(request):
         if paired and cache.is_symlink():raise ValueError('Training working data must remain in an owned directory')
         if paired and ((cache/'store.json').exists() or (cache/'store.json').is_symlink()):
             cohort=load(cache)
+            from .structural_attention_weights import REFERENCE_KIND
             if (cohort['input_sha256']!=[row['examples_sha256'] for row in plan['blocks']]
                     or cohort['parent_sha256']!=plan['parent_sha256']
-                    or cohort['instrument_sha256']!=plan['instrument_sha256']):
+                    or cohort['instrument_sha256']!=plan['instrument_sha256']
+                    or cohort['reference_kind']!=settings.get('reference_kind',REFERENCE_KIND)):
                 cohort['features'].close()
                 raise ValueError('Recovered feature cache differs from the captured native inputs')
         elif paired:
@@ -486,7 +494,8 @@ def execute_training(request):
             # native arrays and verifies exact reconstructed feature rows;
             # it never materializes the expanded multi-gigabyte feature plane.
             cohort=build_replay(directories,bins=settings['bins'],split_seed=settings['split_seed'],
-                augmenter=augmenter,names='examples',destination=cache)
+                augmenter=augmenter,names='examples',destination=cache,
+                reference_kind=settings.get('reference_kind'))
         else:
             cohort = build(directories, cache, bins=settings['bins'],
                            split_seed=settings['split_seed'], augmenter=augmenter)

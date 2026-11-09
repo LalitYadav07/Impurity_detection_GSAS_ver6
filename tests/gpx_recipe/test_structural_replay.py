@@ -8,11 +8,13 @@ from gpx_recipe.preparation.structural_cohort import assemble_pairs
 from gpx_recipe.preparation.structural_paired_blocks import read
 from gpx_recipe.preparation.structural_replay import build
 from gpx_recipe.preparation.structural_training_data import feature_rows, channel_statistics, feature_digest
+from gpx_recipe.preparation.structural_attention_weights import FIXED_REFERENCE_KIND
 from test_structural_paired_blocks import block
 
 
 @pytest.mark.parametrize('observations', [False, True, 'impurity'])
-def test_replay_preserves_all_feature_bytes_labels_aliases_and_folds(tmp_path, observations):
+@pytest.mark.parametrize('reference_kind',[None,FIXED_REFERENCE_KIND])
+def test_replay_preserves_all_feature_bytes_labels_aliases_and_folds(tmp_path, observations,reference_kind):
     def alias(d): d['candidate']['id'] = 'alias'; d['declared_child_group']['number'] = 8
     def labels(a): a['geometry_groups'][a['role'] == 2] = 8
     paths = [block(tmp_path/'first'), block(tmp_path/'second', change=labels, metadata=alias)]
@@ -25,8 +27,8 @@ def test_replay_preserves_all_feature_bytes_labels_aliases_and_folds(tmp_path, o
                 source_sha256='f'*64, instrument_sha256='b'*64)]
         augmenter = ObservationAugmenter(Controls(impurity_fraction=(.01, .1)
             if observations == 'impurity' else (0., 0.)), instrument_sha256='b'*64, **kwargs)
-    dense = assemble_pairs([read(p) for p in paths], bins=128, augmenter=augmenter)
-    replay = build(paths, bins=128, augmenter=augmenter); rows = replay['features']
+    dense = assemble_pairs([read(p) for p in paths], bins=128, augmenter=augmenter,reference_kind=reference_kind)
+    replay = build(paths, bins=128, augmenter=augmenter,reference_kind=reference_kind); rows = replay['features']
     try:
         assert feature_rows(rows) is rows and rows.shape == dense['features'].shape
         assert feature_digest(rows)==feature_digest(dense['features'])
@@ -73,6 +75,28 @@ def test_replay_eviction_reloads_validated_native_blocks_without_changing_rows(t
         returned = rows.take(np.array([0])); returned[:] = 98.
         np.testing.assert_array_equal(rows.take(np.array([0])), dense['features'][[0]])
     finally: rows.close()
+
+
+def test_fixed_replay_uses_selected_later_reference_grid_and_independent_noise(tmp_path):
+    def later_reference(d):
+        d['child_sha256']='0'*64
+        d['candidate']['child']['sha256']='0'*64
+        d['candidate']['id']='later-reference'
+    def shifted_grid(a):a['q']=a['q']*1.00001
+    paths=[block(tmp_path/'current'),block(tmp_path/'before',metadata=later_reference,change=shifted_grid)]
+    options=dict(bins=128,reference_kind=FIXED_REFERENCE_KIND,
+        augmenter=ObservationAugmenter(Controls(variants=2),instrument_sha256='b'*64))
+    dense=assemble_pairs([read(p) for p in paths],**options)
+    replay=build(paths,**options);rows=replay['features']
+    try:
+        assert dense['reference_native_origin']==replay['reference_native_origin']==1
+        assert not np.array_equal(read(paths[0]).arrays['q'],read(paths[1]).arrays['q'])
+        order=np.random.default_rng(1949).permutation(len(rows))
+        np.testing.assert_array_equal(rows.take(order),dense['features'][order])
+        assert replay['example_simulations']==dense['example_simulations']
+        noisy=[s for row in replay['example_simulations'] for s in row if s['kind']=='simulated_observation']
+        assert noisy and all(s['seed']!=s['reference_observation']['seed'] for s in noisy)
+    finally:rows.close()
 
 
 @pytest.mark.parametrize('file', ['pairs.json', 'pairs.npz'])
