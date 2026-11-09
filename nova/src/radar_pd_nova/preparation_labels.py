@@ -74,7 +74,7 @@ def native_dimensions(library, entry):
 
 
 def training_description(library,entry):
-    detail=_entry_detail(library,entry,{'structural-training'})
+    detail=_entry_detail(library,entry,{'structural-training','structural-ranking-model'})
     if detail is None or 'dataset' not in detail:return None
     from gpx_recipe.preparation.structural_training_counts import validate,partition_names
     counts=validate(detail['dataset']);parts=counts['partitions']
@@ -92,6 +92,12 @@ def training_description(library,entry):
         text+=(f" · {len(coverage['classes'])} symmetry families; least-covered SG {group}: "
             f"{pairs:,} clean training {'pair' if pairs==1 else 'pairs'} across "
             f"{trajectories:,} {'trajectory' if trajectories==1 else 'trajectories'}")
+    if entry['model']['kind']=='structural-ranking-model':
+        candidates=detail.get('candidate_count');families=detail.get('mode_families')
+        if type(candidates) is int and candidates>0:
+            text+=f" · {candidates} original constructions retained"
+        if type(families) is int and families>0:
+            text+=f" · {families} irrep/k displacement families"
     return text
 
 
@@ -101,7 +107,7 @@ def training_validation(library, entry):
     These are stored simulation diagnostics, not experimental accuracy or
     authority to remove native candidates. No numerical weights are loaded.
     """
-    detail = _entry_detail(library, entry, {'structural-training'})
+    detail = _entry_detail(library, entry, {'structural-training','structural-ranking-model'})
     if detail is None:
         return []
     test = detail.get('test', {})
@@ -137,9 +143,11 @@ def training_validation(library, entry):
 def entry_label(model, labels, *, dimensions=None):
     settings=model.get('settings',{});candidate=settings.get('candidate',{})
     identifier=candidate.get('id','');kind=model['kind']
-    if kind=='structural-training':
-        return dict(model='Structural family ranking model',k='All selected k families',candidate='',
-            coordinates=f"Trains after {len(settings['dependencies'])} native example blocks",basis='',origin='')
+    if kind in {'structural-training','structural-ranking-model'}:
+        return dict(model='Imported structural family ranking model' if kind=='structural-ranking-model' else 'Structural family ranking model',
+            k='All selected k families',candidate='',
+            coordinates=('Read-only trained data; native compatibility is checked for each scan' if kind=='structural-ranking-model'
+                else f"Trains after {len(settings['dependencies'])} native example blocks"),basis='',origin='')
     structural=kind in {'structural','structural-examples'}
     label=candidate.get('magnetic_space_group') or candidate.get('irrep') or identifier or 'Parent and profile'
     vector=settings.get('k',[])

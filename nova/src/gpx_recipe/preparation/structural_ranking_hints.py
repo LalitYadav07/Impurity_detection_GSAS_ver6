@@ -106,13 +106,14 @@ def capture(library,document,protocol,root):
     inputs={a['path']:a['sha256'] for a in document['inputs']}
     for row in sorted(document['entries'],key=lambda r:r['id']):
         model=row['model']
-        if model['kind']!='structural-training' or row['state']!='prepared':continue
+        if model['kind'] not in {'structural-training','structural-ranking-model'} or row['state']!='prepared':continue
         # File placement is library-owned; use the closed relative inventory
         # without assuming the generation attempt's directory layout.
         named={Path(a['path']).name:a for a in row['files']}
-        if not {'entry.json','model.json','weights.npz','training.json'}<=set(named):continue
+        origin_name='model-origin.json' if model['kind']=='structural-ranking-model' else 'training.json'
+        if not {'entry.json','model.json','weights.npz',origin_name}<=set(named):continue
         assets=library.verify_assets([document['specification']['source'],model['instrument']]+
-                                    [named[n]['path'] for n in ('entry.json','model.json','weights.npz')])
+                                    [named[n]['path'] for n in ('entry.json','model.json','weights.npz')]+([named[origin_name]['path']] if model['kind']=='structural-ranking-model' else []))
         d,candidates=_metadata(assets[named['model.json']['path']])
         routes={c['id']:current[candidate_identity(c)] for c in candidates if candidate_identity(c) in current}
         if not routes:continue
@@ -120,13 +121,27 @@ def capture(library,document,protocol,root):
         entry=assets[named['entry.json']['path']]
         if entry.stat().st_size>LIMITS['model']:raise ValueError('Structural training entry metadata is oversized')
         manifest=json.loads(entry.read_text())
-        if (not isinstance(manifest,dict) or manifest.get('kind')!='structural-training'
+        if (not isinstance(manifest,dict) or manifest.get('kind')!=model['kind']
                 or manifest.get('schema')!='radar-experiment-preparation-entry/v1'
                 or manifest.get('settings')!=model['settings'] or manifest.get('grid')!=model['grid']
                 or manifest.get('input_sha256')!=[inputs[document['specification']['source']],inputs[model['instrument']]]
                 or manifest.get('observations_included') is not False or manifest.get('scientific_result') is not False):
             raise ValueError('Structural training entry differs from its captured physical context')
-        portable_entry_artifacts('structural-training',manifest)
+        portable_entry_artifacts(model['kind'],manifest)
+        if model['kind']=='structural-ranking-model':
+            from .compiled_ranker import validate_origin
+            from ..symmetry.contracts import digest
+            settings=model['settings'];origin=assets[named[origin_name]['path']]
+            if origin.stat().st_size>LIMITS['model']:
+                raise ValueError('Compiled model origin is oversized')
+            validate_origin(json.loads(origin.read_text()),settings,
+                parent_sha256=d['parent_sha256'],instrument_sha256=d['instrument_sha256'],
+                grid=model['grid'],input_sha256=d.get('input_sha256'))
+            if (settings['model_sha256']!=named['model.json']['sha256']
+                    or settings['weights_sha256']!=named['weights.npz']['sha256']
+                    or settings['candidate_scope_sha256']!=digest(candidates)
+                    or manifest['artifacts'].get(origin_name)!=named[origin_name]['sha256']):
+                raise ValueError('Compiled ranking model differs from its complete captured scope')
         sources={'parent':(document['specification']['source'],inputs[document['specification']['source']]),
                  'instrument':(model['instrument'],inputs[model['instrument']]),
                  'model':(named['model.json']['path'],named['model.json']['sha256']),

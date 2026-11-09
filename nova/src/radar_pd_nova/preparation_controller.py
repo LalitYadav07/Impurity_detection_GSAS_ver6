@@ -399,6 +399,10 @@ class PreparationMixin:
                 return 'No preparation library selected. Model searches build the required physics when they run.'
             row=next(row for row in registry.summaries() if row['id']==selected)
             if not row['available']:raise ValueError('Selected preparation needs review')
+            if 'structural-ranking-model' in row['kinds']:
+                return (f"Trained structural model: {row['name']}. "
+                    'Compatible scans use its scores to prioritize the complete native candidate search. '
+                    'This library contains no prepared native starting curves.')
             if 'structural' in row['kinds']:
                 return (f"Prepared library: {row['name']} · {row['prepared']} / {row['total']} entries prepared. "
                     'Structural Model calculations check the current geometry and complete starting bank before reuse; changed contexts rebuild automatically.')
@@ -434,13 +438,14 @@ class PreparationMixin:
             s.prep_can_resume=bool(runnable and paused)
             kinds={r['model']['kind'] for r in library.document['entries']}
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
+            if kinds=={'structural-ranking-model'}:s.prep_library_kind='Imported trained structural model'
             if library.document.get('storage'):s.prep_library_kind='Compiled model library'
             s.prep_coverage=f"{counts['prepared']} prepared · {counts['preparing']} in preparation · {counts['pending']} pending · {counts['failed']+counts['cancelled']+counts['unsupported']} need attention · {coverage['total']} total"
             if library.document.get('storage'):
                 s.prep_coverage+=' · Compiled analysis copy; training arrays remain in the original preparation History.'
             titles={'reference':'Parent/profile inspection','magnetic':'Magnetic responses',
                 'structural':'Native starting curves','structural-examples':'Training pattern blocks',
-                'structural-training':'Ranking models'}
+                'structural-training':'Ranking models','structural-ranking-model':'Imported ranking models'}
             s.prep_stage_rows=[dict(kind=kind,title=titles[kind],total=sum(r['model']['kind']==kind for r in library.document['entries']),
                 prepared=sum(r['model']['kind']==kind and r['state']=='prepared' for r in library.document['entries']))
                 for kind in titles if kind in kinds]

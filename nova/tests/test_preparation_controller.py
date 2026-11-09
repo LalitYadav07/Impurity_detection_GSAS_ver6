@@ -80,6 +80,23 @@ def test_structural_training_is_visible_and_separately_filterable(app,tmp_path):
     assert [(job['id'],job['handle']['key']) for job in queue.tick()['queue']['jobs']]==captured
 
 
+def test_compiled_model_import_is_selected_without_starting_native_or_training_jobs(app,tmp_path):
+    from gpx_recipe.preparation.compiled_ranker import create
+    from test_compiled_ranker_native import prepared
+    application,store,_,service=app;s=application.server.state
+    model,parent,profile,kwargs,_=prepared(tmp_path/'compiled-inputs')
+    library=create(model,parent,profile,tmp_path/'compiled-library',**kwargs)
+    archive=tmp_path/'compiled-model.zip';library.export(archive)
+    before=len(service.submissions)
+    s.prep_library=store.import_archive(archive)['library'];application._prep_refresh()
+    assert s.prep_library_kind=='Imported trained structural model'
+    assert s.prep_stage_rows==[dict(kind='structural-ranking-model',title='Imported ranking models',total=1,prepared=1)]
+    assert s.prep_entries[0]['model']=='Imported structural family ranking model'
+    assert not s.prep_can_resume and not s.prep_can_pause
+    assert len(service.submissions)==before
+    assert 'no prepared native starting curves' in application._prepared_selection_caption()
+
+
 def test_failed_example_dependencies_explain_why_resume_cannot_start_training(app,tmp_path):
     from test_structural_preparation_dependencies import library_inputs
     application,store,_,_=app;s=application.server.state

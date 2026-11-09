@@ -2,6 +2,20 @@
 
 ## Current development status
 
+An externally completed structural trainer can also produce a compact,
+read-only `structural-ranking-model` library. Import its ZIP with the existing
+**Import a portable copy** control and select it for Model or Live analysis.
+The import creates no training job. It captures the unchanged typed weights,
+exact parent and profile, every original candidate CIF, and the identities of
+all original native training inputs, including the profile block and grid.
+It does not invent missing training dependencies. This model-only library
+contains no prepared native starting curves and cannot be resumed as a
+preparation job; the original simulation records are needed for retraining.
+The library panel distinguishes this artifact and shows clean and perturbed
+held-out validation separately. Import and successful inference establish
+transport and compatibility, not experimental accuracy or permission to remove
+native candidates. Every scan still passes native admission.
+
 Model exploration and structural live snapshots use the same prepared nonlinear
 service, complete-mode geometry and independent GPX checks. Live snapshots use
 the existing acquisition owner and bounded Galaxy transport. Prepared native

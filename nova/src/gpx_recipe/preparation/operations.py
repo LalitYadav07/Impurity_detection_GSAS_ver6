@@ -21,7 +21,8 @@ PLAN_SCHEMA = 'radar-experiment-preparation-plan/v1'
 PORTABLE = {'reference': set(), 'magnetic': {'response.npz'},
             'structural': {'starts.npz', 'starts.json'},'kernel':{'kernel.npz','kernel.json'},
             'structural-examples':{'examples.json','examples.npz'},
-            'structural-training':{'model/model.json','model/weights.npz','training.json'}}
+            'structural-training':{'model/model.json','model/weights.npz','training.json'},
+            'structural-ranking-model':{'model/model.json','model/weights.npz','model-origin.json'}}
 CHILD_KINDS={'structural','structural-examples'}
 OPTIONAL_PORTABLE = {'magnetic': {'scattering.npz'},'reference':{'profile.npz','profile.json'},
                      'structural-examples':{'mode-projection.json','mode-projection.npz'}}

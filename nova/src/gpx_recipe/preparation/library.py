@@ -88,7 +88,7 @@ def validate_manifest(value):
                 or not isinstance(row['reason'], str) or len(row['reason']) > 2000
                 or not isinstance(row['model'], dict)
                 or row['model'].get('kind') not in {'reference', 'magnetic', 'structural',
-                                                 'structural-examples','structural-training'}
+                                                 'structural-examples','structural-training','structural-ranking-model'}
                 or not isinstance(row['model'].get('bank'), str) or not row['model']['bank']
                 or not isinstance(row['files'], list) or len(row['files']) > 200):
             raise ValueError('Invalid or duplicate preparation model record')
@@ -101,6 +101,9 @@ def validate_manifest(value):
             paths.add(asset['path'])
         if (row['state'] == 'prepared') != bool(row['files']):
             raise ValueError('Only fully prepared models can publish their data artifacts')
+        if row['model']['kind']=='structural-ranking-model':
+            from .compiled_ranker import validate_entry
+            validate_entry(row)
     if not isinstance(value['inputs'], list) or not value['inputs'] or len(value['inputs']) > 10000:
         raise ValueError('Preparation inputs are missing or oversized')
     inputs = [_asset(a) for a in value['inputs']]

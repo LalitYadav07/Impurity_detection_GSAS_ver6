@@ -216,6 +216,7 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_ranking_admission_native.py \
             /validation/tests/gpx_recipe/test_preparation_library.py \
             /validation/tests/gpx_recipe/test_preparation_compiled_storage.py \
+            /validation/tests/gpx_recipe/test_compiled_ranker_native.py \
             /validation/tests/gpx_recipe/test_structural_start_diversity.py \
             /validation/tests/gpx_recipe/test_profiled_qualification.py \
             /validation/tests/gpx_recipe/test_native_window_response.py \
