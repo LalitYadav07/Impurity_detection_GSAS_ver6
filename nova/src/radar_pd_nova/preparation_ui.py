@@ -130,6 +130,13 @@ def libraries_panel(app):
                     with html.Td():
                         html.Div('{{ item.model }}')
                         html.Div('{{ item.coordinates }}',v_if='!!item.coordinates',classes='text-caption')
+                        with html.Details(v_if='item.validation && item.validation.length',classes='text-caption my-2'):
+                            html.Summary('Held-out model validation',style='cursor:pointer')
+                            html.P('Top-five recall: at least one compatible space group appears among the first five. These are simulation results, not measured experimental accuracy.',classes='my-2',style='max-width:560px')
+                            with html.Div(v_for='metric in item.validation',key='metric.title',classes='my-1'):
+                                html.Strong('{{ metric.title }}: {{ metric.value }}')
+                                html.Span(' · {{ metric.count }}')
+                            html.P('The model prioritizes native refinement. Every reviewed candidate remains available.',classes='my-2',style='max-width:560px')
                         with html.Details(v_if='!!item.candidate',classes='text-caption'):
                             html.Summary('Model identity',style='cursor:pointer')
                             html.Div('{{ item.candidate }}',style='overflow-wrap:anywhere')

@@ -4,6 +4,7 @@ These labels describe the declared model; they never authorize scientific
 reuse or replace the native parent/site/operator checks.
 """
 import json
+import math
 
 from gpx_recipe.preparation.library import confined
 from gpx_recipe.symmetry.isodistort_forms import _method1_catalog_group
@@ -92,6 +93,45 @@ def training_description(library,entry):
             f"{pairs:,} clean training {'pair' if pairs==1 else 'pairs'} across "
             f"{trajectories:,} {'trajectory' if trajectories==1 else 'trajectories'}")
     return text
+
+
+def training_validation(library, entry):
+    """Keep clean and perturbed held-out results separate in the library UI.
+
+    These are stored simulation diagnostics, not experimental accuracy or
+    authority to remove native candidates. No numerical weights are loaded.
+    """
+    detail = _entry_detail(library, entry, {'structural-training'})
+    if detail is None:
+        return []
+    test = detail.get('test', {})
+    if not isinstance(test, dict):
+        raise ValueError('Training validation requires typed held-out diagnostics')
+    observed = test.get('observation_metrics')
+    if observed is None:
+        return []
+    if not isinstance(observed, dict) or not isinstance(observed.get('partitions'), dict):
+        raise ValueError('Training validation needs separate clean and simulated-observation results')
+    result = []
+    for key, title in [('clean_native', 'Clean native simulations'),
+                       ('simulated_observation', 'Simulated observation variants')]:
+        row = observed['partitions'].get(key)
+        if row is None:
+            continue
+        if not isinstance(row, dict):
+            raise ValueError('Invalid held-out simulation diagnostics')
+        count, recall = row.get('rows'), row.get('top5')
+        if type(count) is not int or count < 0:
+            raise ValueError('Held-out simulation counts need nonnegative integers')
+        if count == 0 and recall is None:
+            continue
+        if (type(recall) not in (int, float) or not math.isfinite(recall)
+                or not 0 <= recall <= 1):
+            raise ValueError('Held-out simulation counts and recall need finite bounded values')
+        if count:
+            result.append(dict(title=title, value=f'{recall:.1%}',
+                count=f'{count:,} held-out patterns'))
+    return result
 
 
 def entry_label(model, labels, *, dimensions=None):

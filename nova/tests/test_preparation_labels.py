@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from radar_pd_nova.preparation_labels import entry_label,scope_labels,native_dimensions,training_description
+from radar_pd_nova.preparation_labels import entry_label,scope_labels,native_dimensions,training_description,training_validation
 
 
 def test_children_of_one_irrep_show_their_declared_subgroup_and_k():
@@ -114,6 +114,43 @@ def test_completed_training_exposes_thin_family_coverage_alongside_total_pairs(t
     assert '4 unique clean pairs' in text
     assert '2 symmetry families; least-covered SG 8: 1 clean training pair across 1 trajectory' in text
     assert 'independent experiments' not in text
+
+
+def validation_entry(tmp_path, partitions):
+    name='entries/train/entry.json';path=tmp_path/name;path.parent.mkdir(parents=True)
+    document=dict(schema='radar-experiment-preparation-entry/v1',kind='structural-training',
+        settings={},grid={},detail=dict(test=dict(observation_metrics=dict(partitions=partitions))))
+    path.write_text(json.dumps(document))
+    seen=[]
+    def verify(names):seen.extend(names);return {name:path}
+    library=SimpleNamespace(root=tmp_path,verify_assets=verify)
+    entry=dict(state='prepared',model=dict(kind='structural-training',settings={},grid={}),files=[dict(path=name)])
+    return library,entry,seen
+
+
+def test_validation_keeps_high_clean_recall_separate_from_poor_perturbed_recall(tmp_path):
+    library,entry,seen=validation_entry(tmp_path,dict(
+        clean_native=dict(rows=100,top5=.97),simulated_observation=dict(rows=900,top5=.35)))
+    rows=training_validation(library,entry)
+    assert [(r['value'],r['count']) for r in rows]==[
+        ('97.0%','100 held-out patterns'),('35.0%','900 held-out patterns')]
+    assert [r['title'] for r in rows]==['Clean native simulations','Simulated observation variants']
+    assert seen==['entries/train/entry.json']
+    assert training_validation(library,dict(entry,state='preparing'))==[]
+
+
+def test_zero_observation_partition_is_not_reported_as_zero_accuracy(tmp_path):
+    library,entry,_=validation_entry(tmp_path,dict(
+        clean_native=dict(rows=20,top5=.9),simulated_observation=dict(rows=0,top5=None)))
+    assert len(training_validation(library,entry))==1
+
+
+@pytest.mark.parametrize('row',[dict(rows=True,top5=.9),dict(rows=-1,top5=.9),
+    dict(rows=2,top5=True),dict(rows=2,top5=1.1),dict(rows=2,top5=float('nan')),
+    dict(rows=2,top5=None)])
+def test_invalid_validation_values_cannot_be_displayed_as_accuracy(tmp_path,row):
+    library,entry,_=validation_entry(tmp_path,dict(clean_native=row))
+    with pytest.raises(ValueError):training_validation(library,entry)
 
 
 def test_scope_labels_verify_the_captured_metadata_and_only_include_selected_models(tmp_path):
