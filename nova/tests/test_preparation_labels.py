@@ -145,6 +145,20 @@ def test_zero_observation_partition_is_not_reported_as_zero_accuracy(tmp_path):
     assert len(training_validation(library,entry))==1
 
 
+def test_common_classes_cannot_hide_weak_class_recovery_in_validation(tmp_path):
+    library,entry,_=validation_entry(tmp_path,dict(clean_native=dict(
+        rows=1000,top5=.98,macro_top5=.51,worst_class_top5=.02)))
+    row=training_validation(library,entry)[0]
+    assert row['value']=='98.0%'
+    assert row['detail']=='Class-balanced: 51.0% · Lowest class: 2.0%'
+
+
+@pytest.mark.parametrize('bad',[True,float('nan'),-.1,1.1])
+def test_invalid_class_balanced_diagnostics_cannot_be_shown_as_accuracy(tmp_path,bad):
+    library,entry,_=validation_entry(tmp_path,dict(clean_native=dict(rows=20,top5=.9,macro_top5=bad)))
+    with pytest.raises(ValueError,match='Per-class'):training_validation(library,entry)
+
+
 @pytest.mark.parametrize('row',[dict(rows=True,top5=.9),dict(rows=-1,top5=.9),
     dict(rows=2,top5=True),dict(rows=2,top5=1.1),dict(rows=2,top5=float('nan')),
     dict(rows=2,top5=None)])
