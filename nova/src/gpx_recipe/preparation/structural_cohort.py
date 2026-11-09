@@ -110,14 +110,16 @@ def assemble(blocks, *, bins=2048, split_seed=3917, augmenter=None):
     return assemble_into(lambda: iter(blocks), DenseFeatures(), bins=bins, split_seed=split_seed, augmenter=augmenter)
 
 
-def assemble_pairs(blocks, *, bins=4096, split_seed=69271, augmenter=None):
+def assemble_pairs(blocks, *, bins=4096, split_seed=69271, augmenter=None, reference_kind=None):
     """Three-curve cohorts use checked parent contexts and class-supported folds."""
     blocks=list(blocks)
     return assemble_into(lambda:iter(blocks),DenseFeatures(3),bins=bins,split_seed=split_seed,
-        augmenter=augmenter,paired=True,subset_factory=lambda indices:(blocks[i] for i in indices))
+        augmenter=augmenter,paired=True,subset_factory=lambda indices:(blocks[i] for i in indices),
+        reference_kind=reference_kind)
 
 
-def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=None, paired=False,subset_factory=None):
+def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=None, paired=False,
+                  subset_factory=None, reference_kind=None):
     """One two-pass assembly algorithm for memory or worker-local file storage.
 
     Only one validated raw block and one computed feature need reside at a
@@ -126,6 +128,12 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
     """
     if type(paired) is not bool or type(bins) is not int or not 64 <= bins <= 8192:
         raise ValueError('A bounded structural feature grid is required')
+    from .structural_attention_weights import REFERENCE_KIND,FIXED_REFERENCE_KIND,REFERENCE_KINDS
+    if reference_kind is None:reference_kind=REFERENCE_KIND
+    if (not isinstance(reference_kind,str) or reference_kind not in REFERENCE_KINDS
+            or (not paired and reference_kind!=REFERENCE_KIND)):
+        raise ValueError('A declared three-curve reference contract is required')
+    fixed_reference=paired and reference_kind==FIXED_REFERENCE_KIND
     sources = set(); profiles = set(); metadata = []; count = 0
     lower = -np.inf; upper = np.inf; parent_key = None; parent_arrays = None
     definitions = {}; candidate_groups = {}; generated_groups = {};mode_maps={};mode_references=[]
@@ -203,7 +211,7 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
             original_factory=(lambda:subset_factory(indices)) if subset_factory is not None else (
                 lambda:(block for i,block in enumerate(block_factory()) if i in selected_indices))
             original=assemble_into(original_factory,PartitionOnly(),bins=bins,split_seed=split_seed,
-                                   augmenter=augmenter,paired=True)
+                                   augmenter=augmenter,paired=True,reference_kind=reference_kind)
             anchor=capture(original,[metadata[i] for i in indices],
                 interval=None if original_range is None else original_range['parent_relative_metric_range'],
                 split_seed=split_seed,additive=bool(added_inventory))
@@ -250,11 +258,18 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
             from .structural_domain import parent_reference_norms
             metric_norms=parent_reference_norms(a['parent_a'])
         else:metric_norms=a['relative_metric_norm']
-        projector = ThreeCurveProjector(a['q'], edges) if paired else None
+        if fixed_reference:
+            from .structural_features import IndependentCurveProjector
+            projector=IndependentCurveProjector(a['q'],parent_arrays[0],edges)
+        else:projector = ThreeCurveProjector(a['q'], edges) if paired else None
         for index, curve in enumerate(a['theory_intensity']):
             group = d['groups'][index]; parents.setdefault(group, group)
-            def feature_for(values,background):
+            def feature_for(values,background,*,before=None):
                 if paired:
+                    if fixed_reference:
+                        before_y,before_bg=parent_arrays[1:] if before is None else before
+                        return projector.features(values,before_y,background=background,
+                            reference_background=before_bg)['features']
                     return projector.features(values,a['parent_intensity'][index],
                         background=background,reference_background=a['parent_background'][index])['features']
                 return with_parent_reference(pattern_features(a['q'],values,edges,background=background),reference)
@@ -275,8 +290,15 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
             if augmenter is not None:
                 for observation in augmenter.observations(a['q'], curve, a['background'], clean_identity=key):
                     augmented += 1
-                    augmented_feature = feature_for(observation['intensity'],observation['background'])
-                    put(augmented_feature, origin, dict(kind='simulated_observation', **observation['provenance']))
+                    before=None;provenance=dict(kind='simulated_observation', **observation['provenance'])
+                    if fixed_reference:
+                        reference_identity=hashlib.sha256(('fixed-before:'+key).encode()).hexdigest()
+                        draw=augmenter.observation(*parent_arrays,clean_identity=reference_identity,
+                            variant=observation['provenance']['variant'])
+                        before=(draw['intensity'],draw['background'])
+                        provenance['reference_observation']=draw['provenance']
+                    augmented_feature = feature_for(observation['intensity'],observation['background'],before=before)
+                    put(augmented_feature, origin, provenance)
     if seen != len(metadata):
         raise ValueError('Structural inputs changed while building the feature cache')
     classes = sorted(set().union(*(o['labels'] for r in records for o in r['origins'])))
@@ -336,5 +358,5 @@ def assemble_into(block_factory, sink, *, bins=2048, split_seed=3917, augmenter=
         **(dict(partition_anchor=anchor['trace']) if anchor is not None else {}),
         **(dict(additive_pair_inventory=added_inventory) if paired and added_inventory else {}),
         **(dict(channels=3,representation='reference-current-signed-difference/shared-Q-asinh/v1',
-            reference_kind='calculated_parent_at_shared_parent_compatible_cell',
+            reference_kind=reference_kind,
             partition_method='class-supported-whole-trajectories/v1') if paired else {}))

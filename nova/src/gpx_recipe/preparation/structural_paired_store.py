@@ -18,7 +18,7 @@ SCHEMA='radar-three-curve-structural-feature-cache/v1'
 ARRAYS={'compatible_labels','classes','split','q_edges','reference_features'}
 
 
-def build(directories,destination,*,bins=4096,split_seed=69271,augmenter=None,names='pairs'):
+def build(directories,destination,*,bins=4096,split_seed=69271,augmenter=None,names='pairs',reference_kind=None):
     directories=list(directories)
     if not 1<=len(directories)<=5000:raise ValueError('A bounded paired example catalog is required')
     destination=Path(destination);destination.mkdir(parents=True,exist_ok=False)
@@ -28,7 +28,7 @@ def build(directories,destination,*,bins=4096,split_seed=69271,augmenter=None,na
             range(len(directories)) if indices is None else indices))
     try:
         cohort=assemble_into(blocks,sink,bins=bins,
-            split_seed=split_seed,augmenter=augmenter,paired=True,subset_factory=blocks)
+            split_seed=split_seed,augmenter=augmenter,paired=True,subset_factory=blocks,reference_kind=reference_kind)
     finally:sink.close()
     stream=io.BytesIO();np.savez_compressed(stream,**{k:cohort[k] for k in ARRAYS})
     raw=stream.getvalue();validate_npz_bytes(raw,maximum_bytes=MAX_TARGET_BYTES)
@@ -47,10 +47,11 @@ def build(directories,destination,*,bins=4096,split_seed=69271,augmenter=None,na
 
 
 def load(directory):
+    from .structural_attention_weights import REFERENCE_KINDS
     directory=Path(directory);d=json.loads(read_bounded(directory/'store.json',MAX_METADATA_BYTES))
     if (not isinstance(d,dict) or d.get('schema')!=SCHEMA or d.get('channels')!=3
             or d.get('representation')!='reference-current-signed-difference/shared-Q-asinh/v1'
-            or d.get('reference_kind')!='calculated_parent_at_shared_parent_compatible_cell'
+            or not isinstance(d.get('reference_kind'),str) or d['reference_kind'] not in REFERENCE_KINDS
             or d.get('partition_method')!='class-supported-whole-trajectories/v1'
             or type(d.get('rows')) is not int or not 1<=d['rows']<=MAX_ROWS
             or d.get('unique_examples')!=d['rows']

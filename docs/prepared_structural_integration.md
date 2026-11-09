@@ -2,6 +2,32 @@
 
 ## Current development status
 
+The development backend also has an explicitly bound fixed-before-transition
+reference contract. It uses the same three-channel encoder and training loop,
+but generates the reference from the original parent anchor rather than
+recalculating it at each child's parent-compatible cell. Ordinary parent-cell
+changes therefore remain in its training differences. Synthetic observation
+variants include independently seeded reference and current count/background
+noise. Every native input, exact alias and whole-trajectory holdout remains
+checked; this does not add independent experimental samples.
+
+Fixed-reference inference requires a measured before-transition reference
+with its source, parent and instrument-bank identities. Each curve retains its
+own calibrated Q grid. Both integrals use the intersection of their valid
+native intervals, so a masked gap cannot become an apparent new or lost peak.
+The reference, current and signed difference share one intensity scale and
+asinh compression; no peak registration or separate curve normalization is
+performed. Models trained on the earlier recalculated-parent contract retain
+that contract and cannot silently consume a tagged measured reference.
+
+This fixed-reference path is under local experimental qualification. It has
+not been connected to the Model/Live reference-selection UI or deployed to
+NDIP. The existing native GPX consumer supplies a recalculated reference and
+therefore rejects a fixed-reference model until an explicitly captured
+measured reference is supplied through a future reviewed handoff. All native
+candidates remain available; passing feature, transport or training tests does
+not authorize candidate pruning or claims of experimental mode absence.
+
 An externally completed structural trainer can also produce a compact,
 read-only `structural-ranking-model` library. Import its ZIP with the existing
 **Import a portable copy** control and select it for Model or Live analysis.

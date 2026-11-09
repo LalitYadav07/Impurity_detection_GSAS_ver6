@@ -108,5 +108,5 @@ def test_ui_reports_actual_fitting_pairs_separately_from_calibration(monkeypatch
     groups,base,clean,y=cohort();result=partition.reserve(groups,base,clean,y)
     saved=describe(groups,result.split,clean,y,calibration=True)
     monkeypatch.setattr(preparation_labels,'_entry_detail',lambda *a:dict(dataset=saved))
-    text=preparation_labels.training_description(None,None)
+    text=preparation_labels.training_description(None,{'model':{'kind':'structural-training'}})
     assert 'train / validation / test / calibration: 6,000 / 3,000 / 3,000 / 6,000' in text

@@ -10,7 +10,7 @@ from ..symmetry.contracts import validate_candidate
 from ..symmetry.resources import allocation
 from .structural_attention import network
 from . import structural_attention_weights as weights
-from .structural_features import three_curve_features
+from .structural_features import three_curve_features,independent_curve_features
 from .structural_model_files import document,MAX_BYTES
 from .structural_ranker import _class_routes,_preferred_routes
 from .structural_support import distances,MAX_BYTES as SUPPORT_BYTES,STREAM_METHOD
@@ -34,7 +34,7 @@ class Ranker:
         if (d.get('schema')!=weights.SCHEMA or not isinstance(d.get('architecture'),str)
                 or d.get('architecture') not in weights.ARCHITECTURES
                 or d.get('representation')!=weights.REPRESENTATION or d.get('channels')!=3
-                or d.get('reference_kind')!=weights.REFERENCE_KIND
+                or not isinstance(d.get('reference_kind'),str) or d['reference_kind'] not in weights.REFERENCE_KINDS
                 or d.get('normalization_method')!=weights.NORMALIZATION
                 or d.get('weights_sha256')!=hashlib.sha256(raw).hexdigest()
                 or not isinstance(classes,list) or not 2<=len(classes)<=230
@@ -172,13 +172,30 @@ class Ranker:
         self.mode_spec=spec
 
     def rank(self,q,intensity,*,background,parent_sha256,instrument_sha256,valid=None,reference=None):
-        import torch
         if (parent_sha256!=self.metadata['parent_sha256'] or instrument_sha256!=self.metadata['instrument_sha256']):
             raise ValueError('This ranker needs its exact prepared parent and instrument context')
+        fixed_reference=self.metadata['reference_kind']==weights.FIXED_REFERENCE_KIND
+        if fixed_reference:
+            if (not isinstance(reference,dict) or reference.get('kind')!='measured_before_transition'
+                    or reference.get('parent_sha256')!=parent_sha256
+                    or reference.get('instrument_sha256')!=instrument_sha256
+                    or not checksum(reference.get('source_sha256'))):
+                raise ValueError('This model requires a measured before-transition reference with its source, parent and bank identities')
+            reference={k:v for k,v in reference.items() if k not in
+                       {'kind','parent_sha256','instrument_sha256','source_sha256'}}
         if (not isinstance(reference,dict) or set(reference)-{'q','intensity','background','valid'}
                 or not {'q','intensity','background'}<=set(reference)
-                or not np.array_equal(np.asarray(reference['q']),np.asarray(q))):
-            raise ValueError('Three-curve ranking requires a freshly calculated parent reference on the same native Q grid')
+                or (not fixed_reference and not np.array_equal(np.asarray(reference['q']),np.asarray(q)))):
+            raise ValueError('Fixed-reference ranking needs both calibrated native Q grids' if fixed_reference else
+                'Three-curve ranking requires a freshly calculated parent reference on the same native Q grid')
+        if fixed_reference:
+            prepared=independent_curve_features(q,intensity,reference['q'],reference['intensity'],self.edges,
+                background=background,reference_background=reference['background'],valid=valid,
+                reference_valid=reference.get('valid'))
+        else:prepared=self._calculated_reference_features(q,intensity,reference,background,valid)
+        return self._rank_features(prepared)
+
+    def _calculated_reference_features(self,q,intensity,reference,background,valid):
         mask=valid
         if reference.get('valid') is not None:
             other=np.asarray(reference['valid'])
@@ -186,8 +203,11 @@ class Ranker:
             if valid is not None and (np.asarray(valid).dtype!=bool or np.shape(valid)!=other.shape):
                 raise ValueError('Invalid native observation validity metadata')
             mask=other if valid is None else other&valid
-        prepared=three_curve_features(q,intensity,reference['intensity'],self.edges,
+        return three_curve_features(q,intensity,reference['intensity'],self.edges,
             background=background,reference_background=reference['background'],valid=mask)
+
+    def _rank_features(self,prepared):
+        import torch
         if np.any(prepared['coverage']<.999):
             raise ValueError('This structural ranker is not qualified for missing coordinate intervals')
         feature=(prepared['features']-self.mean)/self.scale

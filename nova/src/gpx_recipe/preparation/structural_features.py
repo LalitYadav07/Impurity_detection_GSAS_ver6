@@ -6,16 +6,23 @@ or likelihoods. Native refinement retains the original measurements.
 import numpy as np
 
 
+def _valid_intervals(q, mask, nodes):
+    midpoint = nodes[:-1]+np.diff(nodes)*.5
+    left = np.searchsorted(q, midpoint, side='right')-1
+    active = (left >= 0) & (left < len(q)-1)
+    indices = np.flatnonzero(active)
+    active[indices] &= mask[left[indices]] & mask[left[indices]+1]
+    return active
+
+
 class _PatternProjection:
     """One immutable grid/mask plan; intensity arithmetic stays unchanged."""
-    def __init__(self, q, edges, mask):
+    def __init__(self, q, edges, mask, *, nodes=None, interval_valid=None):
         self.q = q; self.edges = edges; self.mask = mask.copy()
-        nodes = np.unique(np.r_[q, edges]); intervals = np.diff(nodes)
-        midpoint = nodes[:-1]+intervals*.5
-        left = np.searchsorted(q, midpoint, side='right')-1
-        active = (left >= 0) & (left < len(q)-1)
-        indices = np.flatnonzero(active)
-        active[indices] &= mask[left[indices]] & mask[left[indices]+1]
+        nodes = np.unique(np.r_[q, edges]) if nodes is None else nodes
+        intervals = np.diff(nodes); active = _valid_intervals(q, mask, nodes)
+        if interval_valid is not None:
+            active &= interval_valid
         length = np.r_[0., np.cumsum(intervals*active)]
         locations = np.searchsorted(nodes, edges)
         bin_length = np.diff(length[locations]); width = np.diff(edges)
@@ -168,6 +175,77 @@ def three_curve_features(q, current, reference, edges, *, background=None,
     """
     return ThreeCurveProjector(q, edges).features(current, reference, background=background,
         reference_background=reference_background, valid=valid, contrast=contrast)
+
+
+class IndependentCurveProjector:
+    """Reference/current/difference on two independently calibrated Q grids.
+
+    Integrate both piecewise-linear curves over the exact same valid native
+    intervals. Neither curve is aligned to the other's peaks, extrapolated,
+    independently normalized, smoothed or edited. A masked gap in either
+    input excludes that interval from both integrals. This is a feature
+    builder, not permission to reuse a model trained on calculated references
+    with a measured reference.
+    """
+    def __init__(self, q, reference_q, edges):
+        q, edges = _grid(q, edges)
+        reference_q, _ = _grid(reference_q, edges)
+        self.q = np.frombuffer(q.tobytes(), dtype=q.dtype)
+        self.reference_q = np.frombuffer(reference_q.tobytes(), dtype=reference_q.dtype)
+        self.edges = np.frombuffer(edges.tobytes(), dtype=edges.dtype)
+        nodes = np.unique(np.r_[q, reference_q, edges])
+        self.nodes = np.frombuffer(nodes.tobytes(), dtype=nodes.dtype)
+        self._plans = None
+        self._reference_key = self._reference = None
+
+    def features(self, current, reference, *, background=None, reference_background=None,
+                 valid=None, reference_valid=None, contrast=30.):
+        if type(contrast) not in (int, float) or not np.isfinite(contrast) or not 1 <= contrast <= 1000:
+            raise ValueError('A finite feature contrast between one and one thousand is required')
+        mask = _mask(self.q, current, valid)
+        reference_mask = _mask(self.reference_q, reference, reference_valid)
+        if (self._plans is None or not np.array_equal(mask, self._plans[0].mask)
+                or not np.array_equal(reference_mask, self._plans[1].mask)):
+            common = (_valid_intervals(self.q, mask, self.nodes)
+                      & _valid_intervals(self.reference_q, reference_mask, self.nodes))
+            self._plans = (
+                _PatternProjection(self.q, self.edges, mask, nodes=self.nodes, interval_valid=common),
+                _PatternProjection(self.reference_q, self.edges, reference_mask,
+                                   nodes=self.nodes, interval_valid=common))
+            self._reference_key = self._reference = None
+        after_plan, before_plan = self._plans
+        reference_values = np.asarray(np.ma.getdata(reference), float)
+        reference_bg = None if reference_background is None else np.asarray(reference_background, float)
+        if reference_bg is not None and reference_bg.shape != self.reference_q.shape:
+            raise ValueError('One finite supplied background value per valid pattern point required')
+        key = (reference_values.tobytes(), None if reference_bg is None else reference_bg.tobytes())
+        if key != self._reference_key:
+            self._reference = before_plan.project(reference_values, reference_bg, include_peak=False)
+            self._reference_key = key
+        before = self._reference
+        after = after_plan.project(current, background, include_peak=False)
+        coverage = after[2]
+        if not np.any(coverage > 0):
+            raise ValueError('The reference and current patterns have no shared valid Q interval')
+        scale = max(before[4], after[4])
+        transform = lambda value: np.arcsinh(contrast*(value/scale))/np.arcsinh(contrast)
+        features = np.asarray([transform(before[0]), transform(after[0]),
+                               transform(after[0]-before[0])], np.float32)
+        features[:, coverage == 0] = 0.
+        if not np.isfinite(features).all():
+            raise ValueError('Three-curve structural features are not finite')
+        return dict(features=features, coverage=coverage.astype(np.float32),
+            q_edges=self.edges.copy(), intensity_scale=scale,
+            channels=['reference', 'current', 'current_minus_reference'],
+            difference='background-subtracted native intensity difference before shared asinh compression')
+
+
+def independent_curve_features(q, current, reference_q, reference, edges, *, background=None,
+                               reference_background=None, valid=None, reference_valid=None, contrast=30.):
+    """Three channels from separate native Q grids, with common valid support."""
+    return IndependentCurveProjector(q, reference_q, edges).features(current, reference,
+        background=background, reference_background=reference_background,
+        valid=valid, reference_valid=reference_valid, contrast=contrast)
 
 
 def with_parent_reference(observed, reference):

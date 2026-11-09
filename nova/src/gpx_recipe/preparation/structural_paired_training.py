@@ -33,7 +33,7 @@ def _inputs(cohort):
     classes=np.asarray(cohort['classes']);split=np.asarray(cohort['split']);n=len(rows)
     if (rows.shape[1]!=3 or cohort.get('channels')!=3
             or cohort.get('representation')!=weights.REPRESENTATION
-            or cohort.get('reference_kind')!=weights.REFERENCE_KIND
+            or not isinstance(cohort.get('reference_kind'),str) or cohort['reference_kind'] not in weights.REFERENCE_KINDS
             or cohort.get('partition_method')!='class-supported-whole-trajectories/v1'
             or classes.dtype!=np.int32 or classes.ndim!=1 or not 2<=len(classes)<=230
             or np.any(classes<1) or np.any(classes>230) or np.any(np.diff(classes)<=0)
@@ -312,7 +312,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             prior=evaluate(portable,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0),clean=clean)
         progress('packing_model',selected_epoch=selected_epoch)
         metadata=dict(schema=weights.SCHEMA,architecture=architecture,representation=weights.REPRESENTATION,
-            channels=3,reference_kind=weights.REFERENCE_KIND,normalization_method=weights.NORMALIZATION,
+            channels=3,reference_kind=cohort['reference_kind'],normalization_method=weights.NORMALIZATION,
             parent_sha256=cohort['parent_sha256'],instrument_sha256=cohort['instrument_sha256'],
             input_sha256=cohort['input_sha256'],candidates=cohort['candidates'],candidate_groups=cohort['candidate_groups'],
             class_candidate_ids=routes,weights_sha256=hashlib.sha256(raw).hexdigest(),tensor_layout_sha256=layout,

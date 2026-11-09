@@ -24,7 +24,7 @@ def test_normalized_default_resists_the_observed_common_negative_readout_shift()
     assert (logits-logits[0]).abs().max()>.001
     logits.square().sum().backward()
     assert values.grad.abs().max()>1e-6
-    assert current.attention.layers[0].self_attn.in_proj_weight.grad.abs().sum()>0
+    assert current.attention.qkv.weight.grad.abs().sum()>0
 
 
 def test_training_readout_checks_are_bounded_and_preserve_dropout_rng(monkeypatch):

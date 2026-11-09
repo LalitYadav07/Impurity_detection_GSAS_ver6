@@ -16,6 +16,8 @@ MODE_ARCHITECTURES=frozenset({PER_CHANNEL_MODE_ARCHITECTURE,MODE_ARCHITECTURE})
 ARCHITECTURES=CLASS_ARCHITECTURES|MODE_ARCHITECTURES
 REPRESENTATION='reference-current-signed-difference/shared-Q-asinh/v1'
 REFERENCE_KIND='calculated_parent_at_shared_parent_compatible_cell'
+FIXED_REFERENCE_KIND='fixed_before_transition_parent'
+REFERENCE_KINDS=frozenset({REFERENCE_KIND,FIXED_REFERENCE_KIND})
 NORMALIZATION='training-channel-standard-deviation/no-centering/v1'
 
 
