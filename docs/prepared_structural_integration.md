@@ -92,9 +92,12 @@ space-group labels and 20 native mode families. Strong-control rays include
 verified changes above 2% in at least one fixed-parent near-neighbor distance;
 the weak examples and unresolved rays remain in the corpus. That geometric
 convention is not a universal neutron-diffraction detectability threshold.
-A complete full-data joint-model accuracy and
-preparation-speed qualification is still in progress; corpus size and passing
-software tests do not establish that quality.
+A full-data 60-epoch joint control has finished. Its clean/noisy recall gap is
+substantial, and its conditional mode head did not beat the fitting-only mode
+baseline. Neither the current ranking nor mode estimates qualify candidate
+exclusion. Independent interval diagnostics and preparation-speed qualification
+remain in progress; corpus size and passing software tests do not establish
+scientific quality or a useful reduction in the native search.
 
 New joint models automatically calculate mode-range calibration diagnostics
 after weights and checkpoint selection are frozen, when the existing independent
@@ -1155,6 +1158,24 @@ arbitrary Q-space convolution. All noisy siblings retain the clean geometry's
 compatible labels and trajectory group. Clean aliases connect their groups
 before splitting, and labels discovered in later alias blocks also reach all
 already-created siblings. Clean native examples remain in every cohort.
+
+The declared count and background ranges are synthetic stress controls, not
+empirically validated distributions for an instrument. Reduced-data errors can
+vary with position and need not follow one global Poisson scale. Qualification
+must check reported marginal uncertainties, normalization and rebinning effects,
+background-estimation errors, and stable repeat measurements. Different
+temperatures are not noise replicates, and a model residual can contain omitted
+physics rather than counting noise. Marginal uncertainties alone do not qualify
+independent errors or a covariance model. Report ordinary and severe conditions
+separately, including weak or indistinguishable patterns; do not reduce the noise
+range merely to improve a headline score. A geometric distortion threshold is
+not a universal diffraction detection threshold.
+
+The fixed class-prior baseline now scores only the same bounded labels and
+indices. It does not replay or transfer diffraction features that cannot affect
+its ranking. Learned class and conditional-mode evaluation still use the checked
+feature reader. This removes redundant work without changing the scored rows,
+ties, ambiguity sets, observation partitions or reported baseline metrics.
 
 `preparation.structural_ranker.train` trains a compound/profile-specific CNN
 inside the existing CPU/RAM allocation guard. Validation selects a frozen
