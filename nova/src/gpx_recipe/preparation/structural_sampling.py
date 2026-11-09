@@ -24,6 +24,7 @@ class TrajectorySamples:
     displacement_rms: np.ndarray
     relative_metric_norm: np.ndarray
     rejected_directions: int
+    cell_coverage: dict | None = None
 
 
 def _interval(value, name):
@@ -49,7 +50,7 @@ def _direction(rng, dimensions, sparse):
 def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
                       steps=4, displacement_range=(.0005, .04),
                       relative_metric_range=(.0001, .01), feasible=None,
-                      trajectory_feasible=None, maximum_attempts=1000):
+                      trajectory_feasible=None, maximum_attempts=1000,cell_directions=None,cell_ray_limit=None):
     """Draw independent directions, with nested amplitudes kept in one group.
 
     Intervals describe maximum trajectory amplitudes. Each trajectory contains
@@ -88,20 +89,45 @@ def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
         raise ValueError('Generate the example trajectories in smaller chunks')
     if any(check is not None and not callable(check) for check in (feasible,trajectory_feasible)):
         raise TypeError('The physical feasibility checks must be callable')
+    if cell_ray_limit is not None and (cell_directions is None or not callable(cell_ray_limit)):
+        raise TypeError('A cell-ray box limit requires its declared directions and parent-aware callback')
+    coverage=None;directions=None
+    if cell_directions is not None:
+        directions=np.asarray(cell_directions,float)
+        if (directions.ndim!=2 or directions.shape[1]!=nc or len(directions)>nc
+                or not np.isfinite(directions).all() or 2*len(directions)>trajectories
+                or not np.allclose(directions@cg@directions.T,np.eye(len(directions)),rtol=1e-10,atol=1e-12)):
+            raise ValueError('Retain both signs of every independent unit-normalized cell direction')
+        coverage=dict(schema='radar-complete-parent-conditioned-cell-rays/v1',dimensions=len(directions),
+            directions=directions.tolist(),cell_gram=cg.tolist(),rays=[])
     rng = np.random.default_rng(seed); fractions = np.geomspace(.1, 1., steps)
     points = []; labels = []; mode_norms = []; cell_norms = []; rejected = 0
     for index in range(trajectories):
         # Pure displacement, pure lattice, and mixed trajectories. Each block
         # cycles through sparse and collective directions in physical norm.
         kind = index % 3 if nm else 1
+        guaranteed=directions is not None and index<2*len(directions)
+        if guaranteed:kind=1
+        cap=high_cell
+        if guaranteed:
+            signed=directions[index//2]*(-1 if index%2==0 else 1)
+            active=signed!=0
+            cap=min(cap,float(np.min(bounds[nm:][active]/abs(signed[active]))))
+            if cell_ray_limit is not None:
+                parent_cap=cell_ray_limit(index,signed)
+                if type(parent_cap)not in (int,float) or not np.isfinite(parent_cap) or parent_cap<=0:
+                    raise ValueError('A finite positive original-parent cell-ray limit is required')
+                cap=min(cap,parent_cap)
         sparse = (1, 2, 0)[(index//3) % 3]
         for _ in range(maximum_attempts):
             amplitude = np.exp(rng.uniform(np.log(low_mode), np.log(high_mode)))
-            metric = np.exp(rng.uniform(np.log(low_cell), np.log(high_cell)))
+            metric = (cap*2.**(-_) if guaranteed
+                      else np.exp(rng.uniform(np.log(low_cell), np.log(high_cell))))
+            if guaranteed and metric<low_cell:break
             modes = (mode_lift@_direction(rng, nm, sparse)*amplitude
                      if nm and kind != 1 else np.zeros(nm))
-            cells = (cell_lift@_direction(rng, nc, sparse)*metric
-                     if kind != 0 else np.zeros(nc))
+            cells = (directions[index//2]*(-1 if index%2==0 else 1)*metric if guaranteed
+                     else cell_lift@_direction(rng, nc, sparse)*metric if kind != 0 else np.zeros(nc))
             block = fractions[:, None]*np.r_[modes, cells]
             allowed = np.all(abs(block) <= bounds)
             if allowed and feasible is not None:
@@ -118,15 +144,20 @@ def draw_trajectories(mode_gram, cell_gram, bounds, *, seed, trajectories=64,
                 points.extend(block); labels.extend([index]*steps)
                 mode_norms.extend(np.sqrt(np.maximum(np.einsum('ni,ij,nj->n', block[:, :nm], mg, block[:, :nm]), 0.)))
                 cell_norms.extend(np.sqrt(np.maximum(np.einsum('ni,ij,nj->n', block[:, nm:], cg, block[:, nm:]), 0.)))
+                if guaranteed:coverage['rays'].append(dict(trajectory=index,axis=index//2,
+                    sign=-1 if index%2==0 else 1,maximum_relative_metric_norm=metric,
+                    requested_relative_metric_norm=high_cell,box_relative_metric_norm=cap,rejected_amplitudes=_))
                 break
             rejected += 1
         else:
             raise ValueError('Could not complete a physical trajectory inside the declared bounds; revise its scope, not its label')
+        if guaranteed and len(coverage['rays'])<=index:
+            raise ValueError('A required signed strain ray is infeasible inside the declared amplitude range')
     arrays = [np.asarray(points, float), np.asarray(labels, np.int64),
               np.asarray(mode_norms), np.asarray(cell_norms)]
     for array in arrays:
         array.flags.writeable = False
-    return TrajectorySamples(*arrays, rejected)
+    return TrajectorySamples(*arrays, rejected,cell_coverage=coverage)
 
 
 def physical_grams(source):

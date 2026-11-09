@@ -83,7 +83,8 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     child_group = declared_group(source)
     conditioning = ParentConditioner(source,parent_space,candidate['transformation_matrix'],parents)
     original = from_source(source, seed=seed, trajectories=trajectories, steps=steps,
-        trajectory_feasible=conditioning.feasible)
+        trajectory_feasible=conditioning.feasible,cell_directions=conditioning.strain_directions(),
+        cell_ray_limit=conditioning.strain_ray_limit)
     coverage=None
     if mode_coverage is not None:
         contexts=min(CONTEXTS_PER_MODE,trajectories)
@@ -187,5 +188,6 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
         scope='Worker wall time; native forward includes its own mandatory anchor; independent checks and regeneration are separate')
     if coverage is not None:
         manifest.update(mode_coverage=coverage_record)
+    if original.cell_coverage is not None:manifest['cell_coverage']=original.cell_coverage
     write_json(out/'pairs.json', manifest); progress('complete', len(points))
     return manifest

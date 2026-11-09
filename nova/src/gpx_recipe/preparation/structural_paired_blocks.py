@@ -153,6 +153,9 @@ def read(directory,*,names='pairs'):
     elif 'mode_projection' in document:
         raise ValueError('Native mode projection requires its explicit paired schema')
     if sparse:additive.validate_arrays(document,arrays,mode_map)
+    if 'cell_coverage' in document:
+        from .structural_cell_coverage import validate
+        validate(document,arrays,mode_map)
     owned={k:np.frombuffer(a.tobytes(),dtype=a.dtype).reshape(a.shape) for k,a in arrays.items()}
     return PairedBlock(document,owned,mode_map)
 

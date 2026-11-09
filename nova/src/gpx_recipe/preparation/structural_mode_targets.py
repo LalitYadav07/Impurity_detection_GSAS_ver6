@@ -115,6 +115,7 @@ def append(source,coverage,context):
     assert len(values[0])==total
     for value in values:value.flags.writeable=False
     record=dict(target_fraction=TARGET_FRACTION,rays=reports);validate_record(record,rays)
-    return ModeCoverage(TrajectorySamples(*values,coverage.samples.rejected_directions),coverage.base_examples,
+    return ModeCoverage(TrajectorySamples(*values,coverage.samples.rejected_directions,
+        cell_coverage=coverage.samples.cell_coverage),coverage.base_examples,
         coverage.labels,coverage.gauge_axes,tuple(rays),coverage.rejected_amplitudes,
         coverage.maximum_reconstruction_error,record)

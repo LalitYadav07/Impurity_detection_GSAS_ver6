@@ -96,7 +96,7 @@ def supplement(source,base,*,seed,steps=4,contexts=CONTEXTS_PER_MODE,
     for value in values:value.flags.writeable=False
     # The original rejection counter describes the unchanged mixed directions;
     # named-axis amplitude rejections have their own explicit accounting.
-    samples=TrajectorySamples(*values,base.rejected_directions)
+    samples=TrajectorySamples(*values,base.rejected_directions,cell_coverage=base.cell_coverage)
     return ModeCoverage(samples,len(points),directions.labels,
         tuple(map(int,np.flatnonzero(directions.gauge_only))),tuple(rays),rejected,
         directions.maximum_reconstruction_error)

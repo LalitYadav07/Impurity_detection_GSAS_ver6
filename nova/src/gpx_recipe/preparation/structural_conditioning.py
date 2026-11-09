@@ -69,6 +69,57 @@ class ParentConditioner:
             raise ValueError('Parent-context change escaped the complete allowed child cell space')
         return values
 
+    def strain_directions(self):
+        """Every independent child-cell direction outside parent symmetry.
+
+        Work in the same native reciprocal metric as conditioning. A complete
+        parent-compatible subspace is removed algebraically; no small physical
+        strain is discarded on intensity, noise or an experimental threshold.
+        The returned directions have unit relative reciprocal-metric norm.
+        """
+        from .structural_sampling import physical_grams
+        from ..structural_live.optimization.physical_prior_geometry import orthonormal_lift
+        inverse=np.linalg.inv(self.basis);columns=[]
+        for column in self.mapping.T:
+            delta=self.basis.T@native_reciprocal_matrix(column)@self.basis
+            delta=(delta+delta.T)/2
+            broken=delta-self.space.project(delta,positive=False)
+            child=inverse.T@broken@inverse;child=(child+child.T)/2
+            wanted=coefficients(child,positive=False)
+            values,_,rank,_=np.linalg.lstsq(self.mapping,wanted,rcond=None)
+            if rank!=self.nc or not np.allclose(self.mapping@values,wanted,rtol=1e-10,atol=1e-13):
+                raise ValueError('Symmetry-breaking strain escaped the complete native child-cell space')
+            columns.append(values)
+        projector=np.array(columns).T
+        if not np.allclose(projector@projector,projector,rtol=1e-10,atol=1e-12):
+            raise ValueError('The parent-conditioned cell map is not an idempotent projection')
+        dimension=self.nc-self.space.basis.shape[1]
+        vectors,singular,_=np.linalg.svd(projector)
+        if (not 0<=dimension<=self.nc or np.any(singular[:dimension]<1e-8)
+                or np.any(singular[dimension:]>1e-8)):
+            raise ValueError('All symmetry-breaking strain dimensions must remain resolved')
+        if not dimension:return np.empty((0,self.nc))
+        _,gram=physical_grams(self.source);basis=vectors[:,:dimension]
+        directions=basis@orthonormal_lift(basis.T@gram@basis)
+        if (not np.allclose(projector@directions,directions,rtol=1e-10,atol=1e-12)
+                or not np.allclose(directions.T@gram@directions,np.eye(dimension),rtol=1e-10,atol=1e-12)):
+            raise ValueError('Complete physical strain coverage lost its native normalization')
+        return np.frombuffer(directions.T.tobytes(),dtype=float).reshape(dimension,self.nc)
+
+    def strain_ray_limit(self,index,direction):
+        """Exact native parameter-box endpoint in that fixed parent context."""
+        direction=np.asarray(direction,float)
+        if (type(index)is not int or not 0<=index<len(self.controls) or direction.shape!=(self.nc,)
+                or not np.isfinite(direction).all() or not np.any(direction)):
+            raise ValueError('One signed physical cell direction and its original parent required')
+        center=self.controls[index,self.nm:];bounds=self.source.radii[self.nm:]
+        limits=np.full(self.nc,np.inf);positive=direction>0;negative=direction<0
+        limits[positive]=(bounds[positive]-center[positive])/direction[positive]
+        limits[negative]=(-bounds[negative]-center[negative])/direction[negative]
+        result=float(limits.min())
+        if not np.isfinite(result) or result<=0:raise ValueError('The original parent has no positive cell-ray interval')
+        return float(np.nextafter(result,0.))
+
     def metric(self,index,point):
         original=parent_metric(native_reciprocal_matrix(self.geometry.a0+self.mapping@point[self.nm:]),self.basis)
         broken=original-self.space.project(original)
