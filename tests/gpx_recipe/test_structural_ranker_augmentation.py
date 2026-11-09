@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import hashlib
-import json
 
 from gpx_recipe.preparation.structural_augmentation import Controls, ObservationAugmenter
 from gpx_recipe.preparation.structural_cohort import assemble, read_block
@@ -45,25 +44,49 @@ def test_poisson_draws_recover_declared_mean_and_variance():
     assert abs(z.var()-1.) < .04
 
 
+def _pre_replay_siblings(q,total,background,augmenter,clean_identity):
+    """Frozen eb86a04 observation loop, before replay shared its draw path.
+
+    Compare both implementations on the same platform: exp/log rounding
+    from NumPy/libm is not a portable floating-point byte fingerprint.
+    All output arrays and provenance must still agree exactly, not within
+    a relaxed numeric tolerance. This fixture intentionally does not call
+    the current augmentation context, observation, or draw implementation.
+    """
+    major=np.maximum(total-background,0.)
+    for index in range(augmenter.controls.variants):
+        seed=int.from_bytes(hashlib.sha256(
+            f'{augmenter.sha256}:{clean_identity}:{index}'.encode()).digest()[:8],'little')
+        rng=np.random.default_rng(seed);c=augmenter.controls
+        count=float(np.exp(rng.uniform(*np.log(c.peak_counts))))
+        fraction=float(rng.uniform(*c.impurity_fraction))
+        assert fraction==0.,'This frozen regression fixture has no impurity template'
+        signal=major.copy();peak=float(signal.max());u=2*(q-q[0])/(q[-1]-q[0])-1
+        level=float(rng.uniform(*c.background_fraction));slope=float(rng.uniform(-.2,.2))
+        true_background=peak*level*(1.+slope*u+.25*u*u)
+        error=float(rng.uniform(*c.background_error))*float(rng.choice([-1,1]))
+        estimated=true_background+peak*level*error*(1.-.5*u*u)
+        scale=count/peak;expectation=(signal+true_background)*scale
+        observed=rng.poisson(expectation).astype(np.float64)/scale
+        sigma=np.sqrt(expectation)/scale
+        yield dict(intensity=observed,background=estimated,sigma=sigma,
+            provenance=dict(variant=index,seed=seed,effective_peak_counts=count,
+                background_fraction=level,background_slope=slope,background_error=error,
+                impurity_fraction=fraction,impurity_source_sha256=None))
+
+
 def test_individual_siblings_retain_pre_replay_numeric_bytes_and_provenance():
-    # Captured from eb86a04 before the single-sibling API was introduced.
-    expected = [
-        '84e53a5ea275d4883c0055bcc2a99c25e32c9862831b3d44f291e2531620421d',
-        'da4b1c4fba24bb94bba2ea70d7626eb118dd7bbf7c4ed5eca42d0583f9d8eca4',
-        'd6bee642f0af441d46bb3c6d234dd5b2b9468852e981c4cfd6b6bdceeb3cc35f',
-    ]
     q, y = signal(); background = np.full(len(q), 100.)
     augmenter = ObservationAugmenter(Controls(), instrument_sha256='b'*64)
+    expected=list(_pre_replay_siblings(q,y+background,background,augmenter,'a'*64))
     sequential = list(augmenter.observations(q, y+background, background, clean_identity='a'*64))
     for index in (2, 0, 1, 2):
         row = augmenter.observation(q, y+background, background,
                                     clean_identity='a'*64, variant=index)
-        digest = hashlib.sha256()
         for key in ('intensity', 'background', 'sigma'):
             np.testing.assert_array_equal(row[key], sequential[index][key])
-            digest.update(row[key].astype('<f8').tobytes())
-        digest.update(json.dumps(row['provenance'], sort_keys=True).encode())
-        assert digest.hexdigest() == expected[index]
+            assert row[key].astype('<f8').tobytes()==expected[index][key].astype('<f8').tobytes()
+        assert row['provenance']==expected[index]['provenance']
 
 
 @pytest.mark.parametrize('variant', [-1, 3, True, 1., '1', None])
