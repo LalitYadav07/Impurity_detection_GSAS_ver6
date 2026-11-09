@@ -133,7 +133,12 @@ def continue_native_refinement(project, expected_variables, *, phase_name=None, 
         mask=(w>0)&np.isfinite(y)&np.isfinite(w)&np.isfinite(fresh)
         mask &= native_powder_fit_mask(x,hist.data['Limits'][1],hist.data['Limits'][2:])
         for a in arrays:mask &= ~np.ma.getmaskarray(a)
-        fresh_chi2=float(np.sum(w[mask]*(y[mask]-fresh[mask])**2))
+        factor=float(hist.data['data'][0].get('wtFactor',1.))
+        if not np.isfinite(factor) or factor<=0:
+            raise ValueError('Native histogram weight factor must be finite and positive')
+        # errRefine multiplies its weighted residual by sqrt(wtFactor).
+        # Preserve that objective rather than comparing an unscaled bank cost.
+        fresh_chi2=factor*float(np.sum(w[mask]*(y[mask]-fresh[mask])**2))
         objective_gap=abs(fresh_chi2-cov['Rvals']['chisq'])/max(1.,fresh_chi2)
         chemistry=assess_chemistry(project,phase.name)
         project.data['Covariance']['data']=cov
@@ -144,6 +149,7 @@ def continue_native_refinement(project, expected_variables, *, phase_name=None, 
         project.save()
         passes.append(dict(seconds=time.monotonic()-start,profile_relative_error=gap,
             objective_relative_error=objective_gap,
+            native_histogram_weight_factor=factor,
             native_rwp_percent=float(cov['Rvals']['Rwp']),chemistry_feasible=chemistry['feasible']))
         if not chemistry['feasible'] or objective_gap<=profile_tolerance:
             break

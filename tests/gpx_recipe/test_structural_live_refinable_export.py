@@ -78,6 +78,34 @@ def test_continuation_refuses_implicit_phase_or_bank_selection():
         continue_native_refinement(SimpleNamespace(phases=lambda:[None],histograms=lambda:[None,None]),[])
 
 
+@pytest.mark.parametrize('factor', [.25, 4.])
+def test_continuation_keeps_histogram_weight_factor_in_native_objective(monkeypatch, factor):
+    from types import SimpleNamespace
+    from gpx_recipe.structural_live.optimization import refinable_gpx as continuation
+    x=np.ma.array([1.,2.,3.,4.,5.],mask=[False,True,False,False,False])
+    y=np.array([5.,10.,7.,12.,6.])
+    w=np.ma.array([1.,2.,3.,4.,5.],mask=[False,False,False,False,True])
+    predicted=y-2.
+    hist=SimpleNamespace(data={'data':[{'wtFactor':factor},[x,y,w,predicted.copy(),np.zeros(5),np.zeros(5)]],
+                               'Limits':[[1.,5.],[1.,5.],[3.,3.]]})
+    phase=SimpleNamespace(name='public',data={})
+    covariance={'varyList':['mode'], 'covMatrix':np.ones((1,1)),
+                'Rvals':{'chisq':20.*factor, 'Rwp':1.}}
+    calls=[]
+    project=SimpleNamespace(phases=lambda:[phase],histograms=lambda:[hist],
+                            data={'Controls':{'data':{}},'Covariance':{'data':covariance}},
+                            refine=lambda:calls.append('native'),save=lambda:None)
+    monkeypatch.setattr(continuation,'curve',lambda *args:predicted.copy())
+    monkeypatch.setattr(continuation,'assess_chemistry',lambda *args:{'feasible':True})
+    result=continuation.continue_native_refinement(project,['mode'])
+    assert result['objective_verified'] and calls==['native']
+    assert result['passes'][0]['native_histogram_weight_factor']==factor
+    assert result['passes'][0]['objective_relative_error']==0.
+    # Exclusions and original measurement weights stay intact.
+    np.testing.assert_array_equal(hist.data['data'][1][2].data,w.data)
+    np.testing.assert_array_equal(hist.data['data'][1][2].mask,w.mask)
+
+
 @pytest.fixture
 def native_fixture():
     value=os.environ.get('RADAR_NATIVE_EXPORT_FIXTURE')
