@@ -86,17 +86,19 @@ def test_continuation_keeps_histogram_weight_factor_in_native_objective(monkeypa
     y=np.array([5.,10.,7.,12.,6.])
     w=np.ma.array([1.,2.,3.,4.,5.],mask=[False,False,False,False,True])
     predicted=y-2.
-    hist=SimpleNamespace(data={'data':[{'wtFactor':factor},[x,y,w,predicted.copy(),np.zeros(5),np.zeros(5)]],
+    hist=SimpleNamespace(name='PWDR public',data={'data':[{'wtFactor':factor},[x,y,w,predicted.copy(),np.zeros(5),np.zeros(5)]],
                                'Limits':[[1.,5.],[1.,5.],[3.,3.]]})
     phase=SimpleNamespace(name='public',data={})
     covariance={'varyList':['mode'], 'covMatrix':np.ones((1,1)),
                 'Rvals':{'chisq':20.*factor, 'Rwp':1.}}
     calls=[]
-    project=SimpleNamespace(phases=lambda:[phase],histograms=lambda:[hist],
+    project=SimpleNamespace(filename='public.gpx',phases=lambda:[phase],histograms=lambda:[hist],
                             data={'Controls':{'data':{}},'Covariance':{'data':covariance}},
                             refine=lambda:calls.append('native'),save=lambda:None)
     monkeypatch.setattr(continuation,'curve',lambda *args:predicted.copy())
     monkeypatch.setattr(continuation,'assess_chemistry',lambda *args:{'feasible':True})
+    monkeypatch.setattr(continuation,'modules',lambda:(SimpleNamespace(
+        GetUsedHistogramsAndPhases=lambda *args:({'PWDR public':{}},{})),))
     result=continuation.continue_native_refinement(project,['mode'])
     assert result['objective_verified'] and calls==['native']
     assert result['passes'][0]['native_histogram_weight_factor']==factor
@@ -104,6 +106,32 @@ def test_continuation_keeps_histogram_weight_factor_in_native_objective(monkeypa
     # Exclusions and original measurement weights stay intact.
     np.testing.assert_array_equal(hist.data['data'][1][2].data,w.data)
     np.testing.assert_array_equal(hist.data['data'][1][2].mask,w.mask)
+
+
+def test_continuation_audits_all_used_banks_and_ignores_unused_histograms(monkeypatch):
+    from types import SimpleNamespace
+    from gpx_recipe.structural_live.optimization import refinable_gpx as continuation
+    def histogram(name,factor):
+        return SimpleNamespace(name=name,data={'data':[{'wtFactor':factor},[
+            np.arange(1.,6.),np.full(5,10.),np.ones(5),np.full(5,9.),np.zeros(5),np.ones(5)]],
+            'Limits':[[1.,5.],[1.,5.]]})
+    first=histogram('PWDR first',4.);second=histogram('PWDR second',.5)
+    unused=SimpleNamespace(name='PWDR unused',data=None)
+    phase=SimpleNamespace(name='public',data={});calls=[]
+    covariance={'varyList':['mode'],'covMatrix':np.ones((1,1)),'Rvals':{'chisq':22.5,'Rwp':1.}}
+    by_name={h.name:h for h in [first,second,unused]}
+    project=SimpleNamespace(filename='public.gpx',phases=lambda:[phase],histograms=lambda:list(by_name.values()),
+        phase=lambda *args:phase,histogram=by_name.__getitem__,
+        data={'Controls':{'data':{}},'Covariance':{'data':covariance}},refine=lambda:None,save=lambda:None)
+    def fresh(project,hist):calls.append(hist.name);return np.full(5,9.)
+    monkeypatch.setattr(continuation,'curve',fresh)
+    monkeypatch.setattr(continuation,'assess_chemistry',lambda *args:{'feasible':True})
+    monkeypatch.setattr(continuation,'modules',lambda:(SimpleNamespace(
+        GetUsedHistogramsAndPhases=lambda *args:({name:{} for name in [first.name,second.name]},{})),))
+    result=continuation.continue_native_refinement(project,['mode'],phase_name='public',histogram_name=first.name)
+    assert result['objective_verified'] and calls==[first.name,second.name]
+    components=result['passes'][0]['native_powder_objective_components']
+    assert [(v['histogram'],v['weighted_chisq']) for v in components]==[(first.name,20.),(second.name,2.5)]
 
 
 @pytest.fixture
