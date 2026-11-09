@@ -43,7 +43,7 @@ values and accepts their equivalent legacy boolean zero/one encodings without
 ignoring a changed physical value. This avoids rejecting a matching prepared
 reference merely because a previous transfer encoded numerical zero as false.
 
-The expanded 63-construction cohort has completed all 20,223 native pairs with
+The earlier 63-construction cohort completed all 20,223 native pairs with
 no failed constructions. After deduplication, the trajectory-separated split
 has 12,538 clean training pairs, 2,875 validation pairs and 2,740 test pairs.
 Three simulated observation variants per clean pair expand the training set
@@ -59,6 +59,59 @@ acceptance remain open work. These
 changes have not yet been deployed as an accepted preparation release.
 Component measurements below retain their original scope; they do not prove
 complete-workflow speed, structural recovery or NDIP latency.
+
+The larger joint-model development corpus now retains 179,385 native points,
+148,941 distinct clean pairs and 595,764 feature rows, including simulated
+observation variants. Its fixed reservation leaves 57,447 clean fitting pairs,
+10 validation trajectory groups, 10 test groups and 20 calibration groups.
+The old arrays and original holdout assignments remain unchanged. The shared
+three-curve attention embedding predicts both space-group scores and
+conditional native-mode-family amplitude ranges. Unknown, gauge-dependent or
+unmapped targets stay unknown. This parent-specific corpus contains 16
+space-group labels and 20 native mode families. Strong-control rays include
+verified changes above 2% in at least one fixed-parent near-neighbor distance;
+the weak examples and unresolved rays remain in the corpus. That geometric
+convention is not a universal neutron-diffraction detectability threshold.
+A complete full-data joint-model accuracy and
+preparation-speed qualification is still in progress; corpus size and passing
+software tests do not establish that quality.
+
+New joint models automatically calculate mode-range calibration diagnostics
+after weights and checkpoint selection are frozen, when the existing independent
+calibration reservation is available. Class and mode calibration share one
+encoder pass. Each space-group/mode-family condition uses the worst interval
+error across all aliases and observation variants in each physical trajectory.
+The fixed nominal error rate is 5%; at least 19 independent supporting
+trajectories are needed for a finite per-condition expansion. Correlated noisy
+rows cannot increase that denominator, and one family's support cannot qualify
+another. Conditions without fitting support or enough calibration trajectories
+remain unavailable. Expansion is measured in the same fitting-only scaled
+asinh-amplitude units as training; native interval endpoints remain float64.
+
+Portable metadata binds these diagnostics to the exact weights, readout,
+parent, profile, independent reservation and native held-out query counts.
+The held-out report includes unavailable conditions and both per-query and
+whole-trajectory containment. This is per-condition simulation coverage, not
+joint coverage across every mode, an experimental detectability limit, evidence
+that a mode is absent, or authority to omit a candidate. Live mode estimates
+therefore remain explicitly unresolved pending native and experimental checks.
+Earlier joint models without these diagnostics remain readable and acquire no
+new calibration claim. The diagnostics do not alter fitting, epoch selection
+or the complete native search.
+
+Ranking reports distinguish an **any-compatible hit** from retention of
+**every compatible label**. The legacy `top5` score is an any-compatible row
+hit; `label_retention` adds actual per-space-group and all-compatible counts.
+A hit on one alias cannot give credit to an omitted compatible space group.
+Missing subgroup support has no measured retention rate. The adaptive first
+work set retains every deferred native candidate regardless of these scores.
+
+Direct local Mac training can use the MPS GPU with owned CPU/device random
+state and atomic recovery checkpoints. It checks GPU-to-CPU logits and mode
+estimates before exporting portable CPU inference weights. Exact local device
+recovery and transported numerical-worker continuations are different: existing
+segmented/transported worker training remains CPU-owned and allocation-guarded.
+A faster measured GPU update is not an end-to-end preparation-time guarantee.
 
 Paired example generation draws shared parent cells before testing individual
 children. Child trajectories are now admitted at those fixed parent contexts,

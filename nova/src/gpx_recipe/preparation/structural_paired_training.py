@@ -276,19 +276,35 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             stream=io.BytesIO();np.savez_compressed(stream,**arrays);raw=stream.getvalue()
             validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
             adaptive_calibration=adaptive_test=None;test_capture=None
+            mode_calibration=mode_interval_test=None;mode_evaluation=None
             if reservation.metadata['available']:
                 from .structural_calibration_training import calibrate,Logits
                 progress('scoring_independent_calibration',selected_epoch=selected_epoch)
                 identities=dict(weights_sha256=hashlib.sha256(raw).hexdigest(),parent_sha256=cohort['parent_sha256'],
                     instrument_sha256=cohort['instrument_sha256'],dataset_sha256=run_identity)
+                mode_collector=None
+                if modes is not None:
+                    from .structural_mode_calibration import Calibration,Evaluation
+                    mode_collector=Calibration(modes.spec,identities=identities,
+                        groups=reservation.metadata['calibration_groups'],
+                        used_groups=sorted({g for g,c in zip(cohort['groups'],split) if c!=3}))
                 adaptive_calibration=calibrate(portable,rows,targets,split,cohort['groups'],classes,mean,scale,
-                    identities=identities)
+                    identities=identities,_mode_context=modes,_mode_calibration=mode_collector)
+                if mode_collector is not None:
+                    mode_calibration=mode_collector.finish()
+                    mode_evaluation=Evaluation(mode_calibration,modes.spec,identities=identities)
                 test_capture=Logits(test_rows,len(classes))
             # Test labels have no influence on initialization, normalization,
             # sampling, prototypes, stopping or checkpoint selection.
             progress('scoring_holdout',selected_epoch=selected_epoch)
             test=evaluate(portable,rows,targets,test_rows,mean,scale,classes,clean=clean,
-                _logits_sink=None if test_capture is None else test_capture.add,_mode_context=modes)
+                _logits_sink=None if test_capture is None else test_capture.add,_mode_context=modes,
+                _mode_interval_evaluation=mode_evaluation,_groups=cohort['groups'])
+            if mode_evaluation is not None:
+                from .structural_mode_calibration import validate_evaluation
+                mode_interval_test=mode_evaluation.finish()
+                validate_evaluation(mode_interval_test,mode_calibration,modes.spec,identities=identities,
+                    native_metrics=test['mode_validation'],rows=len(test_rows),groups=len({cohort['groups'][i] for i in test_rows}))
             if test_capture is not None:
                 from .structural_adaptive_sets import evaluate as evaluate_adaptive
                 adaptive_test=evaluate_adaptive(test_capture.finish(),targets[test_rows],
@@ -331,7 +347,9 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
         if 'additive_pair_inventory' in cohort:metadata['additive_pair_inventory']=cohort['additive_pair_inventory']
         if 'mode_family_supervision' in cohort:
             metadata.update(mode_family_supervision=cohort['mode_family_supervision'],mode_head_trained=modes is not None)
-        if modes is not None:metadata['mode_readout']=modes.spec
+        if modes is not None:
+            metadata.update(mode_readout=modes.spec,mode_interval_calibration=mode_calibration,
+                mode_interval_test=mode_interval_test)
         from .structural_history import pack as pack_history
         stored_metadata=dict(metadata,history=pack_history(metadata['history']))
         encoded=(json.dumps(stored_metadata,indent=2,allow_nan=False)+'\n').encode()

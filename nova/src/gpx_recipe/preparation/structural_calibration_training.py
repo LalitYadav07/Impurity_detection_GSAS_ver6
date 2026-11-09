@@ -28,12 +28,30 @@ class Logits:
         return self.values
 
 
-def calibrate(model,rows,targets,split,groups,classes,mean,scale,*,identities):
+def calibrate(model,rows,targets,split,groups,classes,mean,scale,*,identities,
+              _mode_context=None,_mode_calibration=None):
     import torch
     if model.training:raise ValueError('Freeze the selected model before independent calibration')
+    if (_mode_context is None)!=(_mode_calibration is None):
+        raise ValueError('Joint calibration needs both its native mode context and interval accumulator')
+    if _mode_context is not None:
+        from ..symmetry.contracts import digest
+        if (digest(_mode_context.spec)!=digest(_mode_calibration.spec)
+                or _mode_calibration.identities!=identities
+                or _mode_calibration.groups!=sorted({g for g,c in zip(groups,split) if c==3})
+                or _mode_calibration.used_sha!=digest(sorted({g for g,c in zip(groups,split) if c!=3}))):
+            raise ValueError('Interval calibration belongs to a different readout or independent partition')
     selected=np.flatnonzero(split==3);capture=Logits(selected,len(classes))
     for indices,values in batches(rows,selected):
-        with torch.no_grad():logits=forward(model,torch.from_numpy((values-mean)/scale))
+        with torch.no_grad():
+            inputs=torch.from_numpy((values-mean)/scale)
+            if _mode_context is None:logits=forward(model,inputs)
+            else:
+                from .structural_joint_modes import shared,queries
+                logits,embedding=shared(model,inputs)
+                target=_mode_context.normal.targets(_mode_context.table,indices)
+                prediction=queries(model,embedding,target).detach().cpu().numpy()
+                _mode_calibration.add(prediction,target,[groups[i] for i in indices])
         capture.add(indices,logits.numpy())
     return adaptive.calibrate(capture.finish(),targets[selected],[groups[i] for i in selected],
         classes=classes.tolist(),identities=identities,used_groups=sorted({g for g,c in zip(groups,split) if c!=3}))

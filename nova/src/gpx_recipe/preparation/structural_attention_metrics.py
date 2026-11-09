@@ -6,7 +6,8 @@ from .structural_training_backend import forward
 from .structural_compatible_objective import OBJECTIVE,terms
 
 
-def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None,_logits_sink=None,_mode_context=None):
+def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=None,_logits_sink=None,
+             _mode_context=None,_mode_interval_evaluation=None,_groups=None):
     import torch
     from .structural_observation_metrics import ObservationMetrics
     from .structural_label_retention import LabelRetention
@@ -14,7 +15,9 @@ def evaluate(model,rows,targets,indices,mean,scale,classes,*,prior=None,clean=No
     observations=None if clean is None else ObservationMetrics(clean,len(rows),len(classes),class_values=classes.tolist())
     counts=np.zeros(len(classes),np.int64);one=np.zeros(len(classes));five=one.copy()
     total=correct_one=correct_five=0;loss_sum=0.;class_nll=np.zeros(len(classes),np.float64)
-    modes=None if _mode_context is None else _mode_context.metrics()
+    if _mode_interval_evaluation is not None and _mode_context is None:
+        raise ValueError('A class-only model has no conditional mode intervals to evaluate')
+    modes=None if _mode_context is None else _mode_context.metrics(interval_evaluation=_mode_interval_evaluation,groups=_groups)
     if modes is not None and prior is not None:raise ValueError('A class prior has no learned mode readout')
     for selected,values in batches(rows,indices):
         allowed=targets[selected]

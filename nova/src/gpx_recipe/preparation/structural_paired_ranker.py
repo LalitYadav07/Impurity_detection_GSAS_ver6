@@ -122,6 +122,25 @@ class Ranker:
                     raise ValueError('Mode validation differs from the complete trained conditional inventory')
         elif 'mode_readout' in d or d.get('mode_head_trained') is True:
             raise ValueError('A legacy class model cannot claim trained conditional mode tensors')
+        interval_keys={'mode_interval_calibration','mode_interval_test'}
+        if interval_keys.intersection(d):
+            if (not mode_model or not interval_keys.issubset(d)
+                    or 'dataset' not in d or 'calibration_partition' not in d):
+                raise ValueError('Conditional interval diagnostics need a complete joint model and reserved data receipt')
+            if d['calibration_partition']['available']:
+                from .structural_mode_calibration import validate as validate_intervals,validate_evaluation
+                expected=dict(weights_sha256=d['weights_sha256'],parent_sha256=d['parent_sha256'],
+                    instrument_sha256=d['instrument_sha256'],dataset_sha256=d['training_recovery']['identity'])
+                intervals=validate_intervals(d['mode_interval_calibration'],spec,identities=expected)
+                if (intervals['groups']!=d['calibration_partition']['calibration_groups']
+                        or intervals['used_groups_sha256']!=d['calibration_partition']['used_groups_sha256']
+                        or intervals['rows']!=d['dataset']['partitions']['calibration']['rows']):
+                    raise ValueError('Conditional intervals changed the original independent reservation')
+                validate_evaluation(d['mode_interval_test'],intervals,spec,identities=expected,
+                    native_metrics=d['test']['mode_validation'],rows=d['dataset']['partitions']['test']['rows'],
+                    groups=d['dataset']['partitions']['test']['trajectory_groups'])
+            elif any(d[k] is not None for k in interval_keys):
+                raise ValueError('Unavailable reserved data cannot produce conditional mode calibration')
         edges=a['q_edges'];normal=a['normalization'];reference=a['reference_features']
         if (edges.dtype!=np.float64 or edges.shape!=(bins+1,) or not np.isfinite(edges).all()
                 or edges[0]<=0 or np.any(np.diff(edges)<=0)

@@ -124,7 +124,8 @@ class Context:
         prediction=queries(model,embedding,target)
         return readout.loss(prediction,target,rows=len(indices),class_count=len(self.spec['classes']))
 
-    def metrics(self):return Metrics(self)
+    def metrics(self,*,interval_evaluation=None,groups=None):
+        return Metrics(self,interval_evaluation=interval_evaluation,groups=groups)
 
     def transport(self,model,cpu,inputs):
         """Audit all trained class/family conditions on each representative."""
@@ -145,8 +146,13 @@ class Context:
 
 
 class Metrics:
-    def __init__(self,context):
+    def __init__(self,context,*,interval_evaluation=None,groups=None):
         self.context=context;shape=(len(context.spec['classes']),len(context.spec['families']))
+        if interval_evaluation is not None:
+            if (digest(interval_evaluation.spec)!=digest(context.spec) or not isinstance(groups,list)
+                    or len(groups)!=len(context.table)):
+                raise ValueError('Mode interval evaluation needs its complete source-bound row groups')
+        self.interval_evaluation=interval_evaluation;self.groups=groups
         self.count=np.zeros(shape,np.int64);self.pinball=np.zeros(shape,np.float64)
         self.contained=np.zeros(shape,np.int64);self.rows=0;self.known_rows=0
 
@@ -161,6 +167,8 @@ class Metrics:
         np.add.at(self.count,(c,f),1);np.add.at(self.pinball,(c,f),per_query)
         np.add.at(self.contained,(c,f),(prediction[:,0]<=truth[:,0])&(prediction[:,1]>=truth[:,1]))
         self.rows+=len(indices);self.known_rows+=len(np.unique(target['row']))
+        if self.interval_evaluation is not None:
+            self.interval_evaluation.add(prediction,target,[self.groups[i] for i in indices])
 
     def finish(self):
         known=self.count>0;means=self.pinball/np.maximum(self.count,1)
