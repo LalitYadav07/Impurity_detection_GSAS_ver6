@@ -26,7 +26,10 @@ def test_native_pairs_preserve_physical_controls_and_whole_trajectory_shards(tmp
             child=dict(path='child.cif', sha256=file_sha(child))), mode_radius=.05, cell_radius=.01),
         destination=str(tmp_path/'pairs'))
     result = generate(request, seed=1947, parent_seed=8341, trajectories=3, steps=2)
-    assert result['schema'] == 'radar-structural-ranking-paired-pilot/v1'
+    from gpx_recipe.preparation.structural_mode_projection import RAW_SCHEMA,read as read_projection
+    assert result['schema'] == RAW_SCHEMA
+    projection=read_projection(tmp_path/'pairs',expected=result,stamp=result['mode_projection'])
+    assert projection.metadata['physical_dimensions']==result['mode_dimensions']
     assert result['examples'] == 10 and result['parent_native_calls'] == 4
     assert result['parent_controls_shape_qualified'], result['parent_control_comparisons']
     stages=result['timing']['stages_seconds'];rendering=result['timing']['child_rendering_seconds']

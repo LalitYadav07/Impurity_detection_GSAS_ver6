@@ -73,6 +73,29 @@ def _tensor(e):
     return np.array([[e[0],e[5]/2,e[4]/2],[e[5]/2,e[1],e[3]/2],[e[4]/2,e[3]/2,e[2]]])
 
 
+def _centering(value):
+    """Complete finite translation group from the natively parsed parent."""
+    centers=np.asarray([[0.,0.,0.]] if value is None else value,float)
+    if (centers.ndim!=2 or centers.shape[1:]!=(3,) or not 1<=len(centers)<=4
+            or not np.isfinite(centers).all()):
+        raise ValueError('Complete native parent centering translations required')
+    centers=centers-np.floor(centers)
+    def member(v):
+        delta=centers-v
+        return np.any(np.all(np.isclose(delta,np.rint(delta),rtol=0,atol=1e-12),axis=1))
+    if (not member(np.zeros(3)) or any(not member(a+b) for a in centers for b in centers)
+            or any(np.allclose(a-b,np.rint(a-b),rtol=0,atol=1e-12)
+                   for i,a in enumerate(centers) for b in centers[:i])):
+        raise ValueError('Native parent centering must be a complete distinct translation group')
+    return centers
+
+
+def _same_origin(origin,reviewed,centers):
+    delta=np.asarray(origin,float)-np.asarray(reviewed,float)-centers
+    return delta.shape==(len(centers),3) and np.any(
+        np.all(np.isclose(delta,np.rint(delta),rtol=0,atol=1e-12),axis=1))
+
+
 @dataclass(frozen=True)
 class StrainFamilies:
     projection:StrainProjection
@@ -133,9 +156,10 @@ class StrainFamilies:
 
 def from_metadata(value,*,parent_sha256=None,candidate=None):
     """Validate captured data without reopening or executing an uploaded CIF."""
+    optional={'origin_equivalence':None} if isinstance(value,dict) and 'origin_equivalence' in value else {}
     d=fields(value,['schema','parent_sha256','child_sha256','candidate','parent_cell','basis','matrix',
         'normalizations','native_labels','opaque_native_axes','normalization','observations_included',
-        'scientific_result','candidate_pruning_authorized'])
+        'scientific_result','candidate_pruning_authorized'],optional)
     labels=d['native_labels'];checked=validate_candidate(d['candidate'])
     if (d['schema']!=SCHEMA or d['normalization']!=STRAIN_NORMALIZATION
             or not checksum(d['parent_sha256']) or not checksum(d['child_sha256'])
@@ -152,6 +176,12 @@ def from_metadata(value,*,parent_sha256=None,candidate=None):
     if (projection.dimensions!=len(labels)
             or not np.allclose(projection.basis,checked['transformation_matrix'],rtol=1e-14,atol=1e-14)):
         raise ValueError('Captured strain basis or dimensions changed')
+    if 'origin_equivalence' in d:
+        binding=fields(d['origin_equivalence'],['iso_origin','parent_translations'])
+        centers=_centering(binding['parent_translations']);origin=np.asarray(binding['iso_origin'],float)
+        if (origin.shape!=(3,) or not np.isfinite(origin).all()
+                or not _same_origin(origin,checked['origin_shift'],centers)):
+            raise ValueError('Captured strain origin differs from native parent centering')
     families={};opaque=[]
     for i,label in enumerate(labels):
         parsed=family_label(label,parent_sha256=d['parent_sha256'],quantity='lattice_strain')
@@ -163,13 +193,14 @@ def from_metadata(value,*,parent_sha256=None,candidate=None):
     return StrainFamilies(projection,d,tuple(v['entry'] for v in ordered),tuple(tuple(v['indices']) for v in ordered))
 
 
-def read(path,*,parent_sha256,candidate):
+def read(path,*,parent_sha256,candidate,parent_translations=None):
     """Read the exact child; absence of strain metadata stays unavailable.
 
     Malformed or partial strain metadata fails rather than silently becoming
     zero targets. Sparse zeros are admitted only inside the declared complete
     six-row engineering-strain matrix. Candidate origins are checked modulo
-    integer parent translations, which do not change a uniform strain tensor.
+    native parent lattice translations, including centering. The producer
+    supplies these from the exact parsed parent, never from a subgroup label.
     """
     import CifFile
     if not checksum(parent_sha256):raise ValueError('Exact parent identity required')
@@ -202,9 +233,9 @@ def read(path,*,parent_sha256,candidate):
         if not 0<=r<6 or not 0<=c<count or (r,c) in seen:raise ValueError('Invalid or duplicate sparse strain-matrix coordinate')
         seen.add((r,c));matrix[r,c]=float(value)
     basis,origin=_transform(block.get('_iso_parent-to-child.transform_Pp_abc'))
-    delta=origin-np.asarray(candidate['origin_shift'])
+    centers=_centering(parent_translations)
     if (not np.allclose(basis,candidate['transformation_matrix'],rtol=1e-14,atol=1e-14)
-            or not np.allclose(delta,np.rint(delta),rtol=0,atol=1e-12)):
+            or not _same_origin(origin,candidate['origin_shift'],centers)):
         raise ValueError('ISO strain transform differs from the reviewed child embedding')
     parent_cell=[float(block['_iso_parentcell_'+k]) for k in CELL_KEYS]
     opaque=[]
@@ -215,4 +246,6 @@ def read(path,*,parent_sha256,candidate):
         parent_cell=parent_cell,basis=basis.tolist(),matrix=matrix.tolist(),normalizations=norms.tolist(),
         native_labels=labels,opaque_native_axes=opaque,normalization=STRAIN_NORMALIZATION,
         observations_included=False,scientific_result=False,candidate_pruning_authorized=False)
+    if len(centers)>1:
+        metadata['origin_equivalence']=dict(iso_origin=origin.tolist(),parent_translations=centers.tolist())
     return from_metadata(metadata)

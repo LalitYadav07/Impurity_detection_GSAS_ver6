@@ -156,6 +156,32 @@ def test_rational_transform_parser_rejects_non_linear_and_executable_input():
         with pytest.raises(ValueError):_transform(text)
 
 
+def test_native_centering_translation_can_relate_reviewed_and_iso_origins(tmp_path):
+    text=CIF.replace('a+b,-a+b,c;0,-1/2,0','a+b,-a+b,c;4/3,5/3,2/3')
+    path,candidate=fixture(tmp_path,text);candidate['origin_shift']=[0,0,0]
+    centers=[[0,0,0],[2/3,1/3,1/3],[1/3,2/3,2/3]]
+    with pytest.raises(ValueError,match='embedding'):
+        read(path,parent_sha256='a'*64,candidate=candidate)
+    value=read(path,parent_sha256='a'*64,candidate=candidate,parent_translations=centers)
+    assert value.metadata['origin_equivalence']['parent_translations']==centers
+    restored=from_metadata(value.metadata,parent_sha256='a'*64,candidate=candidate)
+    m=np.array([.012,-.004,.006])
+    np.testing.assert_allclose(restored.projection.project(restored.projection.forward(m))['amplitudes'],m,atol=1e-14)
+    for bad in ([.25,0,0],[1/3,1/3,2/3]):
+        changed=copy.deepcopy(value.metadata);changed['origin_equivalence']['iso_origin']=bad
+        with pytest.raises(ValueError,match='centering'):from_metadata(changed)
+
+
+@pytest.mark.parametrize('centers',[
+    [],[[0,0,0],[.25,0,0]],[[0,0,0],[0,0,0]],[[.5,0,0]],
+    [[0,0,0],[float('nan'),0,0]],[[0,0]],
+])
+def test_partial_or_invalid_parent_centering_cannot_weaken_origin_binding(tmp_path,centers):
+    path,candidate=fixture(tmp_path)
+    with pytest.raises(ValueError,match='centering'):
+        read(path,parent_sha256='a'*64,candidate=candidate,parent_translations=centers)
+
+
 def test_bounded_complete_batches_cannot_mutate_maps_or_input_metrics(tmp_path):
     value=model(tmp_path);child=value.projection.forward([.012,0,0])[None];before=child.copy()
     value.project(child);np.testing.assert_array_equal(child,before)

@@ -133,7 +133,7 @@ def read(directory,*,expected=None,stamp=None):
     return Projection(d,arrays,actual)
 
 
-def write(source,request,directory):
+def write(source,request,directory,*,parent_translations=None):
     """Capture the same geometry/normalization used by the actual fit engine."""
     from .structural_sampling import physical_grams
     directory=Path(directory)
@@ -158,7 +158,8 @@ def write(source,request,directory):
         geometry_sha256=source.fast.empirical_constraint.geometry.fingerprint,arrays_sha256='0'*64,
         observations_included=False,scientific_result=False,candidate_pruning_authorized=False)
     from .structural_strain_cif import read as read_strain
-    strain=read_strain(request['child'],parent_sha256=d['source_sha256'],candidate=d['candidate'])
+    strain=read_strain(request['child'],parent_sha256=d['source_sha256'],candidate=d['candidate'],
+                       parent_translations=parent_translations)
     if strain is not None:
         geometry=source.fast.empirical_constraint.geometry
         d.update(schema=STRAIN_SCHEMA,strain=dict(map=strain.metadata,baseline_a=geometry.a0.tolist(),

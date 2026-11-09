@@ -125,6 +125,12 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
                     cell_dimensions=source.cell_dimensions,numeric_bytes=numeric_bytes,
                     native_mode_dimensions=len(source.fast.meta['inventory']['native_mode_labels']),**extra)
     mark('conditioning_and_selecting_whole_trajectories')
+    # Check and capture the complete native coordinate maps before rendering
+    # potentially expensive arrays. Centering comes from the exact parent.
+    from . import structural_mode_projection as mode_projection
+    mode_stamp=mode_projection.write(source,request,out,
+        parent_translations=phase.data['General']['SGData']['SGCen'])
+    mark('capturing_native_mode_maps')
     checks = set(np.flatnonzero(role != 2)) | set(np.flatnonzero(np.r_[trajectory[:-1] != trajectory[1:], True]))
     if coverage is not None:checks.update(map(int,endpoints))
     rendered = render_native(source, points, kind=request['grid']['kind'], check_indices=checks, progress=progress)
@@ -155,8 +161,6 @@ def generate(request, *, seed, parent_seed, trajectories=64, steps=4,
     if hashes != [file_sha(p) for p in inputs]:
         raise ValueError('A paired-pattern input changed during native calculation')
     mark('checking_parent_controls')
-    from . import structural_mode_projection as mode_projection
-    mode_stamp=mode_projection.write(source,request,out)
     destination = out/'pairs.npz'
     np.savez_compressed(destination, q=rendered['q'], theory_intensity=rendered['curves'],
         background=rendered['background'], parent_intensity=reference_curves,
