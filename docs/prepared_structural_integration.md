@@ -60,6 +60,15 @@ changes have not yet been deployed as an accepted preparation release.
 Component measurements below retain their original scope; they do not prove
 complete-workflow speed, structural recovery or NDIP latency.
 
+The native structural handoff suite also exercises a separate preparation
+producer that exits before a fresh fitting worker starts. With a real native
+certificate and simulated Galaxy creating-job metadata, matching PNC and PNT
+contexts reuse the complete prepared bank with three current-context native
+probes. A changed cell rebuilds all 185 starting curves instead. The fitting
+controls retain independent GPX checks and their unresolved optimization status.
+This tests the installed worker/certificate boundary, not actual Galaxy
+permissions, queueing, experimental identification or complete-search speed.
+
 The larger joint-model development corpus now retains 179,385 native points,
 148,941 distinct clean pairs and 595,764 feature rows, including simulated
 observation variants. Its fixed reservation leaves 57,447 clean fitting pairs,
@@ -2123,7 +2132,8 @@ all original aliases, compatible labels, physical groups and fold assignments,
 and rejects changed inputs or borrowed targets. Its storage and minibatch
 limits fail explicitly instead of dropping modes or aliases. The actual
 training wrapper assembles this supervision when native maps are available,
-and checkpoint identity binds the table. Published metadata still states
+and checkpoint identity binds the table. At this target-only checkpoint,
+classifier-only metadata still stated
 `mode_head_trained=false`: passing a target table into the classifier does not
 train a mode predictor.
 
@@ -2187,7 +2197,7 @@ rows, with nine rows held out. Those small controls prove the optimization
 connection, not mode accuracy; held-out losses remain recorded separately.
 Host component suites passed 116 and 57 overlapping checks. One actual-MPS
 gradient and portable-head transport check passed with fallback disabled.
-The production training loop still publishes `mode_head_trained=false`; joint
-head training/publication, calibrated inference, UI handoffs and experimental
-mode-presence/absence qualification remain unfinished. Deployment pins remain
-unchanged.
+These component checks preceded joint-head training and publication. The
+current joint-training path and full-data qualification status are described
+in Current development status above. Component losses do not establish
+experimental mode presence or absence. Deployment pins remain unchanged.

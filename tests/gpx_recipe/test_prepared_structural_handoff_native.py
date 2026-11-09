@@ -3,6 +3,7 @@
 Public artificial PNC/PNT controls. Observation data are revealed only after
 preparation. This tests handoff fidelity, not material identification or speed.
 """
+import copy
 import json
 from pathlib import Path
 import shutil
@@ -15,7 +16,8 @@ import pytest
 G=pytest.importorskip('GSASII.GSASIIscriptable')
 from test_native_profile_capture import native_source
 from gpx_recipe.execution import write_json
-from gpx_recipe.preparation import hints,structural_hints
+from gpx_recipe.preparation import hints,structural_hints,authority,certificates
+from gpx_recipe.preparation.reference import create_reference
 from gpx_recipe.preparation.library import import_library
 from gpx_recipe.preparation.operations import create_library,stage_entry,publish_entry
 from gpx_recipe.preparation.worker import execute
@@ -28,8 +30,10 @@ from gpx_recipe.symmetry.contracts import digest,iter_trials,trial_id,validate_c
 from gpx_recipe.symmetry.native_audit import inspect_source
 
 
-@pytest.mark.parametrize('kind,change',[('PNC','same'),('PNT','same'),('PNC','cell'),('PNC','damaged')])
-def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_path,kind,change):
+@pytest.mark.parametrize('kind,change,authenticated',[
+    ('PNC','same',False),('PNT','same',False),('PNC','cell',False),('PNC','damaged',False),
+    ('PNC','same',True),('PNT','same',True),('PNC','cell',True)])
+def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_path,kind,change,authenticated):
     # Only a public parent CIF, authoritative child and instrument enter the
     # preparation. No fitted parameters or observations enter its library.
     public_gpx,public=native_source(tmp_path/'public-inputs',kind)
@@ -48,7 +52,38 @@ def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_
         models=[dict(kind='structural',bank='selected bank',settings=settings,child=child)])
     entry=library.document['entries'][0]['id'];attempt=library.start(entry)
     request=stage_entry(library,entry,attempt,tmp_path/'offline-calculation')
-    built=execute('structural',request)
+    script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
+    envelope=None
+    if authenticated:
+        # Execute the actual producer in a child process and wait for it to
+        # exit. Only the server-supplied Galaxy creating-job metadata is
+        # simulated here; the native artifacts and certificate are real.
+        calculation=tmp_path/'offline-calculation';payload=copy.deepcopy(request);names=[]
+        for role in ('source','instrument','child'):
+            payload[role]=str(Path(payload[role]).relative_to(calculation));names.append(payload[role])
+        payload['destination']='compiled';producer_source=calculation/payload['source']
+        pack(calculation,tmp_path/'preparation-inputs.zip',names)
+        write_json(tmp_path/'preparation-request.json',dict(schema='radar-model-native/v1',
+            operation='preparation-structural',payload=payload,implementation_sha256=package_signature(),
+            expected_source_sha256=file_sha(producer_source),dispatch_key='c'*24,timeout=180,
+            input_hashes={name:file_sha(calculation/name) for name in names}))
+        certificate=tmp_path/'certificate.json'
+        with (tmp_path/'preparation-wrapper.log').open('w') as log:
+            subprocess.run([sys.executable,str(script),'native',str(producer_source),
+                str(tmp_path/'preparation-inputs.zip'),str(tmp_path/'preparation-request.json'),
+                str(tmp_path/'preparation-job'),str(tmp_path/'preparation-result.zip'),
+                '--preparation-certificate',str(certificate)],check=True,timeout=210,
+                stdout=log,stderr=subprocess.STDOUT)
+        producer=unpack(tmp_path/'preparation-result.zip',tmp_path/'preparation-received')
+        built=json.loads((producer/'response.json').read_text())['result']
+        shutil.copytree(producer/'native/compiled',request['destination'])
+        built['output']=request['destination']
+        envelope=tmp_path/'server-preparation-evidence.json'
+        write_json(envelope,dict(schema=authority.SCHEMA,records=[dict(certificate_path=str(certificate),
+            tool_id='neutrons_radar_pd_model_campaign_prototype',tool_version='0.2.17',job_state='ok',
+            dataset_state='ok',dataset_deleted=False,dataset_purged=False,
+            job_stdout=certificates.MARKER+file_sha(certificate)+'\n')]))
+    else:built=execute('structural',request)
     assert publish_entry(library,entry,attempt,request,built)['all_prepared']
     offline=Path(built['output'])
     library.export(tmp_path/'portable.zip')
@@ -59,7 +94,8 @@ def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_
 
     # A later observation may have a different actual parent lattice. The
     # intensity comes from an independent native saved-project calculation.
-    actual=G.G2Project(gpxfile=str(offline/'native-reference/reference.gpx'))
+    reference=create_reference(cif,tmp_path/'public-inputs/profile.instprm',tmp_path/'actual-reference',**grid)
+    actual=G.G2Project(gpxfile=reference['path'])
     if change=='cell':
         actual.phase(0).data['General']['Cell'][1]*=1.0003
     blank=tmp_path/'later-parent.gpx';actual.save(str(blank))
@@ -112,10 +148,10 @@ def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_
     message=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=digest(protocol),
         trials=ids,workers=1,dispatch_key='b'*24,seconds=240,prepared_scattering=document)
     write_json(tmp_path/'model-request.json',message)
-    script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
     with (tmp_path/'model-wrapper.log').open('w') as log:
         subprocess.run([sys.executable,str(script),'chunk',str(source),str(tmp_path/'model-assets.zip'),
-            str(tmp_path/'model-request.json'),str(tmp_path/'model-job'),str(tmp_path/'model-result.zip')],
+            str(tmp_path/'model-request.json'),str(tmp_path/'model-job'),str(tmp_path/'model-result.zip')]+
+            (['--preparation-evidence',str(envelope)] if envelope is not None else []),
             check=True,timeout=300,stdout=log,stderr=subprocess.STDOUT)
     received=unpack(tmp_path/'model-result.zip',tmp_path/'received')
     response=json.loads((received/'response.json').read_text())
@@ -128,7 +164,11 @@ def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_
     assert fitted['physical_mode_count']==2 and fitted['cell_parameter_count']==3
     assert fitted['preparation_attachment']['attached']==(0 if change=='damaged' else 1)
     qualification=fitted['portable_preparation']
-    if change=='same':
+    if change=='same' and authenticated:
+        assert qualification['status']=='reused_certified_native_bank',qualification
+        assert qualification['curve_bytes_reused']
+        assert qualification['native_origin']['origin']=='Galaxy native preparation with current-context native probes'
+    elif change=='same':
         assert qualification['status']=='native_requalified',qualification
         assert qualification['supplied_curves_match_current']
     elif change=='cell':
@@ -137,7 +177,7 @@ def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_
     else:
         assert qualification['status']=='not_selected',qualification
         assert response['prepared_scattering']['discarded_entries']==[document['entries'][0]['entry']]
-    assert not qualification['curve_bytes_reused']
+    assert qualification['curve_bytes_reused']==(authenticated and change=='same')
     assert not qualification['scientific_candidates_removed']
     assert fitted['verification']['relative_error']<1e-8
     assert fitted['verification']['max_sigma_error']<.01
@@ -166,6 +206,6 @@ def test_structural_library_reaches_real_model_and_owned_snapshot_consumers(tmp_
         assert second['starting_curves_reused'] and second['result']['starts']>=1
         restored_session=StructuralSession(prepared,tmp_path/'snapshot-session',settings=session.settings)
         assert restored_session.update(later)['state']=='duplicate'
-    write_json(tmp_path/'handoff.json',dict(kind=kind,change=change,
+    write_json(tmp_path/'handoff.json',dict(kind=kind,change=change,authenticated_origin=authenticated,
         portable_preparation=qualification,timings=fitted['timings'],status=response['trials'][0]['status'],
         scope='Public artificial native handoff control; no real material, convergence or performance claim'))
