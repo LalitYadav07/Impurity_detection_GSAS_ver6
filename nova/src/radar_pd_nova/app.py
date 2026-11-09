@@ -914,7 +914,7 @@ class RadarPdNovaApp(FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMix
                 click="setup_collapsed = !setup_collapsed",
             )
             with html.Div(classes="radar-context-title"):
-                html.Div("{{ workspace_view === 'experiment' ? 'Live experiment' : 'Analysis workspace' }}", classes="radar-product-name")
+                html.Div("{{ workspace_view === 'experiment' ? 'Live experiment' : workspace_view === 'battery' ? 'Battery experiments' : 'Analysis workspace' }}", classes="radar-product-name")
             vuetify.VSpacer()
             vuetify.VChip(
                 text=("application_version",),

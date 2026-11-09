@@ -420,7 +420,7 @@ trees must remain read-only.
 
 ## Transition tracking (0.4.11)
 
-In 0.6.62, **Full-Q U-Net (experimental)** is the default transition evidence
+In 0.6.63, **Full-Q U-Net (experimental)** is the default transition evidence
 view. Each compatible measured pair is transformed with its checksum-verified
 instrument profile, rebinned once onto 1,024 Q bins from 0.25 to 12 Å⁻¹,
 and evaluated in one pass. The before, after and signed-difference curves use
@@ -443,10 +443,12 @@ Plots, Run Monitor and File Browser pages remain. **Transition tracking** adds
 a linked pattern history to the experiment workspace. Its
 diffraction intensity map and selected-scan inspector share the existing live
 watch and Galaxy results; display actions do not submit or repeat refinements.
-In 0.6.62, the saved watch controls which beamline-specific tabs are visible,
+In 0.6.63, the saved watch controls which beamline-specific tabs are visible,
 the scan inspector sits beside the phase overview, and generated run IDs have
 readable headings while their exact IDs remain available. Refinement puts
 service details behind an expandable note and disables empty queue actions.
+The Battery experiments detour returns to the prior run or Live view and
+restores the setup rail as it was.
 
 The separate Compare scans and Experiment trends tabs, nested evidence tabs and
 uncalibrated shape-threshold control are retired from the live interface. The
