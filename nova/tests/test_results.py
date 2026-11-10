@@ -1254,6 +1254,18 @@ def test_full_result_falls_back_to_manifest_timing_and_presents_known_main_phase
     assert view.metrics[5] == {"label": "Result stage", "value": "Final refinement"}
 
 
+def test_gsas_generated_main_aliases_keep_one_series_label() -> None:
+    for name in ("main", "main_", "Main__"):
+        row = phase_fraction_rows({"phases": [{"phase_id": "main", "compound_name": name,
+            "space_group": "P -4 21 m (113)", "weight_fraction_pct": 100, "is_main": "1"}]})[0]
+        assert row["phase"] == "Known main phase"
+        assert row["space_group"] == "P-421m (113)"
+        assert row["weight_percent"] == 100
+    for name, is_main in (("main_", "0"), ("Main_sample", "1"), ("Tb2Be2GeO7", "1")):
+        row = phase_fraction_rows({"phases": [{"compound_name": name, "is_main": is_main}]})[0]
+        assert row["phase"] == name
+
+
 def test_gsas_plot_renders_ranked_strongest_bragg_ticks() -> None:
     payload = {
         "plot_kind": "gsas_fit_with_ticks_v1",

@@ -1275,7 +1275,10 @@ def phase_fraction_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
             _first_value(item, "phase", "formula", "compound_name", "label", "phase_id")
             or "Unknown"
         )
-        if phase_label.strip().lower() == "main" and str(item.get("is_main", "")).strip().lower() in {
+        # GSAS-II may append underscores to a generic phase name when it
+        # rebuilds a project. Do not turn that internal name into a second
+        # phase in a series; only normalize explicitly identified main phases.
+        if re.fullmatch(r"main_*", phase_label.strip(), re.IGNORECASE) and str(item.get("is_main", "")).strip().lower() in {
             "1",
             "true",
             "yes",
