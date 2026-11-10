@@ -9,6 +9,7 @@ on:
       - tests/test_production_image_payload.py
       - nova/src/gpx_recipe/**
       - nova/src/radar_pd_nova/data/powgen_calibrations/**
+      - nova/src/radar_pd_nova/model_admission.py
       - nova/tools/check_powgen_planner_release.py
       - tests/gpx_recipe/**
       - scripts/ndip_model_campaign.py
@@ -134,6 +135,17 @@ jobs:
         run: |
           docker run --rm --entrypoint python "$IMAGE" \
             /opt/radar-symmetry/check_planner_installation.py /tmp/planner-installation-check
+
+      - name: Verify installed structural-library admission contract and native guards
+        if: inputs.image_variant != 'preparation-cuda'
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD/tests/gpx_recipe:/validation:ro" "$IMAGE" -c '
+          python -m pip install --quiet pytest &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 RADAR_ADMISSION_PACKAGED=1 &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+            /validation/test_model_admission_contract.py \
+            /validation/test_model_admission_native.py'
 
       - name: Verify resource, protocol and runtime gates
         run: |

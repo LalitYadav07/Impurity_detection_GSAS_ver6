@@ -238,12 +238,17 @@ class SymmetryMixin(KSearchMixin):
         remote=self._model_remote()
         if remote:
             if not self._symmetry_draft:raise ValueError('Inspect the source before native discovery')
-            result,_=remote.native(action,payload,root,source=self._symmetry_draft['source'],cancel=event)
+            from .model_admission import OPERATION as ADMISSION
+            result,_=remote.native(action,payload,root,source=self._symmetry_draft['source'],cancel=event,
+                **({'timeout':300} if action==ADMISSION else {}))
             return result
         transport=self._symmetry_transport();uid=uuid.uuid4().hex;request=root/(uid+'-request.json');output=root/(uid+'-response.json')
         request.write_text(json.dumps(payload)+'\n');env={**scientific_environment(),**transport.environment,'RADAR_GPX_DOCKER_WORKDIR':str(root)}
+        from .model_admission import OPERATION as ADMISSION
+        command=(['-m','radar_pd_nova.model_admission',str(request),str(output)] if action==ADMISSION else
+                 ['-m','gpx_recipe.symmetry.isodistort_native',action,str(request),str(output)])
         with (root/(uid+'-native.log')).open('w') as log:
-            result=run_scientific(transport.command+['-m','gpx_recipe.symmetry.isodistort_native',action,str(request),str(output)],timeout=120,cancel_event=event,env=env,stdout=log,stderr=subprocess.STDOUT)
+            result=run_scientific(transport.command+command,timeout=300 if action==ADMISSION else 120,cancel_event=event,env=env,stdout=log,stderr=subprocess.STDOUT)
         if result.returncode or not output.is_file():raise ValueError('Native preparation failed; retained log '+uid+'-native.log')
         return json.loads(output.read_text())
 
@@ -798,11 +803,14 @@ class SymmetryMixin(KSearchMixin):
     def discover_symmetry_candidates(self):
         async def discover():
             s=self.server.state;s.sx_busy=True;s.sx_error=''
+            s.sx_discovered=False;s.sx_plan_ready=False;s.sx_approved=False
+            s.sx_candidates=[];s.sx_candidate_options=[];s.sx_modes=[];s.sx_mode_options=[]
             s.sx_discovery_scope='';s.sx_discovery_rows=[]
             s.sx_message='Discovering finite candidates for the reviewed parent and k. Refinement starts only after you build and approve the plan.';s.flush()
             try:
                 d=self._symmetry_draft
                 if not d or d['source_id']!=s.sx_start_source:raise ValueError('Inspect the selected source GPX first')
+                for key in ('catalog','discovery_identity','protocol','template'):d.pop(key,None)
                 parent=next(p for p in d['context']['phases'] if p['name']==s.sx_parent);k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')]
                 identity=self._discovery_identity();root=d['root']
                 loop=asyncio.get_running_loop()
@@ -829,27 +837,30 @@ class SymmetryMixin(KSearchMixin):
                             raise ValueError('Reference and target parent site chemistry or occupancy differ')
                         parent=selected;parent_source=reference_root/'source.gpx'
                         d['reference_asset']=dict(path=str(parent_source.relative_to(root)),sha256=captured['source_sha256'])
-                    parent_cif=root/'parent.cif'
-                    publish_progress('Exporting the reviewed parent structure for ISODISTORT. Diffraction arrays stay in Galaxy.')
-                    await asyncio.to_thread(self._symmetry_native,'export',dict(source=str(parent_source),phase=s.sx_parent,destination=str(parent_cif)),root)
-                    discovery=root/('isodistort-'+uuid.uuid4().hex)
-                    def inventory_many(children):
-                        rows=[]
-                        for offset in range(0,len(children),32):
-                            progress(f'Checking native construction for candidates {offset+1}–{min(offset+32,len(children))} of {len(children)}. Refinement has not started.')
-                            rows.extend(self._symmetry_native('modes-many',dict(children=[str(p) for p in children[offset:offset+32]],workers=int(s.sx_slots)),root)['items'])
-                        return rows
-                    def match(cif,vector,options):
-                        progress('Mapping the requested k vector into the exact parent setting, then generating ISODISTORT candidates.')
-                        return self._symmetry_native('match',dict(cif=cif,k=vector,options=options),root)
-                    def prepare():
-                        return discover_structural(parent_cif,parent,k,discovery,matcher=match,
-                            inventory=lambda child:self._symmetry_native('modes',dict(child=str(child),temporary=str(root/(child.stem+'.gpx'))),root),
-                            opd_policy=s.sx_opd_policy,maximum=int(s.sx_construct_limit),
-                            inventory_many=inventory_many if self._model_remote() else None)
-                    publish_progress('Requesting finite structural candidates from ISODISTORT. Native construction checks follow before plan review.')
-                    catalog=await asyncio.to_thread(prepare)
-                    for candidate in catalog['candidates']:candidate['child']['path']=str((discovery/candidate['child']['path']).relative_to(root))
+                    from .prepared_structural_discovery import discover as discover_prepared
+                    catalog=await asyncio.to_thread(discover_prepared,self,d,parent,k,progress)
+                    if catalog is None:
+                        parent_cif=root/'parent.cif'
+                        publish_progress('Exporting the reviewed parent structure for ISODISTORT. Diffraction arrays stay in Galaxy.')
+                        await asyncio.to_thread(self._symmetry_native,'export',dict(source=str(parent_source),phase=s.sx_parent,destination=str(parent_cif)),root)
+                        discovery=root/('isodistort-'+uuid.uuid4().hex)
+                        def inventory_many(children):
+                            rows=[]
+                            for offset in range(0,len(children),32):
+                                progress(f'Checking native construction for candidates {offset+1}–{min(offset+32,len(children))} of {len(children)}. Refinement has not started.')
+                                rows.extend(self._symmetry_native('modes-many',dict(children=[str(p) for p in children[offset:offset+32]],workers=int(s.sx_slots)),root)['items'])
+                            return rows
+                        def match(cif,vector,options):
+                            progress('Mapping the requested k vector into the exact parent setting, then generating ISODISTORT candidates.')
+                            return self._symmetry_native('match',dict(cif=cif,k=vector,options=options),root)
+                        def prepare():
+                            return discover_structural(parent_cif,parent,k,discovery,matcher=match,
+                                inventory=lambda child:self._symmetry_native('modes',dict(child=str(child),temporary=str(root/(child.stem+'.gpx'))),root),
+                                opd_policy=s.sx_opd_policy,maximum=int(s.sx_construct_limit),
+                                inventory_many=inventory_many if self._model_remote() else None)
+                        publish_progress('Requesting finite structural candidates from ISODISTORT. Native construction checks follow before plan review.')
+                        catalog=await asyncio.to_thread(prepare)
+                        for candidate in catalog['candidates']:candidate['child']['path']=str((discovery/candidate['child']['path']).relative_to(root))
                 if identity!=self._discovery_identity():raise ValueError('Inputs changed during discovery; discover again for the current parent and k')
                 if d.get('planning'):
                     catalog.setdefault('provenance',{})['setup_planning_sha256']=digest(d['planning'])
@@ -860,17 +871,38 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_modes=[m['value'] for m in s.sx_mode_options]
                 if s.sx_kind=='structural':
                     s.sx_discovery_scope,s.sx_discovery_rows,s.sx_error=structural_discovery_feedback(catalog)
+                    if catalog.get('provenance',{}).get('prepared_library'):
+                        marker=catalog['provenance']['prepared_library']
+                        admission=marker['admission'];total=len(admission['candidate_checks'])
+                        eligible=len(admission['eligible_candidate_ids']);excluded=len(admission['excluded_candidate_ids'])
+                        origin=('Captured authoritative catalog reused' if marker.get('original_catalog') else
+                                'Catalog reconstructed from the native-eligible stored training scope')
+                        s.sx_discovery_scope=(f"{eligible} of {total} exact stored training candidates eligible for the selected k; {excluded} excluded. "
+                            +origin+"; no new ISODISTORT enumeration.")
+                        s.sx_discovery_rows=[dict(id=row['id'],model=row['id'],state=row['eligibility'],
+                            reason=row['eligibility_reason']) for row in admission['candidate_checks']]
+                        s.sx_preparation_notice=(f"Admitted trained library: {marker['library_name']} · "
+                            f"{eligible} / {total} candidates eligible · {excluded} excluded from this k · native context checks passed.")
                 else:s.sx_discovery_scope=f"{len(catalog['candidates'])} magnetic embeddings discovered in this exact parent setting"
                 s.sx_discovered=True;s.sx_plan_ready=False;s.sx_approved=False
                 s.sx_message=s.sx_discovery_scope+('. Review the finite plan before starting refinement.' if catalog['candidates'] else '. No refinement plan is available.')
-            except Exception as exc:s.sx_error=str(exc);s.sx_message='Candidate discovery stopped; review the error above.'
+            except Exception as exc:
+                s.sx_error=str(exc);s.sx_message='Candidate discovery stopped; review the error above.'
+                checks=getattr(exc,'candidate_checks',[])
+                if checks:
+                    s.sx_discovery_rows=[dict(id=row['id'],model=row['id'],state=row['eligibility'],
+                        reason=row['eligibility_reason']) for row in checks if isinstance(row,dict)
+                        and {'id','eligibility','eligibility_reason'}<=set(row)]
+                    s.sx_discovery_scope=f"{len(s.sx_discovery_rows)} stored candidate checks retained; no plan was created."
             finally:self._finish_symmetry_preparation()
         self._refinement_schedule(discover(),'radar-symmetry-discovery')
 
     def _discovery_identity(self):
         s=self.server.state
         identity=(getattr(s,'rf_experiment',''),s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source)
-        return identity+(s.sx_opd_policy,int(s.sx_construct_limit),getattr(s,'sx_parent_reference',''),'prepared_nonlinear') if s.sx_kind=='structural' else identity
+        workspace=getattr(self,'_preparation_workspace',None)
+        selected=workspace.registry.selected_key() if workspace is not None else ''
+        return identity+(s.sx_opd_policy,int(s.sx_construct_limit),getattr(s,'sx_parent_reference',''),'prepared_nonlinear',selected) if s.sx_kind=='structural' else identity
 
     def _model_form(self,payload=None):
         s=self.server.state

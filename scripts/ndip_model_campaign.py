@@ -25,25 +25,34 @@ from gpx_recipe.symmetry.resources import allocation
 from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout,STRUCTURAL_SNAPSHOT_OPERATIONS
 
 
-def native(request,inputs,root,cancel):
+def native(request,inputs,root,cancel,*,admission=False):
     if set(request)!={'schema','operation','payload','implementation_sha256','expected_source_sha256','dispatch_key','timeout','input_hashes'} or request['schema']!='radar-model-native/v1':
         raise ValueError('Invalid native model request')
     operation=request['operation'];payload=copy.deepcopy(request['payload'])
-    validate_native_payload(operation,payload)
+    if admission:
+        from radar_pd_nova.model_admission import OPERATION as ADMISSION,validate_payload as validate_admission
+        if operation != ADMISSION:raise ValueError('Admission action accepts only structural-library admission')
+        validate_admission(payload)
+    else:validate_native_payload(operation,payload)
     if request['implementation_sha256']!=package_signature():raise ValueError('The native worker image differs from NOVA')
     require_adapters()
     actual={str(p.relative_to(inputs)):file_sha(p) for p in inputs.rglob('*') if p.is_file()}
     if actual!=request['input_hashes']:raise ValueError('The native packet differs from its captured file hashes')
-    validate_native_timeout(operation,request['timeout'])
+    if admission:
+        if type(request['timeout']) not in (int,float) or not 1<=request['timeout']<=300:
+            raise ValueError('Invalid structural-library admission deadline')
+    else:validate_native_timeout(operation,request['timeout'])
     # Work on a private input capture; every path comes from a confined data packet.
-    for key in ['source','child','instrument','directory','plan','anchor_snapshot','snapshot']:
+    path_fields=['source','child','instrument','directory','plan','anchor_snapshot','snapshot']
+    if admission:path_fields+=['parent','model','weights','reference']
+    for key in path_fields:
         if key in payload:payload[key]=str(confined(inputs,payload[key]))
     if 'source' in payload and file_sha(payload['source'])!=request['expected_source_sha256']:
         raise ValueError('Native source packet differs from the Galaxy GPX')
     for key in ['destination','temporary']:
         if key in payload:
             path=confined(root,payload[key],exists=False);path.parent.mkdir(parents=True,exist_ok=True);payload[key]=str(path)
-    if operation=='modes-many':payload['children']=[str(confined(inputs,p)) for p in payload['children']]
+    if operation=='modes-many' or admission:payload['children']=[str(confined(inputs,p)) for p in payload['children']]
     if operation=='k-portfolio':
         for directory in payload['directories']:confined(inputs,directory)
         payload['workers']=allocation(payload['workers'])['workers']
@@ -52,7 +61,8 @@ def native(request,inputs,root,cancel):
     if operation=='k-template':root=inputs
     request_file=root/'native-request.json';output=root/'native-response.json'
     write_json(request_file,payload)
-    if operation=='inspect':command=['-m','gpx_recipe.symmetry.inspect',payload['source'],str(output)]
+    if admission:command=['-m','radar_pd_nova.model_admission',str(request_file),str(output)]
+    elif operation=='inspect':command=['-m','gpx_recipe.symmetry.inspect',payload['source'],str(output)]
     elif operation.startswith('planning-'):command=['-m','gpx_recipe.planning.managed_worker',operation,str(request_file),str(output)]
     elif operation=='structural-snapshot':command=['-m','gpx_recipe.structural_live.job',str(request_file),str(output)]
     elif operation=='structural-snapshot-ranking':command=['-m','gpx_recipe.structural_live.ranking',str(request_file),str(output)]
@@ -122,10 +132,12 @@ def _work(action,source,assets,request_file,directory,archive,*,asset_parts=()):
                 if relative not in receipt['files']:raise ValueError('A qualified project is absent from its audited artifact list')
                 target=directory/'verified_projects'/('verified_'+row['id']+'.gpx')
                 target.parent.mkdir(exist_ok=True);shutil.copyfile(confined(trial,relative),target)
-        elif action=='native':
+        elif action in {'native','admission'}:
             root=directory/'native';root.mkdir()
-            result,root=native(request,inputs,root,cancel)
-            if request['operation'].startswith('preparation-') or request['operation'] in STRUCTURAL_SNAPSHOT_OPERATIONS:
+            result,root=native(request,inputs,root,cancel,admission=action=='admission')
+            if action=='admission':
+                files=[root/'native-response.json']
+            elif request['operation'].startswith('preparation-') or request['operation'] in STRUCTURAL_SNAPSHOT_OPERATIONS:
                 # Only declared portable data leaves theoretical preparation.
                 # Native construction GPXs and repeated scratch are ephemeral.
                 owned=Path(result['output']).resolve()
@@ -184,7 +196,7 @@ def work(action,source,assets,request_file,directory,archive,*,preparation_evide
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('action',choices=['native','chunk']);p.add_argument('source');p.add_argument('assets');p.add_argument('request');p.add_argument('directory');p.add_argument('archive')
+    p=argparse.ArgumentParser();p.add_argument('action',choices=['native','admission','chunk']);p.add_argument('source');p.add_argument('assets');p.add_argument('request');p.add_argument('directory');p.add_argument('archive')
     p.add_argument('--preparation-evidence');p.add_argument('--preparation-certificate')
     p.add_argument('--asset-part',action='append',default=[])
     a=p.parse_args();work(a.action,a.source,a.assets,a.request,a.directory,a.archive,

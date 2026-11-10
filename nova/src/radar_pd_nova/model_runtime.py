@@ -598,6 +598,7 @@ class GalaxyChunkTransport:
     def _prepared_inputs(self,protocol,root,*,capture_new=False):
         from gpx_recipe.preparation.hints import read,packet_paths
         from .native_operations import intent_lock
+        from .prepared_structural_discovery import required_attachment
         sha=digest(protocol)
         try:
             if capture_new:
@@ -605,9 +606,11 @@ class GalaxyChunkTransport:
                     provider=getattr(self.runtime,'preparation_provider',None)
                     if callable(provider):provider(protocol,root)
             document=read(root,protocol)
+            required_attachment(protocol,root,document)
             if document is None:return None,[]
             paths=packet_paths(root,protocol)
         except (OSError,ValueError) as error:
+            required_attachment(protocol,root,None)
             with self._state_lock:
                 self.state.setdefault('prepared_inputs',{})[sha]=dict(status='unavailable',
                     message='Prepared inputs could not be attached. Current physics will be rebuilt.',

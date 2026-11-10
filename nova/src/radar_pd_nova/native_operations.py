@@ -18,13 +18,29 @@ import uuid
 from gpx_recipe.execution import write_json
 from gpx_recipe.symmetry.compiler import assets, confined, file_sha, package_signature
 from gpx_recipe.symmetry.contracts import digest
-from gpx_recipe.symmetry.native_protocol import validate_native_payload,native_timeout_limit,validate_native_timeout,STRUCTURAL_SNAPSHOT_OPERATIONS
+from gpx_recipe.symmetry.native_protocol import validate_native_payload as validate_shared_payload,native_timeout_limit as shared_timeout_limit,validate_native_timeout as shared_timeout,STRUCTURAL_SNAPSHOT_OPERATIONS
+from .model_admission import OPERATION as ADMISSION, validate_payload as validate_admission
 from .model_checkpoint import job_record
 from .models import UtilityActionRecord, RunStatus
 from .refinement_runtime import RuntimeUnavailable
 
 SCHEMA = 'radar-model-native-handle/v1'
 BOUND_SCHEMA = 'radar-model-native-handle/v2'
+
+
+def validate_native_payload(operation, payload):
+    return validate_admission(payload) if operation == ADMISSION else validate_shared_payload(operation, payload)
+
+
+def native_timeout_limit(operation):
+    return 300 if operation == ADMISSION else shared_timeout_limit(operation)
+
+
+def validate_native_timeout(operation, value):
+    if operation != ADMISSION:return shared_timeout(operation, value)
+    if type(value) not in (int, float) or not math.isfinite(value) or not 1 <= value <= native_timeout_limit(operation):
+        raise ValueError('Invalid native deadline for this operation')
+    return float(value)
 
 
 def validate_handle(runtime, value):
@@ -117,7 +133,9 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     if guard is not None and not hasattr(coordinator,'retain_native_producer'):guard(operation,payload)
     root=Path(root).resolve();root.mkdir(parents=True, exist_ok=True)
     payload=copy.deepcopy(payload);files=[]
-    for field in ['source','child','instrument','plan','anchor_snapshot','snapshot']:
+    fields = ['source','child','instrument','plan','anchor_snapshot','snapshot']
+    if operation == ADMISSION: fields += ['parent','model','weights','reference']
+    for field in fields:
         if field in payload:
             path=Path(payload[field]).resolve();relative=str(path.relative_to(root))
             files.append(relative);payload[field]=relative
@@ -260,7 +278,7 @@ def submit(runtime, operation, payload, root, *, source, timeout=120, cancel=Non
                 job=submit_attempt(runtime,handle['source'],handle['request'],handle['asset_id'],
                     preparation_attempt,before_submit,event,preparation_guard)
             else:
-                job=runtime._submit('native',handle['source'],handle['request'],handle['asset_id'],
+                job=runtime._submit('admission' if operation == ADMISSION else 'native',handle['source'],handle['request'],handle['asset_id'],
                     handle['key'],cancel=event)
         except Exception:
             # The existing dispatcher records pending=True before its POST.

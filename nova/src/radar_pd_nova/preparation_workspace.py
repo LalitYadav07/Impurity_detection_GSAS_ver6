@@ -220,7 +220,8 @@ class PreparationWorkspace:
                     settings=dict(candidate=candidate,mode_radius=mode_radius,cell_radius=cell_radius)
                 for label in labels:models.append(dict(kind=kind,bank=label,settings=settings,child=child))
             searches.append(dict(kind=kind,k=copy.deepcopy(vector),catalog_sha256=digest(catalog),
-                selected_candidates=[c['id'] for c in candidates],coverage=copy.deepcopy(catalog['coverage'])))
+                selected_candidates=[c['id'] for c in candidates],coverage=copy.deepcopy(catalog['coverage']),
+                catalog=copy.deepcopy(catalog)))
         scope=dict(schema='radar-preparation-declared-scope/v1',parent_cif_sha256=context['source_sha256'],
             selected_banks=sorted(banks),searches=searches)
         # A model library carries its completed shared profile dependencies,

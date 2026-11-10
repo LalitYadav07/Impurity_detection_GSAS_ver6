@@ -396,6 +396,8 @@ class PreparationMixin:
         s=self.server.state;s.prep_page=1;s.prep_download_href='';s.prep_active_jobs=0
         s.prep_training_record_open=False;s.prep_training_record=None
         if s.prep_library:self._preparation_store().registry.select(s.prep_library)
+        invalidate = getattr(self, '_symmetry_unapprove', None)
+        if callable(invalidate): invalidate()
         self._preparation_table_changed()
 
     def _capture_prepared_model_inputs(self,protocol,root):
@@ -403,7 +405,14 @@ class PreparationMixin:
         enabled=((protocol['kind']=='magnetic' and protocol['policy'].get('magnetic_optimizer')=='profiled_quadratic')
             or (protocol['kind']=='structural' and protocol['policy'].get('structural_optimizer')=='prepared_nonlinear'))
         if not enabled:return None
-        return self._capture_prepared_inputs(protocol,root)
+        from .prepared_structural_discovery import required_attachment
+        try:
+            document=self._capture_prepared_inputs(protocol,root)
+        except (OSError,ValueError):
+            required_attachment(protocol,root,None)
+            raise
+        required_attachment(protocol,root,document)
+        return document
 
     def _capture_prepared_inputs(self,context,root):
         """Common selection for independent Model and Live request contracts."""
@@ -427,6 +436,14 @@ class PreparationMixin:
             row=next(row for row in registry.summaries() if row['id']==selected)
             if not row['available']:raise ValueError('Selected preparation needs review')
             if 'structural-ranking-model' in row['kinds']:
+                draft=getattr(self,'_symmetry_draft',None) or {}
+                marker=draft.get('catalog',{}).get('provenance',{}).get('prepared_library')
+                if (marker and marker['library_id']==row['library_id']
+                        and draft.get('discovery_identity')==self._discovery_identity()):
+                    admission=marker['admission']
+                    return (f"Admitted trained library: {row['name']} · "
+                        f"{len(admission['eligible_candidate_ids'])} / {len(admission['candidate_checks'])} candidates eligible · "
+                        f"{len(admission['excluded_candidate_ids'])} excluded from this k · native context checks passed.")
                 return (f"Trained structural model: {row['name']}. "
                     'Compatible scans use its scores to prioritize the complete native candidate search. '
                     'This library contains no prepared native starting curves.')
