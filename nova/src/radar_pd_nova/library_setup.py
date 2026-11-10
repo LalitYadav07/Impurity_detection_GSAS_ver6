@@ -32,6 +32,7 @@ LIBRARY_FIELDS = (
     "library_builder_skipped_count",
     "library_builder_failure_rows",
     "library_builder_message",
+    "library_builder_error",
     "library_builder_file_rows",
     "library_builder_elements",
     "library_builder_unknown_elements",

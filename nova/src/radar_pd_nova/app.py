@@ -602,6 +602,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.library_builder_active = False
         state.library_builder_status = "idle"
         state.library_builder_message = "Add one or more CIF structures to begin."
+        state.library_builder_error = {}
         state.library_builder_progress = 0
         state.library_builder_built_count = 0
         state.library_builder_skipped_count = 0
@@ -8618,6 +8619,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             # selected archive or built-in library.
             draft.library_builder_status = 'idle'
             draft.library_builder_message = ''
+            draft.library_builder_error = {}
             draft.library_builder_progress = 0
 
     def _invalidate_library_review(self, context: str = 'single') -> None:
@@ -8722,6 +8724,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.library_builder_duplicate_count = 0
         state.library_builder_duplicate_rows = []
         state.library_builder_message = "Preparing CIF structures for Galaxy…"
+        state.library_builder_error = {}
         state.library_builder_failure_search = ""
         state.flush()
 
@@ -8790,9 +8793,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 if state.library_builder_generation != generation:
                     return
                 state.library_builder_active = False
-                state.library_builder_status = "error"
-                state.library_builder_message = f"Could not prepare the CIF inputs: {exc}"
-                state.error_message = state.library_builder_message
+                if self._record_library_build_failure(state, f"Could not prepare the CIF inputs: {exc}",
+                        dict(workflow=context, signature=build_signature, source_signature=source_signature, generation=generation)):
+                    state.error_message = state.library_builder_error['summary']
+                else:
+                    state.library_builder_status = "idle"
+                    state.library_builder_message = "Inputs changed. Build the current selection."
+                    state.library_builder_error = {}
                 state.flush()
                 return
             try:
@@ -8818,10 +8825,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 return
             state.library_builder_active = False
             if action is None or action.status != RunStatus.OK:
-                state.library_builder_status = "error"
-                state.library_builder_message = (
-                    action.message if action is not None and action.message else "Galaxy could not build the custom library."
-                )
+                recorded = self._record_library_build_failure(state,
+                    action.message if action is not None and action.message else "Galaxy could not build the custom library.",
+                    dict(workflow=context, signature=build_signature, source_signature=source_signature, generation=generation), action)
+                if not recorded:
+                    state.library_builder_status = "idle"
+                    state.library_builder_message = "Inputs changed. Build the current selection."
+                    state.library_builder_error = {}
                 state.library_builder_progress = 0
             state.flush()
 

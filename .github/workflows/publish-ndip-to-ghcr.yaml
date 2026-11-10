@@ -155,6 +155,16 @@ jobs:
             python -m pip install --quiet pytest &&
             python -m pytest -q -o cache_dir=/tmp/pytest-cache /validation/test_stage_recovery.py'
 
+      - name: Verify complete CIF symmetry evidence in the built worker
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh \
+            -v "$PWD/tests/test_cif_space_group_evidence.py:/validation/test_cif_space_group_evidence.py:ro" \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+            python -m pip install --quiet pytest==8.4.2 &&
+            PYTHONPATH=/opt/radar-pd/scripts python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+              /validation/test_cif_space_group_evidence.py'
+
       - name: Check phase discovery regressions in the scientific runtime
         shell: bash
         run: |

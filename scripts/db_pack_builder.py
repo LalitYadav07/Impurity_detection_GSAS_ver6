@@ -11,6 +11,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -211,6 +213,114 @@ def infer_phase_display_name(source_name: str, cif_content: str, formula: str) -
     return filename_label or "Unknown phase"
 
 
+def _rational_operation_key(operations):
+    return tuple(sorted({(tuple(value for row in rotation for value in row),
+                          tuple(value % 1 for value in translation))
+                         for rotation, translation in operations}))
+
+
+def _operation_key(operations):
+    """Convert trusted tabulated operations to exact small rational values."""
+    rational = []
+    for rotation, translation in operations:
+        r, t = np.asarray(rotation, dtype=float), np.asarray(translation, dtype=float)
+        if r.shape != (3, 3) or t.shape != (3,) or not np.isfinite(r).all() or not np.isfinite(t).all():
+            raise ValueError("Invalid tabulated crystallographic operation")
+        integer = np.rint(r).astype(int)
+        fractions = tuple(Fraction(float(value)).limit_denominator(24) for value in t)
+        if (not np.array_equal(r, integer)
+                or any(abs(float(value) - original) > 1e-12 for value, original in zip(fractions, t))):
+            raise ValueError("Unsupported tabulated crystallographic operation precision")
+        rational.append((integer.tolist(), fractions))
+    return _rational_operation_key(rational)
+
+
+def _parse_cif_operation(expression):
+    """Parse linear CIF operators exactly; never round source decimals."""
+    components = re.sub(r"\s+", "", expression.lower()).split(",")
+    if len(components) != 3:
+        raise ValueError("A CIF symmetry operator needs three coordinates")
+    rotation, translation = [], []
+    for component in components:
+        terms = re.findall(r"[+-]?[^+-]+", component)
+        if not terms or "".join(terms) != component:
+            raise ValueError("Unsupported CIF symmetry expression")
+        row, offset = [Fraction(0)] * 3, Fraction(0)
+        for term in terms:
+            sign = -1 if term.startswith("-") else 1
+            value = term.lstrip("+-")
+            variable = re.fullmatch(r"(?:(\d+(?:/\d+|\.\d*)?)\*?)?([xyz])", value)
+            if variable:
+                try:
+                    coefficient = Fraction(variable[1] or "1") * sign
+                except (ValueError, ZeroDivisionError) as exc:
+                    raise ValueError("Invalid CIF symmetry coefficient") from exc
+                row["xyz".index(variable[2])] += coefficient
+            else:
+                if not re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)(?:/\d+)?", value):
+                    raise ValueError("Unsupported CIF symmetry translation")
+                try:
+                    offset += sign * Fraction(value)
+                except (ValueError, ZeroDivisionError) as exc:
+                    raise ValueError("Invalid CIF symmetry translation") from exc
+        if any(value.denominator != 1 for value in row):
+            raise ValueError("CIF symmetry rotations must be integral")
+        rotation.append([int(value) for value in row])
+        translation.append(offset)
+    a, b, c = rotation
+    determinant = (a[0] * (b[1] * c[2] - b[2] * c[1])
+                   - a[1] * (b[0] * c[2] - b[2] * c[0])
+                   + a[2] * (b[0] * c[1] - b[1] * c[0]))
+    if abs(determinant) != 1:
+        raise ValueError("CIF symmetry rotations must have determinant +1 or -1")
+    return rotation, translation
+
+
+def _explicit_cif_operations(block):
+    keys = ("_space_group_symop_operation_xyz", "_symmetry_equiv_pos_as_xyz")
+    declarations = []
+    for key in keys:
+        if key not in block:
+            continue
+        expressions = block[key]
+        if isinstance(expressions, str):
+            expressions = [expressions]
+        if (not isinstance(expressions, list) or not 1 <= len(expressions) <= 192
+                or any(not isinstance(value, str) or not 0 < len(value) <= 500
+                       for value in expressions)):
+            raise ValueError("Explicit CIF symmetry operators must be a bounded nonempty list")
+        rational = [_parse_cif_operation(value) for value in expressions]
+        operations = [(np.asarray(rotation), np.asarray(translation, dtype=float))
+                      for rotation, translation in rational]
+        canonical = _rational_operation_key(rational)
+        if len(canonical) != len(operations):
+            raise ValueError("Explicit CIF symmetry operators contain duplicates")
+        declarations.append((operations, canonical, rational))
+    if not declarations:
+        return None
+    if any(key != declarations[0][1] for _, key, _ in declarations[1:]):
+        raise ValueError("Explicit CIF symmetry operator declarations disagree")
+    return declarations[0]
+
+
+@lru_cache(maxsize=1)
+def _tabulated_cif_settings():
+    """Exact settings, not a tolerance-based analysis of the atomic positions."""
+    import spglib
+
+    table = {}
+    for hall_number in range(1, 531):
+        group = spglib.get_spacegroup_type(hall_number)
+        operations = spglib.get_symmetry_from_database(hall_number)
+        key = _operation_key(zip(operations["rotations"], operations["translations"]))
+        table.setdefault(key, []).append({
+            "hall_number": hall_number, "number": int(group.number),
+            "symbol": group.international_short, "choice": group.choice,
+            "hall_symbol": group.hall_symbol,
+        })
+    return table
+
+
 def _preserve_cif_space_group(row: Dict[str, Any], cif_content: str) -> None:
     """Keep a supplied structural model's declared symmetry in a user library.
 
@@ -232,17 +342,58 @@ def _preserve_cif_space_group(row: Dict[str, Any], cif_content: str) -> None:
                    if t in block and str(block[t]).strip() not in {"?", "."}), "")
     raw = next((block[t] for t in ("_space_group_it_number", "_symmetry_int_tables_number")
                 if t in block and str(block[t]).strip() not in {"?", "."}), None)
+    explicit = _explicit_cif_operations(block)
     symbol_number = None
+    symbol_group = None
     if symbol:
         from pymatgen.symmetry.groups import SpaceGroup
         try:
-            symbol_number = SpaceGroup(symbol.replace(" ", "")).int_number
+            symbol_group = SpaceGroup(symbol.replace(" ", ""))
+            symbol_number = symbol_group.int_number
         except ValueError:
-            if raw is None:
+            if explicit is None:
                 raise ValueError("Declared CIF symmetry symbol needs setting review")
-    if raw is None and symbol_number is None:
+    if raw is None and symbol_number is None and explicit is None:
         row["symmetry_provenance"] = {"source": "analyzer; no declared CIF number"}
         return
+    operator_proof = None
+    if explicit is not None:
+        operations, key, rational = explicit
+        matches = [dict(value) for value in _tabulated_cif_settings().get(key, [])]
+        numbers = {match["number"] for match in matches}
+        if symbol_group is not None:
+            expected = [(op.rotation_matrix, op.translation_vector)
+                        for op in symbol_group.symmetry_ops]
+            if ":" in symbol:
+                # An explicit origin/axis choice is binding. An unqualified
+                # H-M name may instead use an origin proved by all operators.
+                if key != _operation_key(expected):
+                    raise ValueError("Explicit CIF symmetry operators disagree with the declared setting")
+                shift = np.zeros(3)
+            else:
+                from gsas_cif_import import matching_origin_shift
+                try:
+                    shift = matching_origin_shift(operations, expected)
+                except ValueError as exc:
+                    raise ValueError("Explicit CIF symmetry operators disagree with the declared space group") from exc
+                exact_shift = tuple(Fraction(float(value)).limit_denominator(24) for value in shift)
+                translated = [(rotation, tuple(
+                    translation[i] + exact_shift[i]
+                    - sum(rotation[i][j] * exact_shift[j] for j in range(3))
+                    for i in range(3))) for rotation, translation in rational]
+                if _rational_operation_key(translated) != _operation_key(expected):
+                    raise ValueError("Explicit CIF symmetry operators disagree exactly with the declared space group")
+            operator_proof = {"method": "complete operator equivalence to declared group",
+                              "operator_count": len(operations),
+                              "origin_shift_to_symbol": [float(value) for value in shift],
+                              "exact_tabulated_settings": matches}
+        else:
+            if len(numbers) != 1:
+                raise ValueError("Explicit CIF symmetry operators do not identify one complete tabulated space group; setting review required")
+            symbol_number = next(iter(numbers))
+            operator_proof = {"method": "complete exact tabulated operator set",
+                              "operator_count": len(operations),
+                              "exact_tabulated_settings": matches}
     number = int(str(raw).strip()) if raw is not None else int(symbol_number)
     if not 1 <= number <= 230:
         raise ValueError("Declared CIF space-group number must be between 1 and 230")
@@ -252,10 +403,17 @@ def _preserve_cif_space_group(row: Dict[str, Any], cif_content: str) -> None:
         from pymatgen.symmetry.groups import SpaceGroup
         symbol = SpaceGroup.from_int_number(number).symbol
     row["symmetry_provenance"] = {
-        "source": "declared CIF; original model retained",
-        "declared_number": number, "declared_symbol": symbol,
+        "source": ("declared CIF; original model retained" if symbol_group is not None or raw is not None
+                   else "explicit CIF operators; original model and label retained"),
+        "declared_number": (int(str(raw).strip()) if raw is not None else
+                            int(symbol_group.int_number) if symbol_group is not None else None),
+        "declared_symbol": symbol, "resolved_number": number,
         "analyzer_number": int(row["space_group"]), "analyzer_symbol": row["SG_symbol"],
     }
+    if operator_proof is not None:
+        row["symmetry_provenance"]["operator_verification"] = operator_proof
+    if symbol and symbol_group is None:
+        row["symmetry_provenance"]["declared_symbol_status"] = "unrecognized by symbol parser; explicit operators authoritative"
     row.update(space_group=number, SG_symbol=symbol)
 
 

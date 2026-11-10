@@ -591,8 +591,21 @@ class SetupEditorMixin:
                 + prefix
                 + "library_builder_cif_ids.length + ' structure source(s) ready to build.' : "
                 + prefix
-                + "library_builder_message }}"
+                + "library_builder_message }}",
+                v_if=f"{prefix}library_builder_status !== 'error'",
             )
+            vuetify.VAlert(
+                text=(f"{prefix}library_builder_error.summary || 'The candidate library could not be built. Review the diagnostics below.'",),
+                v_if=f"{prefix}library_builder_status === 'error'", type="error", variant="tonal",
+                density="compact", role="alert", classes="mb-2",
+            )
+            with html.Details(v_if=f"{prefix}library_builder_status === 'error' && !!{prefix}library_builder_message",
+                              classes="radar-library-error-details"):
+                html.Summary("Job diagnostics")
+                html.Pre("{{ " + prefix + "library_builder_message }}",
+                         style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:20rem;overflow:auto")
+                html.A("Open Galaxy job", href=(f"{prefix}library_builder_error.job_url",),
+                       v_if=f"!!{prefix}library_builder_error.job_url", target="_blank", rel="noopener noreferrer")
             vuetify.VProgressLinear(
                 model_value=value("library_builder_progress"),
                 color="#15543c",

@@ -4,10 +4,13 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 import uuid
 
 from .library_setup import LibraryDraft, library_manifest_phase_count
+from .models import UtilityActionRecord
 
 
 SELECTION_FIELDS = (
@@ -101,6 +104,41 @@ def partial_library_archive_review(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 class LibraryReviewMixin:
+    def _record_library_build_failure(self, draft: LibraryDraft, message: str,
+                                      owner: dict[str, Any], action: Any = None) -> bool:
+        """Present a worker rejection only for the unchanged source draft."""
+        signature = owner.get("signature") or draft.signature()
+        source_signature = owner.get("source_signature") or library_review_signature(draft)
+        if (owner.get("workflow", draft.workflow) != draft.workflow
+                or signature != draft.signature()
+                or source_signature != library_review_signature(draft)
+                or owner.get("generation", draft.library_builder_generation) != draft.library_builder_generation):
+            return False
+        message = str(message or "Galaxy could not build the custom library.")
+        summary = ("The CIF symmetry setting needs review. Open the job diagnostics before rebuilding this library."
+                   if "CIF symmetry review required" in message else
+                   "The candidate library could not be built. Review the diagnostics below before trying again.")
+        job_url = ""
+        job = getattr(action, "galaxy_job_id", None)
+        try:
+            base = urlsplit(str(getattr(getattr(self, "service", None), "galaxy_url", "") or ""))
+        except ValueError:
+            base = urlsplit("")
+        if (isinstance(action, UtilityActionRecord)
+                and action.tool_id == "neutrons_radar_pd_library_builder_prototype"
+                and owner.get("signature") and owner.get("source_signature")
+                and isinstance(job, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job)
+                and job not in {"pending", "unknown"} and not job.startswith("pending-")
+                and base.scheme in {"http", "https"} and base.hostname
+                and not (base.username or base.password or base.query or base.fragment)):
+            job_url = urlunsplit((base.scheme, base.netloc, base.path.rstrip("/") + "/jobs/" + job + "/view", "", ""))
+        draft.library_builder_status = "error"
+        draft.library_builder_message = message
+        draft.library_builder_error = dict(summary=summary, signature=signature,
+            source_signature=source_signature, generation=draft.library_builder_generation,
+            job_url=job_url)
+        return True
+
     def _library_decision_pending(self, context: str = "single") -> bool:
         draft = LibraryDraft(self.server.state, context)
         return bool(getattr(draft, "library_builder_decision_pending", False)
@@ -126,6 +164,7 @@ class LibraryReviewMixin:
         if draft.library_builder_generation != generation:
             return
         draft.library_builder_active = False
+        draft.library_builder_error = {}
         draft.library_builder_partial_review = {}
         draft.library_builder_status = "interrupted"
         draft.library_builder_message = "Library build monitoring stopped. Already accepted work remains in History; no new library was selected."
@@ -166,8 +205,11 @@ class LibraryReviewMixin:
         draft.library_builder_status = "partial" if partial else "ready"
         if built <= 0:
             draft.library_builder_status = "error"
-            draft.library_builder_message = manifest_error or (
+            message = manifest_error or (
                 "The build completed with no usable phases. The library was not selected; inspect the build log and manifest.")
+            if not self._record_library_build_failure(draft, message, owner, action):
+                draft.library_builder_error = {}
+                draft.library_builder_message = "A build for the previous inputs failed. The current selection was kept."
         elif not selection_current:
             draft.library_builder_message = f"Library ready with {built} usable phase(s) in History. Your changed selection was kept."
         elif partial:
@@ -201,7 +243,8 @@ class LibraryReviewMixin:
         for workflow in ("single", "live"):
             draft = LibraryDraft(self.server.state, workflow)
             fields.extend(draft._key(name) for name in (*SELECTION_FIELDS,
-                "library_builder_name", "library_builder_cif_ids", "library_builder_local_paths", "radiation"))
+                "library_builder_name", "library_builder_cif_ids", "library_builder_local_paths", "radiation",
+                "library_builder_allow_rounding", "library_builder_rounding_note"))
         self.server.state.change(*dict.fromkeys(fields))(self._library_review_changed)
 
     def _library_review_changed(self, **_: Any) -> None:
@@ -209,6 +252,14 @@ class LibraryReviewMixin:
             return
         for workflow in ("single", "live"):
             draft = LibraryDraft(self.server.state, workflow)
+            error = getattr(draft, "library_builder_error", None) or {}
+            if error and (error.get("signature") != draft.signature()
+                          or error.get("source_signature") != library_review_signature(draft)
+                          or error.get("generation") != draft.library_builder_generation):
+                draft.library_builder_error = {}
+                if not draft.library_builder_active and draft.library_builder_status == "error":
+                    draft.library_builder_status = "idle"
+                    draft.library_builder_message = ""
             review = getattr(draft, "library_builder_partial_review", None) or {}
             if review and not self._partial_library_review_current(draft, review):
                 draft.library_builder_partial_review = {}
