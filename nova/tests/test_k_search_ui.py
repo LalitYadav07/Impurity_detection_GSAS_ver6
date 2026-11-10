@@ -6,6 +6,38 @@ import pytest
 from gpx_recipe.symmetry.compiler import file_sha
 from radar_pd_nova.symmetry_controller import SymmetryMixin
 from radar_pd_nova.k_search_plot import evidence
+from radar_pd_nova.k_search_controller import merge_survey_progress, survey_progress_text
+
+
+def test_batch_status_keeps_the_latest_reported_leader_and_family_coverage():
+    event = dict(stage='simulate', message='Profile completed', completed=6, total=36,
+                 families_evaluated=6, families_total=6,
+                 provisional_leader=dict(k=['0','0','1/2'],score=17.2))
+    state = merge_survey_progress({}, event)
+    state = merge_survey_progress(state, dict(stage='simulate', message='6 profiles complete · 30 pending · 4 requested workers',
+                                            completed=6, total=36, families_evaluated=6, families_total=6))
+    text = survey_progress_text(state,remote=True)
+    assert '6/6 k families evaluated' in text and '(0, 0, 1/2), score 17.2' in text
+    assert '30 pending' in text and '4 requested workers' in text
+    assert 'Galaxy allocation can reduce this' in text
+    assert event['message']=='Profile completed'
+
+
+def test_new_progress_phase_does_not_inherit_a_previous_leader():
+    previous=dict(stage='simulate',message='Old',provisional_leader=dict(k=['0','0','0'],score=1))
+    next_stage=dict(stage='capture',message='Capturing a new source')
+    state=merge_survey_progress(previous,next_stage)
+    assert state==next_stage and survey_progress_text(state)==next_stage['message']
+
+
+def test_progress_never_invents_a_leader_or_repeats_backend_detail():
+    state=dict(stage='simulate',message='0/6 k families evaluated · 0/36 planned profiles tested',
+               families_evaluated=0,families_total=6)
+    text=survey_progress_text(state)
+    assert text.count('k families evaluated')==1 and 'leader' not in text
+    state['message']='6/6 k families evaluated · provisional leader (0, 0, 0), score 1'
+    state['provisional_leader']=dict(k=['0','0','0'],score=1)
+    assert survey_progress_text(state).count('provisional leader')==1
 
 
 def app_and_result(tmp_path):

@@ -1,6 +1,7 @@
 """Optional k survey in Model exploration; source-bound and setup-only."""
 import asyncio
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -16,6 +17,32 @@ from gpx_recipe.execution import write_json
 from .symmetry_plots import empty
 from .symmetry_sources import resolve_start
 from .k_search_plot import evidence
+
+
+def merge_survey_progress(previous, event):
+    """Do not lose a completed-profile leader to a subsequent batch notice."""
+    retained = dict(previous) if previous.get('stage') == event.get('stage') == 'simulate' else {}
+    retained.update(event)
+    return retained
+
+
+def survey_progress_text(progress, *, remote=False):
+    text = progress['message']
+    if progress.get('stage') != 'simulate':
+        return text
+    evaluated, total = progress.get('families_evaluated'), progress.get('families_total')
+    if (type(evaluated) is int and type(total) is int and 0 <= evaluated <= total
+            and 'k families evaluated' not in text):
+        text = f'{evaluated}/{total} k families evaluated · ' + text
+    leader = progress.get('provisional_leader')
+    if isinstance(leader, dict) and 'provisional leader' not in text:
+        k, score = leader.get('k'), leader.get('score')
+        if (isinstance(k, list) and len(k) == 3 and all(isinstance(v, str) for v in k)
+                and type(score) in (int, float) and math.isfinite(score)):
+            text += f" · provisional leader ({', '.join(k)}), score {score:.4g}"
+    if remote:
+        text += ' · requested pool; Galaxy allocation can reduce this'
+    return text
 
 
 def survey_status_message(result):
@@ -91,13 +118,15 @@ class KSearchMixin:
                     sites=sites,directions=list(s.sx_directions),maximum_moment=float(s.sx_max_moment),magnetic_d_min=float(s.sx_mag_d_min),
                     relative_signs=bool(s.sx_sign_starts),templates_per_k=int(s.sx_k_limit),budget_seconds=None,
                     workers=min(4,max(1,int(s.sx_k_workers))),progress=mailbox.put,cancel=cancel,moment_model=getattr(s,'sx_moment_model','collinear')))
+                progress_state = {}
                 while not work.done():
                     if identity!=self._k_identity():cancel.set()
                     latest=None
-                    while not mailbox.empty():latest=mailbox.get_nowait()
+                    while not mailbox.empty():
+                        latest=mailbox.get_nowait()
+                        progress_state=merge_survey_progress(progress_state,latest)
                     if latest and identity==self._k_identity():
-                        s.sx_k_message=latest['message']
-                        if remote and latest.get('stage')=='simulate':s.sx_k_message+=' · requested pool; Galaxy allocation can reduce this'
+                        s.sx_k_message=survey_progress_text(progress_state,remote=bool(remote))
                         s.flush()
                     await asyncio.sleep(.15)
                 result=await work

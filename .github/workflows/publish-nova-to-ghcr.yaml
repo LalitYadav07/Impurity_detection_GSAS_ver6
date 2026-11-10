@@ -187,10 +187,11 @@ jobs:
           python -m pip install --quiet pytest &&
           mkdir -p /tmp/magnetic-tests &&
           cp /validation-tests/test_magnetic_optimizer_ui.py /validation-tests/test_model_planner.py \
-             /validation-tests/test_symmetry_views.py /validation-tests/test_symmetry_pin_labels.py /tmp/magnetic-tests/ &&
+             /validation-tests/test_symmetry_views.py /validation-tests/test_symmetry_pin_labels.py \
+             /validation-tests/test_k_search_ui.py /tmp/magnetic-tests/ &&
           cd /tmp/magnetic-tests &&
           PYTHONPATH=/src/src python -m pytest -q test_magnetic_optimizer_ui.py test_model_planner.py \
-            test_symmetry_views.py test_symmetry_pin_labels.py'
+            test_symmetry_views.py test_symmetry_pin_labels.py test_k_search_ui.py'
 
       - name: Verify packaged native and CLI sample-identity readers
         shell: bash
