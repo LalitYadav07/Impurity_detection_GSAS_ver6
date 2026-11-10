@@ -108,6 +108,8 @@ class GalaxyPlanningRuntime:
 
     def execute(self, operation, request, directory, cancel, *, parent=False):
         from . import native_operations
+        self.progress(operation=operation,state='preparing inputs',job_id='',
+            message='Preparing the calculation inputs.',cancel=cancel)
         directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
         packet=directory/'packet'
         document,payload=capture(operation,request,packet,check_text=self.check_text,check_native=self.check_native)
@@ -116,14 +118,21 @@ class GalaxyPlanningRuntime:
             sources=self.native.state.setdefault('planner_sources',{})
             source_id=sources.get(checksum)
             if source_id is None:
+                self.progress(operation=operation,state='uploading source',job_id='',
+                    message='Uploading the calculation source to Galaxy History.',cancel=cancel)
                 source_id=self.service.upload_document(source_path,label='Planner source '+checksum,wait_ready=True)
                 sources[checksum]=source_id;self.native._save()
         source=dict(id='planner-'+checksum,source_path=str(source_path),source_sha256=checksum,dataset_id=source_id)
         pending=directory/'operation.json'
         def intent(handle):
             write_json(pending,dict(schema='radar-planning-operation/v1',handle=handle))
-            if self.checkpoint:self.checkpoint(handle)
-            self._notice(handle,'submitting',cancel=cancel)
+            if self.checkpoint:
+                self._notice(handle,'saving recovery',
+                    'Saving recovery information to Galaxy History.',cancel=cancel)
+                self.checkpoint(handle)
+            self._notice(handle,'submitting','Submitting the calculation to Galaxy.',cancel=cancel)
+        self.progress(operation=operation,state='uploading inputs',job_id='',
+            message='Preparing and uploading calculation inputs to Galaxy History.',cancel=cancel)
         handle=native_operations.submit(self.native,operation,payload,packet,source=source,
             timeout=300 if operation in {'planning-parent','planning-simulate'} else 180,
             cancel=cancel,on_intent=intent)
@@ -155,6 +164,7 @@ class GalaxyPlanningRuntime:
                 raise RuntimeError('The Galaxy planner job remains pending. Recover its saved operation; no duplicate was submitted.')
             cancel.wait(self.native.poll_seconds)
         if cancel.is_set():raise RuntimeError('Planner calculation cancelled before collecting its output')
+        self._notice(handle,'collecting','Collecting and checking the calculation results.',cancel=cancel)
         collected=directory/('collected-'+uuid.uuid4().hex)
         wrapper,seconds=native_operations.collect(self.native,handle,collected)
         result,origin=publish_result(wrapper,collected,operation)

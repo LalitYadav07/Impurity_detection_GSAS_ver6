@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 import zipfile
 
 import numpy as np
@@ -113,6 +114,53 @@ def test_galaxy_parent_publishes_verified_artifacts_without_local_science(remote
     path.write_text(json.dumps(changed))
     with pytest.raises(ValueError,match='metadata differs'):
         fresh.verify_result(tmp_path/'parent/simulation',verified)
+
+
+def test_visible_staging_precedes_uploads_checkpoint_and_native_execution(remote,tmp_path,monkeypatch):
+    from radar_pd_nova.planning_controller import PlanningMixin
+    native,service,_=remote;event=threading.Event();seen=[]
+    app=PlanningMixin();state=SimpleNamespace(plan_message='Previous calculation',flush=lambda:None)
+    app.server=SimpleNamespace(state=state);app._planning_cancel=event
+    def progress(**row):
+        app._planning_job_progress(**row)
+        seen.append((state.plan_job_state,state.plan_message,state.plan_job_id))
+        if row['state']=='queued':next(iter(service.jobs.values())).status=RunStatus.RUNNING
+        elif row['state']=='running':
+            request=next(iter(service.requests.values()))
+            reply(service,request,next(iter(service.jobs.values())),tmp_path)
+    upload=service.upload_document
+    def checked_upload(path,*,label,**kwargs):
+        if label.startswith('Planner source '):
+            assert state.plan_job_state=='uploading source' and not state.plan_job_id
+            assert state.plan_message=='Uploading the calculation source to Galaxy History.'
+        return upload(path,label=label,**kwargs)
+    monkeypatch.setattr(service,'upload_document',checked_upload)
+    packet=native.packet
+    def checked_packet(*args,**kwargs):
+        assert state.plan_job_state=='uploading inputs' and not state.plan_job_id
+        assert 'uploading calculation inputs' in state.plan_message
+        return packet(*args,**kwargs)
+    monkeypatch.setattr(native,'packet',checked_packet)
+    checkpoints=[]
+    def checkpoint(handle):
+        assert state.plan_job_state=='saving recovery' and not state.plan_job_id
+        assert state.plan_message=='Saving recovery information to Galaxy History.'
+        assert not service.submissions
+        checkpoints.append(handle)
+    submit=service.submit_utility
+    def checked_submit(**kwargs):
+        assert checkpoints and state.plan_job_state=='submitting' and not state.plan_job_id
+        assert state.plan_message=='Submitting the calculation to Galaxy.'
+        job=submit(**kwargs);job.status=RunStatus.QUEUED;return job
+    monkeypatch.setattr(service,'submit_utility',checked_submit)
+    runtime=adapter(native,tmp_path/'runtime',progress=progress,checkpoint=checkpoint)
+    runtime.execute('planning-parent',scenario(tmp_path),tmp_path/'parent',event)
+    assert [row[0] for row in seen]==['preparing inputs','uploading source','uploading inputs',
+        'saving recovery','submitting','queued','running','finished','collecting','finished']
+    assert all(not row[2] for row in seen[:5])
+    assert all(row[2] for row in seen[5:])
+    assert all('Previous calculation' not in row[1] for row in seen)
+    assert len(service.submissions)==1
 
 
 def test_ambiguous_post_cannot_duplicate_and_recovery_only_collects(remote,tmp_path,monkeypatch):

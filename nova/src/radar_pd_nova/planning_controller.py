@@ -264,8 +264,11 @@ class PlanningMixin(PlanningStorageMixin):
         s=self.server.state
         if self._planning_cancel is None or self._planning_cancel is not cancel or self._planning_cancel.is_set():return
         s.plan_job_operation=operation;s.plan_job_state=state;s.plan_job_id=job_id
-        if job_id:s.plan_message=f'{operation.removeprefix("planning-").replace("-"," ")} · Galaxy {state} · {job_id}'
-        if message:s.plan_message+=' · '+str(message)[:400]
+        if job_id:
+            s.plan_message=f'{operation.removeprefix("planning-").replace("-"," ")} · Galaxy {state} · {job_id}'
+            if message:s.plan_message+=' · '+str(message)[:400]
+        else:
+            s.plan_message=str(message)[:400] if message else str(state)
         s.flush()
 
     def _planning_dispatch(self, operation, request, directory, event):
@@ -279,7 +282,7 @@ class PlanningMixin(PlanningStorageMixin):
             self._planning_parent_receipt()
             return
         s=self.server.state
-        s.plan_message='Reading the nuclear structure with GSAS-II…';s.flush()
+        s.plan_message='Preparing the nuclear structure calculation.';s.flush()
         request=self._planning_request()
         request.update(mcif=None,comparison_cif=None,response_mode='profile_only',intensity_calibration='vanadium')
         directory=self._planning_root()/('parent-'+uuid.uuid4().hex)
@@ -764,7 +767,7 @@ class PlanningMixin(PlanningStorageMixin):
     async def _run_planning_simulation(self):
         if self.server.state.plan_busy:return
         s=self.server.state;s.plan_busy=True;s.plan_error='';s.plan_current=False;s.plan_result_ready=False
-        s.plan_message='Calculating the selected structure and instrument response.';s.flush()
+        s.plan_message='Preparing the selected structure and instrument calculation.';s.flush()
         generation=self._planning_generation
         event=threading.Event();self._planning_cancel=event
         try:
