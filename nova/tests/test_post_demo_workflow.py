@@ -28,11 +28,30 @@ def test_progress_counts_models_and_never_calls_an_inadequate_leader_qualified()
           dict(protocol='one',candidate='b',name='B',execution_state='prepared',has_view=False,status='pending')]
     before=deepcopy(rows)
     text=model_progress(rows)
-    assert '1 / 2' in text and 'Best audited, needs review' in text and '27.000%' in text
-    assert 'Best qualified' not in text and rows==before
+    assert '1 / 2' in text and 'Lowest checked Rwp, needs review' in text and '27.000%' in text
+    assert 'passing fit checks' not in text and rows==before
     rows[0]['status']='valid'
-    assert 'Best qualified' in model_progress(rows)
+    assert 'Lowest Rwp passing fit checks' in model_progress(rows)
     assert 'First checked fit pending' in model_progress(rows[2:])
+
+
+def test_magnetic_progress_shows_small_improvement_over_its_nuclear_baseline():
+    row=dict(protocol='warm',candidate='a',name='P21',kind='magnetic',execution_state='terminal',
+             native_verified=True,has_view=True,rwp=6.585531,status='valid',baseline_rwp=6.616386)
+    text=model_progress([row])
+    assert 'nuclear baseline 6.616% (change -0.031 percentage points)' in text
+    assert 'magnetic order' not in text and 'Best qualified' not in text
+    for baseline in (None,float('nan'),float('inf'),True,-1):
+        assert 'nuclear baseline' not in model_progress([dict(row,baseline_rwp=baseline)])
+
+
+def test_progress_only_compares_the_selected_leader_to_its_own_baseline():
+    leader=dict(protocol='cold',candidate='a',name='A',kind='magnetic',execution_state='terminal',
+                native_verified=True,has_view=True,rwp=12.,status='valid',baseline_rwp=33.)
+    other=dict(leader,candidate='b',name='B',rwp=11.,status='optimization_unresolved',baseline_rwp=20.)
+    text=model_progress([leader,other])
+    assert 'A · Rwp 12.000%' in text and 'nuclear baseline 33.000%' in text
+    assert 'change -21.000' in text and 'baseline 20.000' not in text
 
 
 def test_failed_model_progress_does_not_look_like_a_waiting_first_fit():

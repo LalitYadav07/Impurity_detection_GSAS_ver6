@@ -648,8 +648,12 @@ def model_progress(rows):
     leader=min(qualified or fits,key=lambda r:r['rwp']) if fits else None
     text=f'{complete} / {len(models)} scan/model embeddings processed · {evaluated} with checked native fits'
     if leader:
-        label='Best qualified' if qualified else 'Best audited, needs review'
+        label='Lowest Rwp passing fit checks' if qualified else 'Lowest checked Rwp, needs review'
         text+=f" · {label}: {leader['name']} · Rwp {leader['rwp']:.3f}%"
+        baseline=leader.get('baseline_rwp')
+        if (leader.get('kind')=='magnetic' and type(baseline) in (int,float)
+                and np.isfinite(baseline) and baseline>=0):
+            text+=f" · nuclear baseline {baseline:.3f}% (change {leader['rwp']-baseline:+.3f} percentage points)"
     elif complete:
         text+=' · No checked fit returned from the processed models; inspect their failure or review reasons'
     else:
