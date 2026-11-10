@@ -38,6 +38,23 @@ def implementation_signature():
     return package_signature()
 
 
+def _planning_history_label(row, identifier):
+    """Recover only our bounded bundle label, not another tool's filename policy."""
+    name=row.get('name');display=row.get('display_name')
+    fallback=identifier
+    for value in (display,name):
+        if isinstance(value,str) and (label:=' '.join(value[:512].split())[:256]):
+            fallback=label;break
+    match=(re.fullmatch(r'RADAR-PD Planner bundle ([^\x00-\x1f\x7f]{1,100}) [0-9a-f]{64} \| plan\.zip',name)
+           if isinstance(name,str) and len(name)<=256 else None)
+    if not match or not match[1].strip():return fallback
+    updated=row.get('update_time')
+    timestamp=(updated[:16].replace('T',' ') if isinstance(updated,str) and len(updated)<=64
+               and re.fullmatch(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}',updated[:16]) else '')
+    suffix=' · '.join(value for value in (timestamp,identifier[:8]) if value)
+    return match[1].strip()+' · '+suffix
+
+
 class PlanningStorageMixin:
     def _planning_schedule(self, coroutine, name):
         # Progress callbacks run in worker threads; only this loop owns Trame
@@ -173,7 +190,7 @@ class PlanningStorageMixin:
             for row in page:
                 identifier=str(row['id'])
                 if not re.fullmatch('[A-Za-z0-9_-]{1,128}',identifier):continue
-                rows.append(dict(title='Galaxy · '+row.get('display_name',row.get('name',identifier)),value='history:'+identifier));ids.add(identifier)
+                rows.append(dict(title='Galaxy · '+_planning_history_label(row,identifier),value='history:'+identifier));ids.add(identifier)
             if len(page)<200:break
         self._planning_history_ids=ids;self._planning_history_options=rows;self._planning_saved_list()
 

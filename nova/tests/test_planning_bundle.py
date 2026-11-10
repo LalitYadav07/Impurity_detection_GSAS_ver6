@@ -13,6 +13,7 @@ import pytest
 
 from radar_pd_nova import planning_bundle as bundle
 from radar_pd_nova.planning_controller import PlanningMixin
+from radar_pd_nova.planning_storage import _planning_history_label
 from test_model_runtime import Service
 
 
@@ -93,6 +94,40 @@ def test_other_history_cannot_restore_even_an_accessible_copied_bundle(tmp_path)
     fresh,t=planner(tmp_path/'other',service);fresh.refresh_planning_plans()
     t.plan_saved_id=selected;fresh.restore_planning_plan()
     assert 'another History' in t.plan_error and not t.plan_current
+
+
+def test_history_selector_distinguishes_named_plans_with_same_archive_filename(tmp_path,monkeypatch):
+    service=History(tmp_path);service.output_root=tmp_path
+    instance,s=planner(tmp_path,service)
+    names=['Silicon shape · NDIP acceptance','Silicon counts · NDIP acceptance']
+    rows=[{'id':identifier,'name':'RADAR-PD Planner bundle '+name+' '+'a'*64+' | plan.zip',
+           'display_name':'plan.zip · 2026-11-10 06:35 · '+identifier[:8],
+           'update_time':'2026-11-10T06:35:24.000000'}
+          for identifier,name in zip(['6a00c9f0aa11bb22','d2203311aa11bb22'],names)]
+    monkeypatch.setattr(service,'search_history_datasets',lambda **kwargs:rows)
+    instance.refresh_planning_plans()
+    assert not s.plan_error
+    titles={row['value']:row['title'] for row in s.plan_saved_options}
+    for row,name in zip(rows,names):
+        assert titles['history:'+row['id']]=='Galaxy · '+name+' · 2026-11-10 06:35 · '+row['id'][:8]
+    assert instance._planning_history_ids=={row['id'] for row in rows}
+
+
+@pytest.mark.parametrize('name', ['RADAR-PD Planner bundle | plan.zip',
+    'RADAR-PD Planner bundle Legacy experiment | plan.zip',
+    'RADAR-PD Planner bundle Bad hash nope | plan.zip',
+    'RADAR-PD Planner bundle '+'x'*101+' '+'a'*64+' | plan.zip',
+    'RADAR-PD Planner bundle Split\nname '+'a'*64+' | plan.zip',None,{},42])
+def test_history_label_uses_legacy_display_fallback_for_unrecognized_metadata(name):
+    row={'name':name,'display_name':'plan.zip · 2026-11-10 06:35 · 6a00c9f0'}
+    assert _planning_history_label(row,'6a00c9f0aa11bb22')==row['display_name']
+
+
+def test_history_label_handles_missing_or_malformed_display_metadata():
+    name='RADAR-PD Planner bundle Named experiment '+'a'*64+' | plan.zip'
+    assert _planning_history_label({'name':name,'display_name':{},'update_time':{}},'6a00c9f0aa11bb22')=='Named experiment · 6a00c9f0'
+    assert _planning_history_label({'name':None,'display_name':None},'6a00c9f0aa11bb22')=='6a00c9f0aa11bb22'
+    assert len(_planning_history_label({'name':{},'display_name':'x'*10000},'6a00c9f0aa11bb22'))==256
 
 
 @pytest.mark.parametrize('name',['../outside.cif','/absolute.cif','C:\\outside.cif','inputs/../outside.cif'])

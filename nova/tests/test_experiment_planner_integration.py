@@ -178,3 +178,84 @@ def test_cancelled_discovery_cannot_publish_a_parent(tmp_path,monkeypatch):
     monkeypatch.setattr(app,'_planning_execute',execute)
     asyncio.run(app._ensure_planning_parent(app._planning_generation,event))
     assert app._planning_parent_output is None
+
+
+def discovery_planner(tmp_path,monkeypatch):
+    app,s=planner(tmp_path)
+    app._planning_parent_output=tmp_path/'parent'/'simulation'
+    parent={'type':'nuclear','setting_sha256':'parent-setting','atoms':[{'label':'Er1','type':'Er'}]}
+    async def ensure(*_):pass
+    def native(operation,request,directory):
+        directory.mkdir(parents=True,exist_ok=True)
+        if operation=='context':
+            return {'phases':[parent],'magnetic_form_factors':{'Er1':['Er+3']}}
+        assert operation=='export-parent'
+        return {'cif':'data_synthetic_test'}
+    monkeypatch.setattr(app,'_ensure_planning_parent',ensure)
+    monkeypatch.setattr(app,'_planning_parent_receipt',lambda:{})
+    monkeypatch.setattr(app,'_planning_parent_request',lambda receipt:{})
+    monkeypatch.setattr(app,'_planning_native',native)
+    app._refinement_schedule=lambda task,name:asyncio.run(task)
+    return app,s,parent
+
+
+@pytest.mark.parametrize('kind', ['magnetic','structural'])
+@pytest.mark.parametrize('has_candidates', [False,True])
+def test_discovery_replaces_in_progress_message_only_after_success(tmp_path,monkeypatch,kind,has_candidates):
+    app,s,_=discovery_planner(tmp_path,monkeypatch)
+    candidates=([{'id':'candidate-one','magnetic_space_group':'P 1','irrep':'GM1'}]
+                if has_candidates else [])
+    def discover(*args,**kwargs):
+        assert s.plan_busy
+        assert ('Finding magnetic subgroups' if kind=='magnetic' else 'Discovering and constructing structural candidates') in s.plan_message
+        return {'candidates':candidates,'k':['0','0','0'],
+                'coverage':{'discovered_count':len(candidates),'constructed_count':len(candidates)}}
+    target=('gpx_recipe.symmetry.discovery.discover_magnetic' if kind=='magnetic'
+            else 'gpx_recipe.symmetry.isodistort_discovery.discover_structural')
+    monkeypatch.setattr(target,discover)
+    getattr(app,'discover_planning_'+kind+'_groups')()
+    assert not s.plan_error and not s.plan_busy
+    if has_candidates:
+        assert s.plan_message.startswith('Magnetic subgroups ready.' if kind=='magnetic' else 'Structural candidates ready.')
+    else:
+        assert ('No subgroups were returned' if kind=='magnetic' else 'No child structures were constructed') in s.plan_message
+    assert ('1' if has_candidates else '0') in getattr(s,'plan_'+kind+'_message')
+
+
+@pytest.mark.parametrize('kind', ['magnetic','structural'])
+def test_failed_discovery_keeps_error_without_claiming_ready(tmp_path,monkeypatch,kind):
+    app,s,_=discovery_planner(tmp_path,monkeypatch)
+    def discover(*args,**kwargs):raise ValueError('Discovery service unavailable')
+    target=('gpx_recipe.symmetry.discovery.discover_magnetic' if kind=='magnetic'
+            else 'gpx_recipe.symmetry.isodistort_discovery.discover_structural')
+    monkeypatch.setattr(target,discover)
+    getattr(app,'discover_planning_'+kind+'_groups')()
+    assert s.plan_error=='Discovery service unavailable' and not s.plan_busy
+    assert 'ready' not in s.plan_message and 'complete' not in s.plan_message
+
+
+def test_magnetic_preparation_finishes_with_ready_controls(tmp_path,monkeypatch):
+    app,s,parent=discovery_planner(tmp_path,monkeypatch)
+    app._planning_catalog=({'candidates':[{'id':'candidate-one'}],'k':['0','0','0']},parent,{},tmp_path)
+    s.plan_candidate='candidate-one';s.plan_sites=['Er1'];s.plan_form_factors='{"Er1":"Er+3"}'
+    parameter={'name':'moment','symbol':'q1','label':'Mx (μB)','description':'Independent moment'}
+    controls={'parameters':[parameter],'sites':[{'label':'Er1','offset':[0,0,0],
+        'basis':[[1],[0],[0]],'metric':[[1,0,0],[0,1,0],[0,0,1]]}]}
+    def native(operation,request,directory):
+        assert operation=='prepare' and s.plan_busy
+        return {'parameters':[{'name':'moment','value':0.}],
+                'coordinate_convention':'Native child axes','controls':controls}
+    monkeypatch.setattr(app,'_planning_native',native)
+    app.prepare_planning_magnetic_moments()
+    assert not s.plan_error and not s.plan_busy
+    assert s.plan_message=='Magnetic controls ready. Enter moment values and simulate.'
+    assert len(s.plan_parameter_rows)==1 and len(s.plan_moment_sites)==1
+
+
+@pytest.mark.parametrize('message,error', [('Simulation ready. Select an exposure.',''),
+                                         ('Reading structure.','Invalid structure')])
+def test_finishing_job_preserves_operation_result_or_error(tmp_path,message,error):
+    app,s=planner(tmp_path);event=threading.Event();app._planning_cancel=event
+    s.plan_busy=True;s.plan_message=message;s.plan_error=error
+    app._planning_finish_job(event)
+    assert not s.plan_busy and (s.plan_message,s.plan_error)==(message,error)

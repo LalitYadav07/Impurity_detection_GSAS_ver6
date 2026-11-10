@@ -574,6 +574,8 @@ class PlanningMixin(PlanningStorageMixin):
                 self._planning_site_rows()
                 s.plan_magnetic_message=f"{len(catalog['candidates'])} subgroup embeddings returned for the supplied parent and k. Select sites and a subgroup to prepare its allowed moments."
                 (root/'catalog.json').write_text(json.dumps(catalog,indent=2)+'\n')
+                s.plan_message=('Magnetic subgroups ready. Select a subgroup and sites to prepare allowed moments.'
+                    if catalog['candidates'] else 'Magnetic subgroup search complete. No subgroups were returned for this parent and k.')
             except Exception as exc:
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:
@@ -606,6 +608,7 @@ class PlanningMixin(PlanningStorageMixin):
                 self._planning_parameter_rows('magnetic',{p['name']:p['value'] for p in prepared['parameters']})
                 s.plan_coordinate_note=prepared['coordinate_convention']
                 s.plan_magnetic_message=f"{len(prepared['controls']['sites'])} magnetic sites · {len(prepared['parameters'])} independent moment parameters. Enter moments below; linked components update automatically."
+                s.plan_message='Magnetic controls ready. Enter moment values and simulate.'
             except Exception as exc:
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:
@@ -662,6 +665,8 @@ class PlanningMixin(PlanningStorageMixin):
                 s.plan_structural_candidates=[{'title':label(c),'value':c['id']} for c in catalog['candidates']]
                 c=catalog['coverage']
                 s.plan_structural_message=f"{c['discovered_count']} order-parameter directions discovered; {c['constructed_count']} constructed in the highest-symmetry-per-irrep tier. Deferred and failed branches remain in the catalog."
+                s.plan_message=('Structural candidates ready. Select a child structure to prepare its displacement modes.'
+                    if catalog['candidates'] else 'Structural discovery complete. No child structures were constructed for this parent and k.')
             except Exception as exc:
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:
