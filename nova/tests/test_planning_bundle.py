@@ -457,3 +457,79 @@ def test_structural_restore_binds_added_removed_and_changed_cell_overrides(tmp_p
     assert not instance._planning_matches_original(original,tmp_path)
     original['prepared_structural'].pop('requested_cell')
     assert not instance._planning_matches_original(original,tmp_path)
+
+
+@pytest.mark.parametrize('count,expected', [
+    (0, 'No saved plans found in Galaxy History.'),
+    (1, 'Found 1 saved plan in Galaxy History.'),
+    (3, 'Found 3 saved plans in Galaxy History.'),
+])
+def test_refresh_publishes_terminal_status_after_worker_and_guards_duplicate_clicks(tmp_path, count, expected):
+    async def check():
+        owner=threading.get_ident()
+        service=History(tmp_path);service.output_root=tmp_path
+        instance,s,tasks,frames,commits,_=connected_planner(tmp_path,service)
+        s.plan_message='Existing simulation status';s.flush()
+        await asyncio.sleep(.01);frames.clear();commits.clear()
+        entered=threading.Event();release=threading.Event();calls=[];callbacks=[]
+        rows=[dict(id='saved'+str(index),name='Saved plan '+str(index)) for index in range(count)]
+        def search(**kwargs):
+            calls.append((threading.get_ident(),kwargs));entered.set()
+            assert release.wait(5), 'The test must release its bounded worker'
+            return rows
+        service.search_history_datasets=search
+        @s.change('plan_save_message','plan_saved_options')
+        def changed(**_):callbacks.append(threading.get_ident())
+        instance.refresh_planning_plans()
+        try:
+            assert await asyncio.to_thread(entered.wait,2)
+            assert s.plan_busy and not s.plan_can_cancel
+            assert s.plan_save_message=='Reading saved plans from Galaxy History…'
+            instance.refresh_planning_plans()
+            assert len(tasks)==1 and len(calls)==1
+        finally:release.set()
+        await asyncio.wait_for(tasks[-1],2);await asyncio.sleep(.01)
+        assert not s.plan_error and not s.plan_busy and not s.plan_can_cancel
+        assert s.plan_save_message==expected
+        assert s.plan_message=='Existing simulation status'
+        assert {row['value'] for row in s.plan_saved_options}=={'history:'+row['id'] for row in rows}
+        assert all(thread!=owner for thread,_ in calls)
+        assert callbacks and all(thread==owner for thread in callbacks)
+        assert commits and all(thread==owner for thread,_ in commits)
+        messages=[data['plan_save_message'] for _,topic,data in frames
+                  if 'trame.state.topic' in topic and 'plan_save_message' in data]
+        assert messages==['Reading saved plans from Galaxy History…',expected]
+        published={key:value for _,topic,data in frames if 'trame.state.topic' in topic for key,value in data.items()}
+        assert published['plan_busy'] is False
+        if count:assert published['plan_saved_options']==s.plan_saved_options
+    asyncio.run(check())
+
+
+def test_failed_refresh_keeps_existing_choices_and_publishes_error_without_success(tmp_path):
+    async def check():
+        service=History(tmp_path);service.output_root=tmp_path
+        instance,s,tasks,frames,_,_=connected_planner(tmp_path,service)
+        previous=[dict(title='Previously found plan',value='history:existing')]
+        s.plan_saved_options=previous;s.plan_saved_id='history:existing';s.flush()
+        await asyncio.sleep(.01);frames.clear()
+        def fail(**_):raise TimeoutError('History search timed out')
+        service.search_history_datasets=fail
+        instance.refresh_planning_plans();await asyncio.wait_for(tasks[-1],2)
+        await asyncio.sleep(.01)
+        assert s.plan_error=='History search timed out'
+        assert s.plan_save_message=='Saved-plan refresh failed.'
+        assert not s.plan_busy and not s.plan_can_cancel
+        assert s.plan_saved_options==previous and s.plan_saved_id=='history:existing'
+        published={key:value for _,topic,data in frames if 'trame.state.topic' in topic for key,value in data.items()}
+        assert published['plan_error']==s.plan_error
+        assert published['plan_save_message']==s.plan_save_message
+    asyncio.run(check())
+
+
+def test_unavailable_history_does_not_claim_an_empty_successful_search(tmp_path):
+    async def check():
+        instance,s,tasks,_,_,_=connected_planner(tmp_path)
+        instance.refresh_planning_plans();await asyncio.wait_for(tasks[-1],2)
+        assert not s.plan_error and not s.plan_busy and not s.plan_can_cancel
+        assert s.plan_save_message=='Galaxy History is unavailable in this session.'
+    asyncio.run(check())

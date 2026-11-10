@@ -276,9 +276,17 @@ class PlanningStorageMixin:
                 rows.append(dict(title='Galaxy · '+_planning_history_label(row,identifier),value='history:'+identifier));ids.add(identifier)
             if len(page)<200:break
         self._planning_history_ids=ids;self._planning_history_options=rows;self._planning_saved_list()
+        return len(rows)
 
     def refresh_planning_plans(self, **_):
-        self._planning_storage_action(self._planning_refresh_history,'Reading saved plans from Galaxy History…')
+        def completed(count):
+            if count is None:message='Galaxy History is unavailable in this session.'
+            elif not count:message='No saved plans found in Galaxy History.'
+            else:message=f'Found {count} saved plan'+('s' if count!=1 else '')+' in Galaxy History.'
+            self.server.state.plan_save_message=message
+        def failed():self.server.state.plan_save_message='Saved-plan refresh failed.'
+        self._planning_storage_action(self._planning_refresh_history,'Reading saved plans from Galaxy History…',
+            completed=completed,failed=failed)
 
     def _planning_read_history(self, identifier, *, expected=None):
         service=self._planning_history_service()
