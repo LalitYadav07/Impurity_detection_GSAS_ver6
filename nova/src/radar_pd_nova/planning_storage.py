@@ -5,6 +5,7 @@ import copy
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -54,6 +55,49 @@ def _planning_history_label(row, identifier):
                and re.fullmatch(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}',updated[:16]) else '')
     suffix=' · '.join(value for value in (timestamp,identifier[:8]) if value)
     return match[1].strip()+' · '+suffix
+
+
+def _planning_restore_settings(settings, declared_types):
+    """Normalize numeric text controls against their declared, stable schema."""
+    positive={'plan_mass','plan_radius','plan_packing','plan_beam_width','plan_beam_height',
+              'plan_current_ua','plan_power','plan_energy','plan_yield_ratio',
+              'plan_d_min','plan_d_max','plan_step'}
+    bounds={'plan_profile_bank':(1,100),'plan_seed':(0,2**32-1),
+            'plan_step_ui':(0,3),'plan_look':(0,23),'plan_packing':(0,1),
+            'plan_moment_multiplier':(0,10)}
+    optional_text=set()
+    for index in range(1,4):
+        bounds[f'plan_phase_{index}_percent']=(0,100)
+        size=f'plan_phase_{index}_size';strain=f'plan_phase_{index}_microstrain'
+        optional_text.update((size,strain));positive.add(size);bounds[strain]=(0,None)
+    normalized=copy.deepcopy(settings)
+    for key,value in settings.items():
+        kind=declared_types.get(key)
+        try:
+            numeric=kind in (int,float) or key=='plan_yield_ratio' or key in optional_text
+            if not numeric:
+                if kind is None or type(value) is not kind:raise ValueError('Unexpected setting type')
+                continue
+            if key=='plan_yield_ratio' and (value is None or type(value) is str and not value.strip()):
+                normalized[key]=None;continue
+            if key in optional_text and type(value) is str and not value.strip():
+                normalized[key]='';continue
+            if type(value) not in (int,float,str) or type(value) is str and len(value)>128:
+                raise ValueError('A bounded numeric value is required')
+            number=float(value)
+            if not math.isfinite(number) or key in positive and number<=0:
+                raise ValueError('A finite numeric value in range is required')
+            lower,upper=bounds.get(key,(None,None))
+            if lower is not None and number<lower or upper is not None and number>upper:
+                raise ValueError('Numeric value is out of range')
+            if kind is int:
+                if not number.is_integer():raise ValueError('An integer is required')
+                normalized[key]=int(number)
+            elif key in optional_text:normalized[key]=str(value).strip()
+            else:normalized[key]=number
+        except (ValueError,TypeError,OverflowError) as exc:
+            raise ValueError('Invalid saved planner setting: '+key) from exc
+    return normalized
 
 
 class PlanningStorageMixin:
@@ -279,22 +323,13 @@ class PlanningStorageMixin:
         bundle.validate(document,files)
         allowed=set(FIELDS)|set(EXTRA_FIELDS)
         if set(document['settings'])-allowed or set(document['backend'])-set(BACKEND_FIELDS):raise ValueError('Unknown saved planner fields')
-        for key,value in document['settings'].items():
-            current=getattr(s,key)
-            if isinstance(current,bool):valid=isinstance(value,bool)
-            elif isinstance(current,str):valid=isinstance(value,str)
-            elif isinstance(current,list):valid=isinstance(value,list)
-            elif isinstance(current,dict):valid=isinstance(value,dict)
-            elif current is None or isinstance(current,(int,float)):valid=value is None or type(value) in (str,int,float)
-            else:valid=False
-            if not valid:raise ValueError('Invalid saved planner setting: '+key)
+        settings=_planning_restore_settings(document['settings'],self._planning_setting_types)
         for key in FILE_FIELDS:
             value=document['settings'].get(key)
             if value and (not isinstance(value,str) or value not in files or not value.startswith('inputs/'+key+'/')):
                 raise ValueError('A saved input is not part of this plan')
         root=self._planning_root()/'restored'/uuid.uuid4().hex
         bundle.write_directory(root,document,files)
-        settings=copy.deepcopy(document['settings'])
         owned={}
         for key in FILE_FIELDS:
             if settings.get(key):

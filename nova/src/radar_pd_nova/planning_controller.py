@@ -90,6 +90,9 @@ class PlanningMixin(PlanningStorageMixin):
         for index in range(1,4):
             for field,value in (('cif',''),('percent',0.),('size',''),('microstrain','')):
                 defaults[f'plan_phase_{index}_{field}']=value
+        # Browser text controls can change a live value's Python type. Saved
+        # settings are validated against these declarations, never that edit.
+        self._planning_setting_types={key:type(value) for key,value in defaults.items()}
         for key, value in defaults.items(): setattr(s,key,value)
         self._planning_profiles=profiles()
         s.plan_cycles=[{'title':cycle_label(cycle),'value':cycle,

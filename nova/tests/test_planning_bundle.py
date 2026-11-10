@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 
 from radar_pd_nova import planning_bundle as bundle
-from radar_pd_nova.planning_controller import PlanningMixin
-from radar_pd_nova.planning_storage import _planning_history_label
+from radar_pd_nova.planning_controller import FIELDS,PlanningMixin
+from radar_pd_nova.planning_storage import EXTRA_FIELDS,_planning_history_label,_planning_restore_settings
 from test_model_runtime import Service
 
 
@@ -272,6 +272,76 @@ def test_failed_owner_delivery_propagates_timeout_and_invalidates_export(tmp_pat
         with pytest.raises(TimeoutError,match='Download delivery failed'):
             await asyncio.wait_for(asyncio.to_thread(instance._planning_on_owner,lambda:fail()),2)
     asyncio.run(check())
+
+
+@pytest.mark.parametrize('legacy_strings',[False,True])
+def test_real_trame_numeric_text_edits_restore_using_declared_types(tmp_path,legacy_strings):
+    service=History(tmp_path);service.output_root=tmp_path/'original'
+    original,source=planner(tmp_path/'original',service);result(original)
+    source.plan_mass=3.25
+    if legacy_strings:source.plan_step='0.0004';source.plan_seed='42'
+    original.save_planning_plan();selected=source.plan_saved_id
+    async def check():
+        service.output_root=tmp_path/'fresh'
+        instance,s,tasks,_,_,_=connected_planner(tmp_path/'fresh',service)
+        instance._planning_history_ids={selected.removeprefix('history:')}
+        s.plan_step=.0001 if legacy_strings else '0.0001'
+        s.plan_seed=45
+        s.plan_saved_id=selected;s.flush()
+        assert not s.plan_current
+        instance.restore_planning_plan();await tasks[-1]
+        assert not s.plan_error and s.plan_current and s.plan_result_ready
+        assert s.plan_step==.0004 and type(s.plan_step) is float
+        assert s.plan_seed==42 and type(s.plan_seed) is int
+        assert s.plan_mass==3.25 and type(s.plan_mass) is float
+        assert instance._planning_setting_types['plan_step'] is float
+        assert instance._planning_request()['relative_step']==.0004
+        assert s.plan_save_message.startswith('Opened ')
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('key,value,expected',[
+    ('plan_step','0.0001',.0001),('plan_seed','45',45),('plan_profile_bank','2',2),
+    ('plan_step_ui','3',3),('plan_look','23',23),('plan_mass','2.2',2.2),
+    ('plan_radius','0.295',.295),('plan_packing','1',1.),('plan_beam_width','0.59',.59),
+    ('plan_beam_height','4',4.),('plan_current_ua','1500',1500.),('plan_power','1.4',1.4),
+    ('plan_energy','1.3',1.3),('plan_yield_ratio','0.6',.6),('plan_yield_ratio','',None),
+    ('plan_moment_multiplier','0',0.),('plan_phase_1_percent','100',100.),
+    ('plan_phase_2_size',1.5,'1.5'),('plan_phase_3_microstrain',0,'0'),
+    ('plan_phase_1_size','',''),('plan_phase_2_microstrain','',''),
+])
+def test_declared_numeric_controls_accept_only_their_numeric_text_schema(tmp_path,key,value,expected):
+    instance,_=planner(tmp_path)
+    normalized=_planning_restore_settings({key:value},instance._planning_setting_types)
+    assert normalized[key]==expected and type(normalized[key]) is type(expected)
+
+
+@pytest.mark.parametrize('key,value',[
+    ('plan_step',True),('plan_seed',False),('plan_phase_1_percent',True),
+    ('plan_step','nan'),('plan_mass','inf'),('plan_step',float('-inf')),('plan_step','1'*129),
+    ('plan_step',0),('plan_radius',-1),('plan_packing',0),('plan_packing',1.1),
+    ('plan_seed',-1),('plan_seed',2**32),('plan_seed',3.5),
+    ('plan_profile_bank',0),('plan_profile_bank',101),('plan_profile_bank','1.5'),
+    ('plan_step_ui',4),('plan_look',24),('plan_moment_multiplier',11),
+    ('plan_phase_1_percent',101),('plan_phase_2_percent',-1),
+    ('plan_phase_1_size',0),('plan_phase_1_microstrain',-1),('plan_yield_ratio',False),
+    ('plan_configuration',123),('plan_sites','Er1'),('plan_current',1),
+])
+def test_declared_setting_schema_rejects_invalid_numeric_and_generic_values(tmp_path,key,value):
+    instance,_=planner(tmp_path)
+    with pytest.raises(ValueError,match='Invalid saved planner setting: '+key):
+        _planning_restore_settings({key:value},instance._planning_setting_types)
+
+
+def test_every_saved_field_has_a_declared_type_and_bad_numeric_input_is_atomic(tmp_path):
+    instance,s=planner(tmp_path/'original');document,files=instance._planning_build_bundle()
+    assert set(FIELDS)|set(EXTRA_FIELDS)<=instance._planning_setting_types.keys()
+    document['settings']['plan_step']='nan'
+    fresh,target=planner(tmp_path/'fresh');target.plan_mass=2.2
+    before=target.plan_cif
+    with pytest.raises(ValueError,match='Invalid saved planner setting: plan_step'):
+        fresh._planning_apply_bundle(document,files)
+    assert target.plan_mass==2.2 and target.plan_cif==before
 
 
 @pytest.mark.parametrize('name',['../outside.cif','/absolute.cif','C:\\outside.cif','inputs/../outside.cif'])
