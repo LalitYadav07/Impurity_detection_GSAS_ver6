@@ -134,7 +134,10 @@ def _work(action,source,assets,request_file,directory,archive,*,asset_parts=()):
                 target.parent.mkdir(exist_ok=True);shutil.copyfile(confined(trial,relative),target)
         elif action in {'native','admission'}:
             root=directory/'native';root.mkdir()
-            result,root=native(request,inputs,root,cancel,admission=action=='admission')
+            if action=='admission':
+                result,root=native(request,inputs,root,cancel,admission=True)
+            else:
+                result,root=native(request,inputs,root,cancel)
             if action=='admission':
                 files=[root/'native-response.json']
             elif request['operation'].startswith('preparation-') or request['operation'] in STRUCTURAL_SNAPSHOT_OPERATIONS:
