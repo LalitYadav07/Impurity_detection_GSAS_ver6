@@ -142,19 +142,24 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         return UtilityActionRecord(uid='model-'+key,tool_id=self.tool_id,name='Recovered model '+key,
             galaxy_job_id=str(job['id']),status=normalize_status(job.get('state')),outputs=self.service._job_output_ids(job))
 
+    def available_capacity(self):
+        """One bounded read of this producer's current History queue."""
+        import requests
+        response=requests.get(self.service.galaxy_url+'/api/jobs',headers=self.service._headers,
+            params={'history_id':self.service.history_id,'tool_id':self.tool_id,
+                'state':['new','waiting','queued','running','resubmitted','paused'],'limit':self.max_active_jobs},
+            timeout=30,allow_redirects=False)
+        response.raise_for_status();jobs=response.json()
+        if not isinstance(jobs,list) or len(jobs)>self.max_active_jobs:
+            raise RuntimeUnavailable('Galaxy did not report the model resource queue')
+        return self.max_active_jobs-len(jobs)
+
     def wait_capacity(self,cancel=None):
         """A bounded per-History queue; Galaxy still owns site-wide admission."""
-        import requests
         started=time.monotonic()
         while True:
             if cancel and cancel.is_set():raise RuntimeUnavailable('Model submission paused before dispatch')
-            response=requests.get(self.service.galaxy_url+'/api/jobs',headers=self.service._headers,
-                params={'history_id':self.service.history_id,'tool_id':self.tool_id,
-                    'state':['new','waiting','queued','running','resubmitted','paused'],'limit':self.max_active_jobs},timeout=30)
-            response.raise_for_status()
-            jobs=response.json()
-            if not isinstance(jobs,list):raise RuntimeUnavailable('Galaxy did not report the model resource queue')
-            if len(jobs)<self.max_active_jobs:return
+            if self.available_capacity():return
             if time.monotonic()-started>self.timeout:raise RuntimeUnavailable('Waiting for the existing model job to release its resource slot')
             if cancel:cancel.wait(self.poll_seconds)
             else:time.sleep(self.poll_seconds)

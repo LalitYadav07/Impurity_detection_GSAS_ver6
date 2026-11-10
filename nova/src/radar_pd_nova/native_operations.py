@@ -24,15 +24,26 @@ from .models import UtilityActionRecord, RunStatus
 from .refinement_runtime import RuntimeUnavailable
 
 SCHEMA = 'radar-model-native-handle/v1'
+BOUND_SCHEMA = 'radar-model-native-handle/v2'
 
 
 def validate_handle(runtime, value):
+    selector=getattr(runtime,'native_runtime_for_handle',None)
+    if selector is not None:runtime=selector(value)
     fields = {'schema','history_id','key','source','request','asset_id','job','submission_started','identity'}
-    if (not isinstance(value, dict) or set(value) != fields or value['schema'] != SCHEMA
+    bound=isinstance(value,dict) and value.get('schema')==BOUND_SCHEMA
+    if bound:fields.add('tool_id')
+    if (not isinstance(value, dict) or set(value) != fields or not isinstance(value['schema'],str)
+            or value['schema'] not in {SCHEMA,BOUND_SCHEMA}
             or value['history_id'] != runtime.service.history_id
             or not isinstance(value['key'], str) or not re.fullmatch('[a-f0-9]{24}', value['key'])
             or type(value['submission_started']) is not bool):
         raise ValueError('Native operation handle belongs to another workspace or schema')
+    if bound and (value['tool_id']!=runtime.tool_id
+            or value['tool_id']!=getattr(runtime,'native_handle_tool_id',None)):
+        raise ValueError('Native operation handle changed its captured training tool')
+    if not bound and getattr(runtime,'native_handle_tool_id',None) is not None:
+        raise ValueError('Legacy native handles must retain their original CPU producer')
     source, request = value['source'], value['request']
     if (not isinstance(source, dict) or set(source)-{'id','source_sha256','dataset_id','record_uid'}
             or not {'id','source_sha256','dataset_id'} <= set(source)
@@ -54,7 +65,12 @@ def validate_handle(runtime, value):
         raise ValueError('Native handle contains an invalid scientific request')
     validate_native_payload(request.get('operation'), request.get('payload'))
     validate_native_timeout(request['operation'],request['timeout'])
-    identity = digest(dict(history_id=value['history_id'], source=source, request=request))
+    context=dict(history_id=value['history_id'],source=source,request=request)
+    if bound:
+        if request['operation']!='preparation-structural-training':
+            raise ValueError('A bound training handle cannot name another operation')
+        context['tool_id']=value['tool_id']
+    identity = digest(context)
     if identity != value['identity'] or len(json.dumps(value, allow_nan=False)) > 8*1024*1024:
         raise ValueError('Native operation handle changed or exceeds its metadata budget')
     if value['asset_id'] is not None:
@@ -88,6 +104,8 @@ def intent_lock(path):
 
 def capture(runtime, operation, payload, root, source, timeout, preparation_attempt=None):
     """Use the same confined packet and request rules for all native clients."""
+    selector=getattr(runtime,'native_runtime_for_operation',None)
+    if selector is not None:runtime=selector(operation)
     from .model_runtime import EMPTY_PACKET_NAME, EMPTY_PACKET_SHA256
     validate_native_payload(operation, payload)
     root=Path(root).resolve();root.mkdir(parents=True, exist_ok=True)
@@ -164,7 +182,12 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     if all(Path(p).suffix.lower()=='.gpx' and sha==source['source_sha256']
            for p,sha in request['input_hashes'].items()):
         request['input_hashes'][EMPTY_PACKET_NAME]=EMPTY_PACKET_SHA256
-    key=digest([runtime.service.history_id,source['id'],request])[:24]
+    producer=getattr(runtime,'native_handle_tool_id',None)
+    if producer is not None and operation!='preparation-structural-training':
+        raise ValueError('The GPU training runtime accepts only structural training')
+    dispatch=[runtime.service.history_id,source['id'],request]
+    if producer is not None:dispatch.append(producer)
+    key=digest(dispatch)[:24]
     if preparation_attempt is not None:
         from .model_preparation_retry import inspection_request, validate_attempt
         if operation!='inspect' or request!=inspection_request(source):
@@ -175,9 +198,12 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     descriptor={k:source[k] for k in ('id','source_sha256')}
     descriptor['dataset_id']=str(runtime.dataset_id(source))
     if source.get('record_uid'):descriptor['record_uid']=source['record_uid']
-    handle=dict(schema=SCHEMA, history_id=runtime.service.history_id,key=key,source=descriptor,
+    context=dict(history_id=runtime.service.history_id,source=descriptor,request=request)
+    if producer is not None:context['tool_id']=producer
+    handle=dict(schema=BOUND_SCHEMA if producer is not None else SCHEMA, history_id=runtime.service.history_id,key=key,source=descriptor,
         request=request,asset_id=None,job=None,submission_started=False,
-        identity=digest(dict(history_id=runtime.service.history_id,source=descriptor,request=request)))
+        identity=digest(context))
+    if producer is not None:handle['tool_id']=producer
     return validate_handle(runtime, handle), files
 
 
@@ -238,6 +264,8 @@ def submit(runtime, operation, payload, root, *, source, timeout=120, cancel=Non
 
 
 def recover_job(runtime, handle):
+    selector=getattr(runtime,'native_runtime_for_handle',None)
+    if selector is not None:runtime=selector(handle)
     validate_handle(runtime,handle)
     job=UtilityActionRecord.model_validate(handle['job']) if handle['job'] else None
     if job is None:

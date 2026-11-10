@@ -148,8 +148,10 @@ class PreparationQueue:
                 if path.exists():job['handle']=validate_handle(self.runtime,json.loads(path.read_text()))
             except (OSError,ValueError):pass
             uncertain=bool(job['handle'] and job['handle']['submission_started'])
+            from .preparation_training_runtime import TrainingCapacityPending
             job.update(phase='needs_recovery' if uncertain else 'awaiting_submission',
                 reason=('Recovering the existing Galaxy dispatch; no duplicate will be submitted.' if uncertain
+                    else str(exc) if isinstance(exc,TrainingCapacityPending)
                     else 'Submission is waiting for inputs or its durable History checkpoint ('+type(exc).__name__+').'))
             self._save(state);return
         job.update(handle=handle,phase='submitted' if handle['job'] else 'needs_recovery',reason='')
@@ -308,6 +310,9 @@ class PreparationQueue:
                 if state['paused'] or self._paused.is_set():break
                 deferred=self._deferred(state)
                 pending=pending_entries(self.library,deferred=deferred)
+                ready=getattr(self.runtime,'preparation_operation_ready',None)
+                if ready is not None:
+                    pending=[i for i in pending if ready('preparation-'+self.library.row(i)['model']['kind'],state['jobs'],self.library)]
                 latest={identifier:job['outcomes'].get(identifier,{}) for job in state['jobs']
                     if job['phase']=='collected' for identifier in job['outcomes']}
                 interrupted=next((identifier for identifier in pending if identifier in deferred

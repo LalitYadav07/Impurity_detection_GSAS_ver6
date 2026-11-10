@@ -2198,7 +2198,9 @@ class GalaxyService:
         # Workflow-specific controls still bound their own queues. This final
         # admission point accounts for other RADAR-PD workflows sharing the
         # History and serializes the check+POST inside this viewer.
-        with gate.slot(tool_id, family_limit=gate.total_limit, cancel=cancel_event) if gate else nullcontext():
+        from .preparation_limits import CUDA_TRAINING_TOOL_ID
+        family_limit=1 if tool_id==CUDA_TRAINING_TOOL_ID else (gate.total_limit if gate else 1)
+        with gate.slot(tool_id, family_limit=family_limit, cancel=cancel_event) if gate else nullcontext():
             if cancel_event is not None and cancel_event.is_set():
                 from .native_job_admission import AdmissionUnavailable
                 raise AdmissionUnavailable('Scientific submission paused before dispatch')

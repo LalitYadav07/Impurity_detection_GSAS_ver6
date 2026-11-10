@@ -20,7 +20,7 @@ on:
         options: [models, preparation-cuda]
 
 concurrency:
-  group: publish-models-${{ github.ref }}
+  group: publish-models-${{ github.ref }}-${{ inputs.image_variant || 'models' }}
   cancel-in-progress: true
 
 jobs:
@@ -53,8 +53,10 @@ jobs:
           provenance: false
           sbom: false
           tags: ${{ env.IMAGE }}
-          cache-from: type=gha,scope=model-worker
-          cache-to: type=gha,scope=model-worker,mode=max
+          cache-from: |
+            type=gha,scope=model-worker
+            type=gha,scope=model-worker-${{ inputs.image_variant || 'models' }}
+          cache-to: type=gha,scope=model-worker-${{ inputs.image_variant || 'models' }},mode=max
       - name: Verify CUDA image and device-independent recovery contracts
         if: inputs.image_variant == 'preparation-cuda'
         run: |

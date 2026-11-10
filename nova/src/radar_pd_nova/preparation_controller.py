@@ -18,7 +18,8 @@ from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
 from gpx_recipe.structural_live.defaults import DEFAULT_CELL_RADIUS
 from .battery_preparation import checked_upload, capture_file
-from .model_runtime import GalaxyModelRuntime,identifier
+from .model_runtime import identifier
+from .preparation_training_runtime import PreparationRuntime
 from .preparation_discovery import PreparationDiscovery,k_vector,require_structural_coverage
 from .preparation_workspace import PreparationWorkspace
 from .preparation_limits import PREPARATION_JOBS
@@ -81,7 +82,7 @@ class PreparationMixin:
             base=Path(os.environ.get('RADAR_PD_PREPARATION_ROOT') or
                 Path(getattr(self.service,'output_root',None) or tempfile.gettempdir())/'experiment-preparation')
             root=base/digest([str(self.service.history_id or 'unconfigured')])[:16]
-            runtime=GalaxyModelRuntime(root/'runtime',self.service,max_active_jobs=PREPARATION_JOBS)
+            runtime=PreparationRuntime(root/'runtime',self.service,max_active_jobs=PREPARATION_JOBS)
             self._preparation_workspace=PreparationWorkspace(root,runtime)
         return self._preparation_workspace
 
