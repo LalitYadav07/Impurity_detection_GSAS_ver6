@@ -22,3 +22,11 @@ def test_dispatch_execution_and_retrieval_remain_distinct():
     assert all(r['elapsed']=='2m 00s' and r['starts']==2 for r in rows)
     chunks['ok']['complete']=True
     assert next(r for r in batch_rows(chunks) if r['job']=='ok')['state']=='Results checked'
+
+
+def test_reviewed_retry_does_not_claim_an_uncertain_attempt_was_never_submitted():
+    rows=batch_rows({'uncertain':dict(members=['a'],complete=True,not_dispatched=True,
+        explicit_retry={'reason':'No matching job in complete History lookup'}),
+        'unposted':dict(members=['b'],complete=True,not_dispatched=True)})
+    assert {r['batch']:r['state'] for r in rows}=={
+        'uncertai':'Superseded after reviewed retry','unposted':'Not submitted'}

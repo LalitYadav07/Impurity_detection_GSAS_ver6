@@ -19,7 +19,8 @@ def batch_rows(chunks,*,now=None):
     rows=[]
     for key,chunk in chunks.items():
         job=chunk.get('job') or {};status=job.get('status','')
-        if chunk.get('not_dispatched'):state='Not submitted'
+        if chunk.get('explicit_retry'):state='Superseded after reviewed retry'
+        elif chunk.get('not_dispatched'):state='Not submitted'
         elif chunk.get('complete'):state='Results checked'
         elif not job:state='Preparing submission'
         elif status=='ok':state='Retrieving and checking results'
