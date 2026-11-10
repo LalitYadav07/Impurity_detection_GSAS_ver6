@@ -128,11 +128,12 @@ jobs:
         shell: bash
         run: |
           docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
             -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
           python -m pip install --quiet pytest==8.4.2 &&
           cd /tmp &&
-          PYTHONPATH=/src/src:/validation-tests python -m pytest -q \
+          PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
             /validation-tests/test_live_assistant_language.py \
             /validation-tests/test_live_assistant.py \
             /validation-tests/test_live_assistant_integration.py \
@@ -147,7 +148,10 @@ jobs:
             /validation-tests/test_result_collection_recovery.py \
             /validation-tests/test_result_background_repair.py \
             /validation-tests/test_refinement_detail_owner.py \
-            /validation-tests/test_refinement_planner_payload.py'
+            /validation-tests/test_refinement_planner_payload.py \
+            /validation-tests/test_refinement_convergence_request.py \
+            /validation-tests/test_refinement_bound_labels.py \
+            /scientific-test-support/test_convergence_intent.py'
 
       - name: Verify candidate-library diagnostics and source ownership
         shell: bash
