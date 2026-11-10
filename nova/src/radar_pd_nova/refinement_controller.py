@@ -399,7 +399,7 @@ class RefinementMixin(GuidedRefinementMixin):
         self.server.state.change('rf_request')(self._refinement_request_changed)
         self.server.state.change('rf_setup_mode')(self._refinement_setup_changed)
         self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
-        self.server.state.change('rf_trend_stage','rf_trend_metric','rf_trend_axis','rf_trend_display')(self._refinement_trend_changed)
+        self.server.state.change('rf_trend_stage','rf_trend_metric','rf_trend_axis','rf_trend_display','rf_trend_temperature_span')(self._refinement_trend_changed)
         self.server.state.change('rf_recipe_filter')(self._refinement_recipe_filter_changed)
         self.server.state.change('rf_parallel_jobs')(self._refinement_parallel_changed)
 
@@ -411,7 +411,7 @@ class RefinementMixin(GuidedRefinementMixin):
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=2,
-            rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_stage='final',rf_trend_stage_options=[],rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',
+            rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_stage='final',rf_trend_stage_options=[],rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',rf_trend_temperature_span=True,
             rf_parameters=[],rf_parameter_search='',rf_parameter_notice='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
 
     def _refinement_schedule(self,coroutine,name):
@@ -1298,7 +1298,10 @@ class RefinementMixin(GuidedRefinementMixin):
             if s.rf_trend_metric not in options:s.rf_trend_metric='rwp'
             if s.rf_trend_metric in {'rwp','phase_fractions'}:s.rf_trend_display='absolute'
             if s.rf_trend_axis not in {v['value'] for v in s.rf_trend_axes}:s.rf_trend_axis='run_number'
-            figure=trend_figure(rows,metric=s.rf_trend_metric,x_key=s.rf_trend_axis,display=s.rf_trend_display)
+            figure=trend_figure(rows,metric=s.rf_trend_metric,x_key=s.rf_trend_axis,display=s.rf_trend_display,
+                show_temperature_span=getattr(s,'rf_trend_temperature_span',True))
+            if (figure.layout.meta or {}).get('temperature_spans'):
+                s.rf_trend_notice+=' Horizontal bars show the recorded within-scan temperature range, not a 1σ uncertainty.'
             references=(figure.layout.meta or {}).get('references',[])
             if references:
                 s.rf_trend_notice+=' Reference by group: '+'; '.join(row['description'] for row in references)+'. '

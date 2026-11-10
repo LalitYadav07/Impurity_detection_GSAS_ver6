@@ -131,6 +131,40 @@ def test_missing_acquisition_temperature_is_not_replaced_by_gpx_default_or_run_n
     assert list(fig.data[0].x)==[None,None]
 
 
+@pytest.mark.parametrize('metric', ['rwp', 'phase_fractions', 'cell|oxide|c'])
+def test_temperature_ranges_follow_each_scan_and_are_distinct_from_parameter_errors(metric):
+    records = rows()
+    for row in records:
+        row['final']['parameters'].append(dict(key='weight|oxide', kind='weight', phase='oxide', value=100.))
+    records[0]['source']['metadata']['temperature'] = dict(value=100., minimum=99., maximum=103., unit='K')
+    records[1]['source']['metadata']['temperature'] = dict(value=20., minimum=18., maximum=23., unit='C')
+    original = copy.deepcopy(records)
+    figure = trend_figure(records, metric=metric, x_key='temperature')
+    for trace in figure.data:
+        assert list(trace.x) == pytest.approx([100., 293.15])
+        assert list(trace.error_x.array) == pytest.approx([3., 3.])
+        assert list(trace.error_x.arrayminus) == pytest.approx([1., 2.])
+        assert trace.error_x.symmetric is False and trace.error_x.visible
+    assert figure.layout.meta['temperature_spans']
+    assert records == original
+    hidden = trend_figure(records, metric=metric, x_key='temperature', show_temperature_span=False)
+    assert all(not trace.error_x.visible for trace in hidden.data)
+    assert not hidden.layout.meta['temperature_spans']
+    run_axis = trend_figure(records, metric=metric)
+    assert all(not trace.error_x.visible for trace in run_axis.data)
+
+
+def test_display_mapping_does_not_borrow_an_unmapped_temperature_range():
+    records = rows()
+    records[0]['source']['metadata']['temperature'] = dict(value=100., minimum=95., maximum=105., unit='K')
+    records[0]['source']['axis_overrides'] = {'temperature': dict(value=20., unit='C', reviewed_mapping=True)}
+    records[1]['source']['metadata']['temperature'] = dict(value=100., minimum=101., maximum=103., unit='K')
+    figure = trend_figure(records, metric='cell|oxide|c', x_key='temperature')
+    assert list(figure.data[0].x) == pytest.approx([293.15, 100.])
+    assert not figure.data[0].error_x.visible
+    assert list(figure.data[0].error_x.array) == [None, None]
+
+
 def test_voltage_trend_uses_only_same_cell_evidence_and_keeps_coverage_visible():
     from radar_pd_nova.refinement_plots import refinement_axis_options
     from radar_pd_nova.refinement_controller import refinement_exposure_notice

@@ -229,6 +229,9 @@ def refinement_dashboard(app):
                     with html.Div(classes='rf-toolbar'):
                         select('Representation','rf_trend_display',"[{title:'Absolute values',value:'absolute'},{title:'Difference from first scan',value:'difference'},{title:'Relative cell change (%)',value:'relative'}]",disabled=("['rwp','phase_fractions'].includes(rf_trend_metric)",))
                         v.VBtn('Expand trend',click='rf_expanded = true',variant='text',size='small',prepend_icon='mdi-arrow-expand')
+                    v.VCheckbox(label='Show recorded temperature range on x (not 1σ)',
+                        v_model=('rf_trend_temperature_span',),v_if="rf_trend_axis === 'temperature'",
+                        density='compact',hide_details=True)
                     with html.Div(classes='rf-trend'):
                         fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_trend.data',);fig.layout=('rf_trend.layout',)
                     html.P('{{ rf_trend_notice }}',classes='rf-notice')

@@ -8,7 +8,7 @@ from html import escape
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from .results import experiment_axis_options, _experiment_axis
+from .results import experiment_axis_options, _experiment_axis, _display_metric_record
 from .refinement_messages import refinement_review_status
 from gpx_recipe.fit_domain import DOMAIN_SCHEMAS, NATIVE_FIT_CONVENTION, histogram_domain_schema, canonical_observations, fit_domain_digest
 
@@ -213,10 +213,32 @@ def _reference_caption(references):
     return '<br>'.join(lines),len(lines)
 
 
-def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
+def _temperature_span(scans, coordinates):
+    """Measured acquisition ranges, never a temperature standard uncertainty."""
+    minus, plus = [], []
+    for scan, coordinate in zip(scans, coordinates):
+        record = _display_metric_record(scan, 'temperature') or {}
+        if not isinstance(record, dict):
+            record = {}
+        unit = str(record.get('unit') or '').strip().lower()
+        low, high = record.get('minimum'), record.get('maximum')
+        valid = (unit in {'k', 'kelvin', 'c', '°c', 'degc', 'celsius'}
+                 and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                         and math.isfinite(v) for v in (coordinate, low, high)))
+        if valid:
+            offset = 273.15 if unit in {'c', '°c', 'degc', 'celsius'} else 0.
+            low, high = low + offset, high + offset
+            valid = low <= coordinate <= high
+        minus.append(coordinate - low if valid else None)
+        plus.append(high - coordinate if valid else None)
+    return dict(type='data', symmetric=False, array=plus, arrayminus=minus,
+                visible=any(v is not None for v in plus), color='#82918a', thickness=1, width=3)
+
+
+def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute',show_temperature_span=True):
     """Rows contain source metadata and native baseline/final views, never guessed conditions."""
     if not rows:return empty_figure('Completed refinements will populate this trend')
-    figure=go.Figure();groups={};changed_domain=False;fixed_inputs=False;references=[]
+    figure=go.Figure();groups={};changed_domain=False;fixed_inputs=False;references=[];temperature_spans=False
     for row in sorted(rows,key=lambda r:(r['source'].get('run_number') or 0,r['id'])):groups.setdefault(_group(row),[]).append(row)
     title='Rwp (%)' if metric=='rwp' else 'Modeled crystalline weight (%)' if metric=='phase_fractions' else ''
     for index,group in enumerate(groups.values()):
@@ -230,6 +252,9 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
             x=[(electrical_exposure(j['source']).get('voltage_v') or {}).get('mean') for j in group]
             x_title,x_type='Mean voltage over covered exposure (V)','linear'
         else:x,x_title,x_type=_experiment_axis(scans,x_key)
+        error_x = (_temperature_span(scans, x) if x_key == 'temperature' and show_temperature_span
+                   else dict(visible=False))
+        temperature_spans = temperature_spans or error_x['visible']
         if x_key=='battery_voltage' and all(value is None for value in x):continue
         label=group[0]['source']['sample_label']+(f" · bank {group[0]['source']['bank']}" if group[0]['source'].get('bank') else '')
         if group[0].get('recipe_label'):label+=' · '+group[0]['recipe_label']
@@ -248,7 +273,7 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
                     suffix=' · '+histogram_series_label(group[0]['final'],group[0]['source'],hkey) if len(histograms)>1 else ''
                     review_options=(dict(hovertext=review_hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>') if source_key=='final' else {})
                     symbols=['x' if value else marker for value in needs_review] if source_key=='final' and any(needs_review) else marker
-                    figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+suffix+(' · original' if source_key=='baseline' else ' · polished'+review_suffix),line=dict(color=color,dash=line,width=1.3),marker=dict(symbol=symbols,size=6),customdata=[j['id'] for j in group],connectgaps=False,**review_options))
+                    figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+suffix+(' · original' if source_key=='baseline' else ' · polished'+review_suffix),line=dict(color=color,dash=line,width=1.3),marker=dict(symbol=symbols,size=6),error_x=error_x,customdata=[j['id'] for j in group],connectgaps=False,**review_options))
             continue
         if metric=='phase_fractions':
             phases={p['key']:p for row in group for p in row['final'].get('parameters',[]) if p['kind']=='weight'}
@@ -260,7 +285,7 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
                 figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=phase+' · '+label+review_suffix,line=dict(color=COLORS[(index+phase_index)%len(COLORS)],width=1.3),
                     marker=dict(symbol=['x' if value else 'circle' for value in needs_review],size=6),
                     hovertext=review_hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>',
-                    customdata=[j['id'] for j in group],connectgaps=False))
+                    error_x=error_x,customdata=[j['id'] for j in group],connectgaps=False))
             continue
         values=[];errors=[];statuses=[];unit='';parameter=None
         for row in group:
@@ -297,12 +322,13 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute'):
         figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+review_suffix,line=dict(color=color,width=1.3),
             marker=dict(size=6,symbol=['x' if value else 'circle' for value in needs_review]),
             error_y=dict(type='data',array=errors,visible=display=='absolute' and any(e is not None for e in errors)),
+            error_x=error_x,
             customdata=[j['id'] for j in group],connectgaps=False,
             hovertext=hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>'))
     figure.update_layout(template='plotly_white',height=430,margin=dict(l=75,r=25,t=55,b=60),legend=dict(orientation='h',y=1.18),
         xaxis=dict(title=x_title if groups else 'Scan number',type=x_type if groups else 'linear'),yaxis=dict(title=title),
         uirevision='refinement-trend/'+metric+'/'+x_key+'/'+display,
-        meta=dict(references=references))
+        meta=dict(references=references,temperature_spans=temperature_spans))
     if changed_domain:figure.add_annotation(text='Some Rwp pairs use different fit limits or exclusions and are not directly comparable.',xref='paper',yref='paper',x=0,y=1.03,xanchor='left',showarrow=False,font=dict(size=11,color='#9a601b'))
     if fixed_inputs:figure.add_annotation(text='Some plotted values are fixed or unestimated model inputs; they are not independent measurements.',
         xref='paper',yref='paper',x=0,y=1.03,xanchor='left',showarrow=False,font=dict(size=11,color='#9a601b'))

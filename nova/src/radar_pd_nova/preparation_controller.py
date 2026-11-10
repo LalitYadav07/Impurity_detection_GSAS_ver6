@@ -324,7 +324,8 @@ class PreparationMixin:
         self._prep_catalogs=catalogs;self._prep_discovered_identity=identity
         s.prep_discovery_ready=len(catalogs)==len(selected) and all(c['catalog']['candidates'] for c in catalogs)
         self._preparation_count_changed()
-        s.prep_message=('Review the scope and magnetic-site assumptions, then prepare the selected models.' if s.prep_discovery_ready
+        s.prep_message=(('Review the structural scope and displacement/lattice limits, then prepare the selected models.'
+                        if kind=='structural' else 'Review the scope and magnetic-site assumptions, then prepare the selected models.') if s.prep_discovery_ready
             else 'Some declared families are unavailable or empty. Review their messages; retry discovery or explicitly revise the selected scope.')
 
     def start_preparation_models(self,**_):
