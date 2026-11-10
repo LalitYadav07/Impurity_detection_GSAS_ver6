@@ -28,6 +28,47 @@ def app():
     return instance,instance.server.state
 
 
+def test_only_the_current_calculation_can_be_cancelled():
+    instance,s=app();s.plan_busy=True
+    first=instance._planning_begin_calculation()
+    second=instance._planning_begin_calculation()
+    instance._planning_finish_job(first)
+    assert s.plan_busy and s.plan_can_cancel and instance._planning_cancel is second
+    generation=instance._planning_generation
+    instance.cancel_planning_simulation()
+    assert second.is_set() and not s.plan_can_cancel and not first.is_set()
+    assert instance._planning_generation==generation+1
+    instance._planning_finish_job(second)
+    assert not s.plan_busy and not s.plan_can_cancel
+
+
+def test_history_storage_cannot_offer_a_calculation_cancel():
+    instance,s=app();pending=[]
+    instance._refinement_schedule=lambda coroutine,name:pending.append(coroutine)
+    s.plan_can_cancel=True
+    instance._planning_storage_action(lambda:None,'Saving the plan…')
+    assert s.plan_busy and not s.plan_can_cancel
+    generation=instance._planning_generation
+    instance.cancel_planning_simulation()
+    assert s.plan_save_message=='Saving the plan…'
+    assert instance._planning_generation==generation
+    asyncio.run(pending.pop())
+    assert not s.plan_busy and not s.plan_can_cancel
+
+
+def test_editing_invalidates_saved_notice_but_preserves_saved_plan_identity():
+    instance,s=app()
+    s.plan_saved_id='history:existing-plan'
+    s.plan_save_message='Saved to Galaxy History.'
+    s.plan_current=True;s.plan_result_ready=True
+    instance._planning_edited()
+    assert not s.plan_save_message and s.plan_saved_id=='history:existing-plan'
+    assert not s.plan_current and not s.plan_result_ready
+    s.plan_save_message='Saved to Galaxy History.'
+    instance._planning_name_edited()
+    assert not s.plan_save_message and s.plan_saved_id=='history:existing-plan'
+
+
 def result(instance,root):
     root.mkdir()
     np.savez(root/'curves.npz',d=np.arange(3.)+1,expected=np.ones(3),nuclear=np.ones(3),magnetic=np.zeros(3))

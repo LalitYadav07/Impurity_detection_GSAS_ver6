@@ -56,6 +56,15 @@ def _planning_history_label(row, identifier):
 
 
 class PlanningStorageMixin:
+    def _planning_begin_calculation(self):
+        event=threading.Event()
+        self._planning_cancel=event
+        s=self.server.state
+        s.plan_can_cancel=True
+        s.plan_save_message=''
+        s.flush()
+        return event
+
     def _planning_schedule(self, coroutine, name):
         # Progress callbacks run in worker threads; only this loop owns Trame
         # state publication, including during saved-operation recovery.
@@ -112,9 +121,9 @@ class PlanningStorageMixin:
         async def run():
             try:await asyncio.to_thread(action)
             except Exception as exc:s.plan_error=str(exc)
-            finally:s.plan_busy=False;s.flush()
+            finally:s.plan_busy=False;s.plan_can_cancel=False;s.flush()
         if hasattr(self,'_refinement_schedule'):
-            s.plan_busy=True;s.plan_error='';s.plan_save_message=message;s.flush()
+            s.plan_busy=True;s.plan_can_cancel=False;s.plan_error='';s.plan_save_message=message;s.flush()
             self._planning_schedule(run(),'radar-planner-storage')
         else:
             try:action()
@@ -405,7 +414,7 @@ class PlanningStorageMixin:
             s=self.server.state
             if s.plan_busy:return
             s.plan_busy=True;s.plan_error=''
-            event=threading.Event();self._planning_cancel=event
+            event=self._planning_begin_calculation()
             try:
                 row=getattr(self,'_planning_recoverable',{}).get(s.plan_recover_job_id)
                 if row is None:raise ValueError('Select a planner operation from the current History list')

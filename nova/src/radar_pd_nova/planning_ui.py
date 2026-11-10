@@ -250,7 +250,7 @@ def planning_dashboard(app):
                 with html.Div(classes='planner-run-bar'):
                     v.VBtn('Simulate pattern', click=app.run_planning_simulation, color='#15543c', block=True,
                         loading=('plan_busy',), disabled=('plan_busy || !plan_cif',), prepend_icon='mdi-chart-bell-curve')
-                    v.VBtn('Cancel calculation', v_if='plan_busy', click=app.cancel_planning_simulation, variant='text', block=True)
+                    v.VBtn('Cancel calculation', v_if='plan_busy && plan_can_cancel', click=app.cancel_planning_simulation, variant='text', block=True)
                     note('{{ plan_message }}', role='status')
             with html.Div(classes='planner-results-card'):
                 html.H2('Predicted pattern')

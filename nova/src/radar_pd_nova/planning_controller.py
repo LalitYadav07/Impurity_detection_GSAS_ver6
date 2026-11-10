@@ -75,7 +75,7 @@ class PlanningMixin(PlanningStorageMixin):
             plan_container='PAC06',
             plan_intensity_calibration='vanadium',plan_resolution_model='cycle_table',
             plan_d_min=.55,plan_d_max=7.24,plan_step=.0004,plan_seed=42,plan_moment_multiplier=1.,
-            plan_isotopes='{}',plan_response_mode='current_cycle',plan_busy=False,plan_error='',plan_standalone=False,
+            plan_isotopes='{}',plan_response_mode='current_cycle',plan_busy=False,plan_can_cancel=False,plan_error='',plan_standalone=False,
             plan_message='Upload a nuclear CIF and select a POWGEN configuration.',
             plan_current=False,plan_result_ready=False,plan_look=0,plan_look_options=[],
             plan_figure={'data':[],'layout':{}},plan_qualification='',plan_warnings=[],plan_summary=[],
@@ -106,6 +106,7 @@ class PlanningMixin(PlanningStorageMixin):
         self._planning_parent_state=None
         self._planning_runtime_cache=None;self._planning_native_artifacts={}
         s.change(*FIELDS)(self._planning_edited)
+        s.change('plan_name')(self._planning_name_edited)
         s.change('plan_look','plan_pattern_view','plan_plot_mode','plan_error_model')(self._planning_plot)
         s.change('plan_resolution_model')(self._planning_resolution_edited)
         s.change('plan_cif','plan_custom_profile','plan_configuration','plan_profile_bank','plan_isotopes',
@@ -308,7 +309,7 @@ class PlanningMixin(PlanningStorageMixin):
             s=self.server.state
             if s.plan_busy:return
             s.plan_busy=True;s.plan_error='';generation=self._planning_generation
-            event=threading.Event();self._planning_cancel=event
+            event=self._planning_begin_calculation()
             try:await self._ensure_planning_parent(generation,event)
             except Exception as exc:
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
@@ -549,7 +550,7 @@ class PlanningMixin(PlanningStorageMixin):
             s=self.server.state
             if s.plan_busy:return
             s.plan_busy=True;s.plan_error='';generation=self._planning_generation
-            event=threading.Event();self._planning_cancel=event
+            event=self._planning_begin_calculation()
             try:
                 await self._ensure_planning_parent(generation,event)
                 if generation!=self._planning_generation or event.is_set():return
@@ -587,7 +588,7 @@ class PlanningMixin(PlanningStorageMixin):
             s=self.server.state
             if s.plan_busy:return
             s.plan_busy=True;s.plan_error='';generation=self._planning_generation
-            event=threading.Event();self._planning_cancel=event
+            event=self._planning_begin_calculation()
             try:
                 if self._planning_catalog is None:raise ValueError('Discover subgroups for the current parent and k first')
                 catalog,parent,source,root=self._planning_catalog
@@ -620,7 +621,7 @@ class PlanningMixin(PlanningStorageMixin):
             s=self.server.state
             if s.plan_busy:return
             s.plan_busy=True;s.plan_error='';generation=self._planning_generation
-            event=threading.Event();self._planning_cancel=event
+            event=self._planning_begin_calculation()
             try:
                 await self._ensure_planning_parent(generation,event)
                 if generation!=self._planning_generation or event.is_set():return
@@ -679,7 +680,7 @@ class PlanningMixin(PlanningStorageMixin):
             if s.plan_busy:return
             self._planning_edited()
             s.plan_busy=True;s.plan_error='';generation=self._planning_generation
-            event=threading.Event();self._planning_cancel=event
+            event=self._planning_begin_calculation()
             try:
                 if self._planning_structural_catalog is None:raise ValueError('Discover structural children first')
                 catalog,parent,source,root=self._planning_structural_catalog
@@ -725,10 +726,16 @@ class PlanningMixin(PlanningStorageMixin):
         if self._planning_restoring:return
         self._planning_generation+=1
         s=self.server.state;s.plan_current=False;s.plan_result_ready=False
+        s.plan_save_message=''
         s.plan_can_promote_parent=False
         s.plan_message='Inputs changed. Simulate the current scenario to see its pattern.'
         s.plan_figure={'data':[],'layout':{}};s.plan_qualification='';s.plan_summary=[];s.plan_warnings=[]
-        if self._planning_cancel is not None:self._planning_cancel.set()
+        if self._planning_cancel is not None:
+            self._planning_cancel.set()
+            s.plan_can_cancel=False
+
+    def _planning_name_edited(self, **_):
+        if not self._planning_restoring:self.server.state.plan_save_message=''
 
     def _planning_request(self):
         if self._planning_input_errors:
@@ -784,7 +791,7 @@ class PlanningMixin(PlanningStorageMixin):
         s=self.server.state;s.plan_busy=True;s.plan_error='';s.plan_current=False;s.plan_result_ready=False
         s.plan_message='Preparing the selected structure and instrument calculation.';s.flush()
         generation=self._planning_generation
-        event=threading.Event();self._planning_cancel=event
+        event=self._planning_begin_calculation()
         try:
             request=self._planning_request()
             self._planning_validate_transition()
@@ -857,13 +864,15 @@ class PlanningMixin(PlanningStorageMixin):
     def _planning_finish_job(self, event):
         if self._planning_cancel is not event:return
         self._planning_cancel=None
-        s=self.server.state;s.plan_busy=False
+        s=self.server.state;s.plan_busy=False;s.plan_can_cancel=False
         if event.is_set():s.plan_message='Calculation cancelled. Your inputs are preserved.'
         s.flush()
 
     def cancel_planning_simulation(self, **_):
+        if self._planning_cancel is None:return
         self._planning_generation+=1
-        if self._planning_cancel:self._planning_cancel.set()
+        self._planning_cancel.set()
+        self.server.state.plan_can_cancel=False
         self.server.state.plan_message='Stopping the calculation. An active external-service request may take up to 60 seconds to return.';self.server.state.flush()
 
     def _planning_plot(self, **_):
