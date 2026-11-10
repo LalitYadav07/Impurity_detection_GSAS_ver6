@@ -337,6 +337,29 @@ class BackgroundConfigTests(unittest.TestCase):
 
 
 class LimitPreservationTests(unittest.TestCase):
+    def test_staged_refinement_preserves_actionable_initialization_error(self):
+        refiner = GSASMainPhaseRefiner.__new__(GSASMainPhaseRefiner)
+        reason = 'Instrument Gaussian variance is non-positive; select a supported fitted range'
+        refiner._set_limits_to_data = MagicMock(side_effect=ValueError(reason))
+        refiner.refine_stage_scale = MagicMock()
+        result = refiner.run_staged_refinement()
+        self.assertFalse(result.success)
+        self.assertIn(reason, result.error_message)
+        refiner.refine_stage_scale.assert_not_called()
+
+    def test_new_successful_setup_clears_an_old_failure(self):
+        refiner = GSASMainPhaseRefiner.__new__(GSASMainPhaseRefiner)
+        refiner.initial_state_error = 'previous failure'
+        refiner._set_limits_to_data = MagicMock()
+        refiner._clear_all_instrument_refinements = MagicMock()
+        refiner._disable_background_refinement = MagicMock()
+        refiner._disable_cell_refinement = MagicMock()
+        refiner._disable_phase_scale_refinement = MagicMock()
+        refiner.phase = MagicMock()
+        refiner.histogram = MagicMock()
+        self.assertTrue(refiner.setup_initial_state())
+        self.assertEqual(refiner.initial_state_error, '')
+
     def test_pearson_does_not_run_after_initial_safety_setup_fails(self):
         manager = MagicMock()
         with patch.object(refiner_mod, 'GSASMainPhaseRefiner', autospec=True) as factory:

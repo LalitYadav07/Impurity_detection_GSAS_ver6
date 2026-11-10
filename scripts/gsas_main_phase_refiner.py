@@ -164,8 +164,7 @@ except ImportError:
 try:
     from gsas_safe_limits import apply_safe_limits
 except ImportError:
-    # Fallback if not found (during dev)
-    def apply_safe_limits(proj): return False
+    from .gsas_safe_limits import apply_safe_limits
 
 try:
     from auto_background_points import coerce_auto_background_params, estimate_background
@@ -456,12 +455,14 @@ class GSASMainPhaseRefiner:
         self.histogram = project_manager.main_histogram
         self.phase = project_manager.main_phase
         self.instrument_type = project_manager.get_instrument_type()
+        self.initial_state_error = ""
 
         if not all([self.project, self.histogram, self.phase]):
             raise RuntimeError("Project manager must have project, histogram, and phase initialized")
 
     def setup_initial_state(self) -> bool:
         """Set up initial refinement state - disable all refinements."""
+        self.initial_state_error = ""
         try:
             # Set histogram limits to data range
             self._set_limits_to_data()
@@ -479,6 +480,7 @@ class GSASMainPhaseRefiner:
             return True
 
         except Exception as e:
+            self.initial_state_error = str(e) or type(e).__name__
             logger.warning(f"Failed to setup initial state: {e}")
             traceback.print_exc()
             return False
@@ -773,7 +775,7 @@ class GSASMainPhaseRefiner:
             return RefinementResults(
                 success=False, rwp=999.0, chi2=999.0, scale=1.0,
                 background_params={}, cell_params={}, convergence_cycles=0,
-                error_message="Failed to setup initial state"
+                error_message=f"Failed to setup initial state: {self.initial_state_error}"
             )
 
         results_scale = self.refine_stage_scale()
@@ -1083,7 +1085,7 @@ class GSASMainPhaseRefiner:
                     rwp_before=None,
                     rwp_after=None,
                     refined_terms=(),
-                    error_message="Failed to setup initial state",
+                    error_message=f"Failed to setup initial state: {self.initial_state_error}",
                 )
 
             results_scale = self.refine_stage_scale()
@@ -1526,7 +1528,8 @@ def compute_gsas_ycalc_pearson(project_manager) -> float:
     phase = project_manager.main_phase
 
     if not refiner.setup_initial_state():
-        raise RuntimeError('Cannot calculate a Pearson score: the initial model or instrument safety check failed')
+        raise RuntimeError('Cannot calculate a Pearson score: the initial model or instrument safety check failed. '
+                           + str(getattr(refiner, 'initial_state_error', '')))
     try:
         hist.set_refinements({'Background': {'type': 'chebyschev-1', 'refine': False, 'no. coeffs': 12, 'coeffs': [0.0]*12}})
     except Exception:

@@ -60,6 +60,34 @@ def test_shared_profile_is_parsed_once_per_invocation_without_cross_check_cache(
     assert len(calls)==2
 
 
+def test_invalid_profile_domain_is_blocked_before_submission_and_valid_explicit_range_passes(tmp_path,monkeypatch):
+    args=inputs(tmp_path,monkeypatch,1)
+    source=tmp_path/'NOM_1.gsa'
+    source.write_text(source.read_text().replace('1100','10000'))
+    supplied=args['profile_path']
+    supplied.write_text(supplied.read_text().replace('sig-0:1','sig-0:-1')
+                        .replace('sig-1:1','sig-1:4').replace('sig-2:1','sig-2:-1'))
+    before_source=source.read_bytes();before_profile=supplied.read_bytes()
+    result=controller.preflight_nomad_experiment('IPTS-1',**args)
+    assert not result['ready']
+    assert 'Instrument Gaussian variance is non-positive' in result['profile_error']
+    assert 'explicitly select a supported fitted range' in result['profile_error']
+    result=controller.preflight_nomad_experiment('IPTS-1',native_limits=(2861.51*.8,2861.51*1.5),**args)
+    assert result['ready'],result['profile_error']
+    assert source.read_bytes()==before_source and supplied.read_bytes()==before_profile
+
+
+def test_preflight_reports_existing_native_lower_tail_repair(tmp_path,monkeypatch):
+    args=inputs(tmp_path,monkeypatch,1)
+    source=tmp_path/'NOM_1.gsa'
+    source.write_text(source.read_text().replace('1100','6000'))
+    supplied=args['profile_path']
+    supplied.write_text(supplied.read_text().replace('sig-0:1','sig-0:-.25').replace('sig-2:1','sig-2:0'))
+    result=controller.preflight_nomad_experiment('IPTS-1',**args)
+    assert result['ready'],result['profile_error']
+    assert any('Native Gaussian-width safety will raise the lower fit limit' in s for s in result['quality_notices'])
+
+
 def test_profile_byte_change_during_check_is_rejected_even_with_restored_stat(tmp_path,monkeypatch):
     args=inputs(tmp_path,monkeypatch);supplied=args['profile_path'];stat=supplied.stat()
     original=nomad.validate_profile;changed=False;lock=threading.Lock()

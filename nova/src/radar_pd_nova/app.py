@@ -5944,6 +5944,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 if self._live_adapter().instrument == "SNAP":
                     preflight_arguments["product_family"] = str(getattr(state, "snap_product_family", "") or "")
                     preflight_arguments['condition_bindings'] = self._snap_condition_bindings()
+                if self._live_adapter().instrument == 'NOM':
+                    preflight_arguments['native_limits'] = configuration.limits
                 result = await asyncio.to_thread(self._live_adapter().preflight, ipts, **preflight_arguments)
             else:
                 result = await asyncio.to_thread(preflight_powgen_experiment, ipts,

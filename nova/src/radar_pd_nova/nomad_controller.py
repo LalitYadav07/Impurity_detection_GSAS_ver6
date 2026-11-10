@@ -58,7 +58,7 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
         sample_index=None,subfolder=nomad.MODERN_FOLDER,initial_backfill_limit=None,
         profile_path=None,profile_bank=None,profile_acknowledged=False,allow_exploratory=False,
         excluded_run_numbers=(),include_background_runs=False,include_ramp_runs=False,
-        max_workers=4):
+        max_workers=4,native_limits=None):
     if type(max_workers) is not int or not 1<=max_workers<=4:
         raise ValueError('NOMAD preflight workers must be an integer from 1 to 4')
     definition=WatchDefinition(ipts,subfolder,'preflight','preflight','profile-required',instrument='NOM')
@@ -92,6 +92,15 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
                 raise ValueError('Supply a matching .instprm and its Bank label; automatic NOMAD profiles are not yet validated')
             _,receipt=nomad.validate_profile(setup,selected_banks[0],profile_path,profile_bank,
                 acknowledged=profile_acknowledged,_profile_loader=profile_once)
+            from gpx_recipe.tof_domain import assess_tof_domain
+            selected=next(b for b in setup.banks if b.bank==selected_banks[0])
+            lower,upper=selected.minimum_tof,selected.maximum_tof
+            if native_limits is not None:
+                lower=max(lower,float(native_limits[0]))
+                upper=min(upper,float(native_limits[1]))
+            snapshot=profile_once(profile_path)
+            coefficients=next(dict(values) for label,_,values in snapshot.blocks if label==profile_bank)
+            receipt['fit_domain']=assess_tof_domain(coefficients,(lower,upper))
             if setup.warnings and not allow_exploratory:
                 raise ValueError('Reduction-quality notices require explicit exploratory-analysis acknowledgement')
             return setup,receipt,None
@@ -115,6 +124,9 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
                 setups.append(setup);available.update(b.bank for b in setup.banks);notices.extend(setup.warnings)
                 for bank in setup.banks:bank_quality.setdefault(bank.bank,set()).update(bank.quality_errors)
             if receipt is not None:mapping.append(receipt)
+            if receipt is not None and receipt.get('fit_domain',{}).get('trimmed_lower'):
+                domain=receipt['fit_domain']
+                notices.append(f"Native Gaussian-width safety will raise the lower fit limit to {domain['native_limits'][0]:.6g} microseconds (d={domain['fitted_d'][0]:.6g} Å).")
             if error is not None:errors.append(error)
     if len({(s.calibration,s.environment) for s in setups})>1:
         errors.append('The selected runs use different detector calibrations or sample environments; split them before reusing one supplied profile')
