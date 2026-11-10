@@ -50,6 +50,20 @@ def scans():
     return result
 
 
+def test_global_cause_score_without_local_region_is_not_highlighted_as_transition():
+    from radar_pd_nova.unet_transition_ui import _cause_display
+    causes=[dict(name='magnetic_order_candidate',score=.965067863,selected=True)]
+    original=json.loads(json.dumps(causes))
+    unlocalized=_cause_display(causes,has_regions=False)[0]
+    assert not unlocalized['selected']
+    assert unlocalized['qualifier']=='high score; no change region'
+    assert unlocalized['score']=='0.965068'
+    localized=_cause_display(causes,has_regions=True)[0]
+    assert localized['selected'] and localized['qualifier']=='above model threshold'
+    assert causes==original
+    assert _cause_display([dict(causes[0],selected=False)],has_regions=True)[0]['qualifier']==''
+
+
 def test_optional_view_preserves_existing_indicator_policy():
     app = RadarPdNovaApp()
     assert hasattr(app, "_transition_engine")

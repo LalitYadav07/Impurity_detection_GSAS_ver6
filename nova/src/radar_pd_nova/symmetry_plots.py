@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from gpx_recipe.symmetry_results import TERMINAL
 from .symmetry_workspace import view_for,pin_label
 
 COLORS={'valid':'#16744f','optimization_unresolved':'#b26b12','inadequate_fit':'#8d4961','physical_rejection':'#a1483a'}
@@ -27,7 +28,7 @@ def overview(rows,selected=''):
             customdata=[p['id'] for p in points],text=[p['name']+' · start '+p['seed'] for p in points],
             marker=dict(color=COLORS[status],size=[13 if p['id']==selected else 8 for p in points],symbol='circle' if status=='valid' else 'diamond-open'),
             hovertemplate='%{text}<br>Rwp %{y:.3f}% · %{x} free variables<extra>%{fullData.name}</extra>'))
-    if not fig.data:return empty('No audited finite fit is available yet')
+    if not fig.data:return empty('No independently audited fit is available in this view')
     fig.update_layout(template='plotly_white',height=300,margin=dict(l=60,r=25,t=15,b=60),legend=dict(orientation='h',y=1.2),xaxis_title='Independent refined variables',yaxis_title='Rwp (%)',clickmode='event',uirevision='symmetry-overview')
     return figure_json(fig)
 
@@ -44,8 +45,15 @@ def fit(selected,pins=(),*,axis='d',reset=0,intensity_scale='linear'):
     if not selected:return empty('Select a model to inspect its fit and current state')
     if not selected['has_view']:
         from .symmetry_workspace import display_status
-        state=display_status(selected.get('status','pending'))
-        return empty(f'{state.capitalize()} — no fitted curve has returned for this start yet.<br>Completed fits appear as their batches return; you can inspect earlier results while work continues.')
+        status=selected.get('status','pending')
+        state=display_status(status)
+        if status in {'pending','prepared','submitting','running','cancelling'}:
+            message='No fitted curve has returned for this start yet.<br>Completed fits appear as their batches return; select an earlier result to inspect its curve.'
+        elif status in TERMINAL or status in {'cancelled','cancelled_before_dispatch'}:
+            message='This start has finished without an independently checked curve.<br>See its recorded result reason, or select another model or start with a retained curve.'
+        else:
+            message='No saved curve is available for this start.<br>See its recorded status and result reason.'
+        return empty(f'{state.capitalize()} — {message}')
     v=view_for(selected);x,label=coordinate(v,axis);obs=np.asarray(v['observed'],dtype=float);calc=np.asarray(v['calculated'],dtype=float)
     native=np.asarray(v['x'],dtype=float);mask=np.isfinite(x)&(native>=v['limits'][0])&(native<=v['limits'][1])
     if not mask.any():return empty('This instrument calibration provides no usable positive d spacing here; select the native coordinate')

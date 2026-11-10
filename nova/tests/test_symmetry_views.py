@@ -129,6 +129,19 @@ def test_incompatible_trial_without_curve_stays_inspectable(tmp_path):
     assert 'annotations' in fit(bad)['layout']
 
 
+def test_no_curve_message_distinguishes_finished_outcomes_from_waiting():
+    from gpx_recipe.symmetry_results import TERMINAL
+    for status in TERMINAL | {'cancelled','cancelled_before_dispatch'}:
+        message=fit(dict(has_view=False,status=status))['layout']['annotations'][0]['text']
+        assert 'has finished' in message
+        assert 'yet' not in message and 'batches return' not in message
+    for status in ['pending','prepared','submitting','running','cancelling']:
+        message=fit(dict(has_view=False,status=status))['layout']['annotations'][0]['text']
+        assert 'yet' in message and 'has finished' not in message
+    message=fit(dict(has_view=False,status='unknown'))['layout']['annotations'][0]['text']
+    assert 'recorded status' in message and 'yet' not in message
+
+
 def test_screened_alternative_reuses_plot_but_keeps_own_moments_and_no_native_claim(tmp_path):
     from radar_pd_nova.symmetry_workspace import view_for
     native=row(tmp_path,'native',status='inadequate_fit')

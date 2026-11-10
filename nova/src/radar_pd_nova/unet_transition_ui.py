@@ -354,6 +354,16 @@ def _score_label(value):
     return f"{float(value):.6f}".rstrip("0").rstrip(".")
 
 
+def _cause_display(causes, *, has_regions):
+    """Keep a high global score distinct from a localized change suggestion."""
+    return [{"label": _CAUSE_LABELS.get(item["name"], item["name"]),
+             "score": _score_label(item["score"]),
+             "selected": bool(item["selected"] and has_regions),
+             "qualifier": ("above model threshold" if has_regions else
+                           "high score; no change region") if item["selected"] else ""}
+            for item in causes]
+
+
 _CONDITION_LABELS = {
     "temperature": ("", "K"),
     "magnetic_field": ("Field ", "T"),
@@ -899,7 +909,7 @@ class UnetTransitionMixin:
                 html.Span("{{ unet_transition_attention_label }}",
                           classes=("'radar-tracker-attention ' + unet_transition_attention_tone",))
             with html.Div(classes="radar-tracker-causes", v_if="unet_transition_causes.length && !unet_transition_loading"):
-                html.Span("{{ item.label }} · {{ item.score }}{{ item.selected ? ' · suggested' : '' }}",
+                html.Span("{{ item.label }} · {{ item.score }}{{ item.qualifier ? ' · ' + item.qualifier : '' }}",
                           v_for="item in unet_transition_causes",
                           classes=("'radar-tracker-cause ' + (item.selected ? 'selected' : 'below')",))
             html.P("{{ unet_transition_cause_summary }} {{ unet_transition_coverage_note }}",
@@ -1402,13 +1412,12 @@ class UnetTransitionMixin:
             state.unet_transition_reference_fit_note = f"Fit display unavailable: {error}"
         events = row.get("events") or []
         causes = (row.get("comparison") or {}).get("causes") or []
-        state.unet_transition_causes = [{"label": _CAUSE_LABELS.get(item["name"], item["name"]),
-                                          "score": _score_label(item["score"]),
-                                          "selected": bool(item["selected"])} for item in causes]
+        state.unet_transition_causes = _cause_display(causes, has_regions=bool(events))
         selected_causes = [item for item in causes if item["selected"]]
         state.unet_transition_cause_summary = (
-            "Whole-pair cause suggestions are uncalibrated model scores."
-            + (" Selected cause has no supported local box." if selected_causes and not events else "")
+            "Whole-pair scores are uncalibrated model outputs, not identified causes."
+            + (" A high score without a supported change region is not a detected transition."
+               if selected_causes and not events else "")
         ) if causes else ""
         covered = (row.get("comparison") or {}).get("coverage_fraction")
         state.unet_transition_coverage_note = (
