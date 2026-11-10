@@ -265,6 +265,7 @@ jobs:
             /validation-tests/test_preparation_history.py \
             /validation-tests/test_preparation_workspace.py \
             /validation-tests/test_preparation_controller.py \
+            /validation-tests/test_preparation_trigger_dispatch.py \
             /validation-tests/test_preparation_labels.py \
             /validation-tests/test_preparation_training_record.py \
             /validation-tests/test_preparation_evidence.py \

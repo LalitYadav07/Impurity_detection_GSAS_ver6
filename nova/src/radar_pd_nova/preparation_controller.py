@@ -96,12 +96,16 @@ class PreparationMixin:
         task.add_done_callback(self._prep_tasks.discard);return task
 
     def _prep_action(self,coroutine,title):
+        """Start one tracked action without making Trame await its lifetime."""
         if self.server.state.prep_busy:
             coroutine.close();return None
         try:asyncio.get_running_loop()
         except RuntimeError:coroutine.close();return None
         s=self.server.state;s.prep_busy=True;s.prep_operation=title;s.prep_error='';s.prep_message=title;s.flush()
-        return self._prep_schedule(self._prep_perform(coroutine,title),'radar-preparation-action')
+        self._prep_schedule(self._prep_perform(coroutine,title),'radar-preparation-action')
+        # Trame awaits awaitable trigger results on the serial websocket path.
+        # Navigation must remain available while the tracked operation runs.
+        return None
 
     async def _prep_perform(self,coroutine,title):
         s=self.server.state;s.prep_busy=True;s.prep_operation=title;s.prep_error='';s.prep_message=title;s.flush()
@@ -604,18 +608,23 @@ class PreparationMixin:
         return self._prep_action(imported(),'Importing a checked portable preparation library')
 
     def save_preparation_download(self,**_):
+        key=self.server.state.prep_library
+        service=self.service
         async def saved():
-            s=self.server.state;store=self._preparation_store();key=s.prep_library
-            download_url(self.service.galaxy_url,'validation')
+            s=self.server.state;store=self._preparation_store()
+            download_url(service.galaxy_url,'validation')
             path=store.root/'exports'/(uuid.uuid4().hex+'.zip');path.parent.mkdir(parents=True,exist_ok=True)
             try:
                 await asyncio.to_thread(store.registry.export,key,path)
-                dataset=identifier(await asyncio.to_thread(self.service.upload_document,path,
+                dataset=identifier(await asyncio.to_thread(service.upload_document,path,
                     label='RADAR-PD prepared library '+store.registry.get(key).document['id'],wait_ready=True))
             finally:path.unlink(missing_ok=True)
-            if s.prep_library==key:s.prep_download_href=download_url(self.service.galaxy_url,dataset)
-            s.prep_message=('The portable library is saved in this Galaxy History. Download it using the link below. '
-                'Completed training is exported as a compiled analysis copy; its original arrays stay in the preparation History.')
+            if s.prep_library==key:
+                s.prep_download_href=download_url(service.galaxy_url,dataset)
+                s.prep_message=('The portable library is saved in this Galaxy History. Download it using the link below. '
+                    'Completed training is exported as a compiled analysis copy; its original arrays stay in the preparation History.')
+            else:
+                s.prep_message='The previously selected library was saved in this Galaxy History.'
         return self._prep_action(saved(),'Saving the portable library to History')
 
     async def _preparation_shutdown(self):

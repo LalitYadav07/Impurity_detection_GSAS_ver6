@@ -50,7 +50,8 @@ def test_training_record_inspection_does_not_submit_jobs_or_load_weights(app,mon
     record=dict(summary='CUDA GPU · 60 of 60 completed epochs',rows=[],status='complete',note='Recorded values')
     monkeypatch.setattr(preparation_training_record,'describe',lambda library,entry:record)
     async def read():
-        await application.show_preparation_training_record(store.registry.get(key).document['entries'][0]['id'])
+        assert application.show_preparation_training_record(store.registry.get(key).document['entries'][0]['id']) is None
+        await asyncio.gather(*tuple(application._prep_tasks))
     asyncio.run(read())
     assert s.prep_training_record_open and s.prep_training_record==record
     assert not s.prep_busy and len(service.submissions)==before
@@ -67,7 +68,8 @@ def test_training_record_arriving_after_navigation_cannot_reopen_a_stale_dialog(
         return dict(summary='Stale training record',rows=[],note='',status='complete')
     monkeypatch.setattr(module.asyncio,'to_thread',changed_selection)
     async def read():
-        await application.show_preparation_training_record(store.registry.get(key).document['entries'][0]['id'])
+        assert application.show_preparation_training_record(store.registry.get(key).document['entries'][0]['id']) is None
+        await asyncio.gather(*tuple(application._prep_tasks))
     asyncio.run(read())
     assert not s.prep_training_record_open and s.prep_training_record is None
     assert not service.submissions
@@ -319,10 +321,10 @@ def test_repeated_clicks_have_one_action_owner_before_the_first_await(app):
     async def operation():calls.append('once');await asyncio.sleep(0)
     async def run():
         first=app._prep_action(operation(),'One action')
-        assert app.server.state.prep_busy
+        assert first is None and app.server.state.prep_busy
         second=app._prep_action(operation(),'Second action')
         assert second is None
-        await first
+        await asyncio.gather(*tuple(app._prep_tasks))
     asyncio.run(run())
     assert calls==['once'] and not app.server.state.prep_busy
 
