@@ -68,6 +68,16 @@ jobs:
           os.environ["BCS_API_KEY"]="must-not-transfer"
           assert not any("KEY" in k or "TOKEN" in k for k in scientific_environment())
           print("Verified worker implementation",package_signature())'
+          docker run --rm --user 65534:65534 -e HOME=/tmp --entrypoint python "$IMAGE" -c '
+          import numpy as np
+          from GSASII import GSASIIpwd
+          from gpx_recipe.live.native_peak_batch import NativePeakBatch
+          helper=NativePeakBatch(GSASIIpwd)
+          x=np.linspace(900.,1100.,401);p=np.array([1000.,.1,.1,4.,.5]);height=1.75
+          expected=height*GSASIIpwd.getEpsVoigt(*p,x)[0]
+          actual=helper.render({(1,0,0):(p,height,0,len(x))},x)
+          assert np.array_equal(actual,expected)
+          print("Verified readable, array-identical native helper as non-root UID")'
           docker run --rm --entrypoint python "$IMAGE" -c '
           from pathlib import Path
           from gpx_recipe.structural_live.optimization import native_fast_candidate

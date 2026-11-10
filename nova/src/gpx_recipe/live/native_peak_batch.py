@@ -78,10 +78,16 @@ def build(directory=None):
         subprocess.run([compiler,*FLAGS,str(source),'-o',str(temporary),'-lm'],check=True,
             capture_output=True,timeout=30)
         receipt=dict(schema=SCHEMA,source_sha256=_sha(source),binary_sha256=_sha(temporary),flags=list(FLAGS))
+        # Image builds run as root, while Galaxy/Pulsar runs the scientific
+        # worker as another UID. mkstemp/linker modes must not silently make
+        # the reviewed helper or its receipt unreadable to that worker.
+        # These are public installed artifacts, never credentials or data.
+        temporary.chmod(0o644)
         os.replace(temporary,target)
         stamp=target.with_suffix('.receipt')
         descriptor,pending=tempfile.mkstemp(prefix='.native-peak-batch-',suffix='.receipt',dir=target.parent)
         with os.fdopen(descriptor,'w') as stream:json.dump(receipt,stream,sort_keys=True);stream.write('\n')
+        Path(pending).chmod(0o644)
         os.replace(pending,stamp)
         return receipt
     finally:

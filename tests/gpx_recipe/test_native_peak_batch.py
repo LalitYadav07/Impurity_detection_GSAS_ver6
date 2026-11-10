@@ -88,7 +88,8 @@ def test_image_builder_and_frozen_worker_resolve_the_same_installed_helper(tmp_p
     expected={'shared':common,'legacy':legacy,'wheel':wheel/'gpx_recipe/live'}[installation]
     monkeypatch.setattr(batch.shutil,'which',lambda _: '/installed/compiler')
     def compile_only_at_image_build(command,**kwargs):
-        Path(command[command.index('-o')+1]).write_bytes(b'compiled-image-helper')
+        target=Path(command[command.index('-o')+1]);target.write_bytes(b'compiled-image-helper')
+        target.chmod(0o711)  # Reproduce the unreadable image-built linker output.
     monkeypatch.setattr(batch.subprocess,'run',compile_only_at_image_build)
     receipt=batch.build()
     source,binary,stamp=batch._files()
@@ -96,6 +97,8 @@ def test_image_builder_and_frozen_worker_resolve_the_same_installed_helper(tmp_p
     assert binary.read_bytes()==b'compiled-image-helper'
     assert json.loads(stamp.read_text())==receipt
     assert receipt['source_sha256']==batch._sha(source)
+    assert binary.stat().st_mode & 0o777==0o644
+    assert stamp.stat().st_mode & 0o777==0o644
 
 
 def test_scientific_package_identity_includes_native_source_and_freezes_it(tmp_path,monkeypatch):
