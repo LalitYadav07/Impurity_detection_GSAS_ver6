@@ -74,8 +74,10 @@ jobs:
           from gpx_recipe.live.native_peak_batch import NativePeakBatch
           helper=NativePeakBatch(GSASIIpwd)
           x=np.linspace(900.,1100.,401);p=np.array([1000.,.1,.1,4.,.5]);height=1.75
-          expected=height*GSASIIpwd.getEpsVoigt(*p,x)[0]
+          expected=np.zeros_like(x)
+          expected+=np.float64(height)*GSASIIpwd.getEpsVoigt(*p,x)[0]
           actual=helper.render({(1,0,0):(p,height,0,len(x))},x)
+          assert actual.dtype==expected.dtype==np.dtype("float64")
           assert np.array_equal(actual,expected)
           print("Verified readable, array-identical native helper as non-root UID")'
           docker run --rm --entrypoint python "$IMAGE" -c '
