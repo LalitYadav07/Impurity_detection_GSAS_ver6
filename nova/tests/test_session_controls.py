@@ -24,6 +24,14 @@ class _Workspace:
         self.checkpoints += 1
 
 
+
+def _navigation(app, events=None, label="leave"):
+    def dispatched(nonce):
+        if events is not None:events.append(label)
+        assert app._acknowledge_session_navigation(nonce)
+    app._leave_session_page=dispatched
+
+
 def test_cancelled_utility_wait_cannot_submit_later():
     import threading
     import pytest
@@ -145,7 +153,7 @@ def test_end_session_pauses_queued_refinements_even_without_future_enrollment():
     workspace = app._refinement_workspace = _Workspace()
     workspace.state["recipes"]["old"]["armed"] = False
     workspace.state["jobs"]["waiting"] = {"source": {"experiment": "PG3:2767"}, "status": "queued"}
-    app._leave_session_page = lambda: None
+    _navigation(app)
 
     async def exit_callback():
         return None
@@ -181,7 +189,7 @@ def test_end_session_uses_existing_exit_path_after_checkpointing():
     app = RadarPdNovaApp()
     workspace = app._refinement_workspace = _Workspace()
     events = []
-    app._leave_session_page = lambda: events.append("return-to-galaxy")
+    _navigation(app,events,"return-to-galaxy")
 
     async def exit_callback():
         events.append("exit-container")
@@ -196,7 +204,7 @@ def test_end_session_uses_existing_exit_path_after_checkpointing():
 
 def test_end_session_waits_for_the_monitor_final_checkpoint():
     app=RadarPdNovaApp();events=[]
-    app._leave_session_page=lambda:events.append('leave')
+    _navigation(app,events)
     async def exit_callback(): events.append('exit')
     app.exit_callback=exit_callback
     async def run():
@@ -216,7 +224,7 @@ def test_end_session_waits_for_the_monitor_final_checkpoint():
 def test_failed_monitor_checkpoint_keeps_the_session_open():
     app=RadarPdNovaApp();events=[]
     app._powgen_checkpoint_error=RuntimeError('checkpoint upload unavailable')
-    app._leave_session_page=lambda:events.append('leave')
+    _navigation(app,events)
     async def exit_callback(): events.append('exit')
     app.exit_callback=exit_callback
     asyncio.run(app.end_session())
@@ -228,7 +236,7 @@ def test_close_retries_a_previously_failed_checkpoint_before_releasing_container
     app=RadarPdNovaApp();events=[]
     app._powgen_checkpoint_error=RuntimeError('transient failure')
     app._powgen_controller=SimpleNamespace(persist_state=lambda:events.append('saved'))
-    app._leave_session_page=lambda:events.append('leave')
+    _navigation(app,events)
     async def exit_callback(): events.append('exit')
     app.exit_callback=exit_callback
     asyncio.run(app.end_session())
@@ -238,7 +246,7 @@ def test_close_retries_a_previously_failed_checkpoint_before_releasing_container
 
 def test_concurrent_end_actions_share_one_checkpoint_and_exit():
     app=RadarPdNovaApp();events=[]
-    app._leave_session_page=lambda:events.append('leave')
+    _navigation(app,events)
     async def exit_callback():events.append('exit')
     app.exit_callback=exit_callback
     async def run():
@@ -259,7 +267,7 @@ def test_pending_checkpoint_keeps_session_open_and_reenables_retry():
     app=RadarPdNovaApp();events=[]
     async def pending():raise CheckpointUploadPending('hda1','queued')
     app._stop_session_enrollment=pending
-    app._leave_session_page=lambda:events.append('leave')
+    _navigation(app,events)
     asyncio.run(app.end_session())
     assert not events and not app.server.state.session_closing
     assert not app.server.state.end_session_dialog
@@ -270,7 +278,7 @@ def test_close_does_not_stack_a_second_pending_wait_after_monitor_drain():
     from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
     app=RadarPdNovaApp();events=[]
     app._powgen_controller=SimpleNamespace(persist_state=lambda:events.append('explicit retry'))
-    app._leave_session_page=lambda:events.append('leave')
+    _navigation(app,events)
     async def exit_callback():events.append('exit')
     app.exit_callback=exit_callback
     async def run():

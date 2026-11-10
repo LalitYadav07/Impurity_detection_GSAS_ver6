@@ -212,7 +212,7 @@ def test_slow_inspection_cannot_replace_changed_or_cleared_view(app, change):
     async def no_save():
         pass
     app._stop_session_enrollment = no_save
-    app._leave_session_page = lambda: None
+    app._leave_session_page = lambda nonce: app._acknowledge_session_navigation(nonce)
     app.exit_callback = no_save
     async def scenario():
         task = asyncio.create_task(app.inspect_saved_live_watch())

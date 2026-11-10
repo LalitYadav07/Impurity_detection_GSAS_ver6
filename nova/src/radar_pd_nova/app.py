@@ -308,6 +308,15 @@ def _powgen_retry_time(value: Any) -> datetime | None:
 from .webmon.ui import WebmonMixin
 
 
+SESSION_NAVIGATION_TIMEOUT = 2.0
+SESSION_CLOSED_VIEW = (
+    '<main role="status" style="max-width:40rem;margin:12vh auto;padding:2rem;font-family:system-ui">'
+    '<h1>Connection closed</h1>'
+    '<p>The interactive connection is closed. Return to Galaxy to view your History.</p>'
+    '<a href="/">Return to Galaxy</a></main>'
+)
+
+
 class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, PreparationMixin, PlanningMixin, FeedbackMixin, WebmonMixin, BatteryMixin, UnetTransitionMixin, LiveAssistantMixin, LiveSettingsReviewMixin, LiveRestoreMixin, LiveSetupMixin, LibraryReviewMixin, SetupEditorMixin, PostAnalysisMixin, RefinementMixin, SymmetryMixin, ThemedApp):
     """Interactive orchestration and results workspace backed by Galaxy."""
 
@@ -404,6 +413,16 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.workspace_clearing = False
         state.end_session_dialog = False
         state.session_closing = False
+        state.session_exit_ready = False
+        # The pinned client sets this key when the connection closes. Register
+        # it before mounting so its reactive callback already exists.
+        state.trame_error_report_msg = ""
+        state.trame__template_error = SESSION_CLOSED_VIEW
+        state.trame__template_error_reconnect = (
+            '<div v-if="session_exit_ready">' + SESSION_CLOSED_VIEW + '</div>'
+            '<template v-else><trame-reconnect :message="trame_error_report_msg" />'
+            '<a href="/" style="position:fixed;bottom:2rem;left:2rem;z-index:1001">Return to Galaxy</a></template>'
+        )
         state.workspace_notice = ""
         state.workspace_notice_kind = "success"
         state.previous_runs_hidden = False
@@ -894,7 +913,11 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     loading=("session_closing",),
                     disabled=("session_closing",),
                 )
-            self._leave_session_page = client.JSEval(exec="window.location.replace('/');").exec
+            navigation_ack = self.server.trigger_name(self._acknowledge_session_navigation)
+            self._leave_session_page = client.JSEval(exec=(
+                "($event) => { window.location.replace('/'); "
+                f"Promise.resolve(trigger('{navigation_ack}', [$event])).catch(() => {{}}); }}"
+            )).exec
             self._scroll_workspace_top = client.JSEval(
                 exec=("window.requestAnimationFrame(() => window.requestAnimationFrame(() => {"
                       " const scroller = window.document.querySelector('.v-card.overflow-y-auto') || window.document.scrollingElement;"
@@ -1028,7 +1051,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         "Release this interactive container and return to Galaxy. Live monitoring and queued/future refinement work stop. Already-submitted Galaxy jobs continue and their results remain in History."
                     )
                     html.Div("Saving the latest recovery checkpoints. Submitted scientific jobs continue independently.",
-                             v_if="session_closing", classes="pa-4")
+                             v_if="session_closing && !session_exit_ready", classes="pa-4")
+                    with html.Div(v_if="session_exit_ready", classes="pa-4", role="status"):
+                        html.P("Recovery checkpoints saved. Returning to Galaxy…")
+                        html.A("Return to Galaxy", href="/")
                     with vuetify.VCardActions():
                         vuetify.VSpacer()
                         vuetify.VBtn("Keep working", click="end_session_dialog = false", variant="text", disabled=("session_closing",))
@@ -1101,6 +1127,15 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             if checkpoint_task is not None and not checkpoint_task.done():
                 await checkpoint_task
 
+    def _acknowledge_session_navigation(self, nonce: str) -> bool:
+        event = getattr(self, "_session_navigation_ack", None)
+        if (not isinstance(nonce, str) or nonce != getattr(self, "_session_navigation_nonce", None)
+                or event is None or event.is_set()
+                or not self.server.state.session_closing or not self.server.state.session_exit_ready):
+            return False
+        event.set()
+        return True
+
     async def end_session(self, **_: Any) -> None:
         state = self.server.state
         if getattr(state, 'session_closing', False):
@@ -1115,6 +1150,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.flush()
             return
         state.session_closing = True
+        state.session_exit_ready = False
         state.flush()
         try:
             await self._stop_session_enrollment()
@@ -1126,11 +1162,21 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.flush()
             return
         state.nova_kill_jobs_on_exit = False
-        state.end_session_dialog = False
+        state.session_exit_ready = True
         state.flush()
-        self._leave_session_page()
-        await asyncio.sleep(0.1)
-        await self.exit_callback()
+        nonce = self._session_navigation_nonce = uuid.uuid4().hex
+        event = self._session_navigation_ack = asyncio.Event()
+        try:
+            self._leave_session_page(nonce)
+            # A timer alone cannot prove the queued JS action reached the
+            # browser. Its callback acknowledges after dispatching navigation.
+            await asyncio.wait_for(event.wait(), timeout=SESSION_NAVIGATION_TIMEOUT)
+        except asyncio.TimeoutError:
+            pass  # The native Return to Galaxy link remains available.
+        finally:
+            self._session_navigation_nonce = None
+            self._session_navigation_ack = None
+            await self.exit_callback()
 
     async def clear_workspace(self, **_: Any) -> None:
         """Release this session's run and plot memory while retaining Galaxy outputs."""

@@ -25,6 +25,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify source User guide version and files
+        run: python3 nova/tests/verify_user_guide.py --root nova/help --content-only
+
       - name: Check cursor ownership and rendering order
         run: node nova/tests/client_cursor.test.js
 
@@ -227,6 +230,8 @@ jobs:
           cd /tmp &&
           PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
             /validation-tests/test_workspace_navigation.py \
+            /validation-tests/test_session_controls.py \
+            /validation-tests/test_session_navigation.py \
             /validation-tests/test_planning_runtime.py \
             /validation-tests/test_planning_bundle.py \
             /validation-tests/test_planning_handoff.py \

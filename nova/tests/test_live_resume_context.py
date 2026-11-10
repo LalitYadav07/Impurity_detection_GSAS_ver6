@@ -37,7 +37,7 @@ def test_changed_resume_context_never_starts_the_old_watch(live, tmp_path, chang
     async def no_save(): pass
     async def exit_session(): exited.append(True)
     live._stop_session_enrollment = no_save
-    live._leave_session_page = lambda: None
+    live._leave_session_page = lambda nonce: live._acknowledge_session_navigation(nonce)
     live.exit_callback = exit_session
 
     async def scenario():
