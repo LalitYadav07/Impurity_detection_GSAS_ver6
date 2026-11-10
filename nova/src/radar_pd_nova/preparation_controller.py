@@ -65,6 +65,7 @@ class PreparationMixin:
             prep_library_kind='',prep_can_pause=False,prep_can_resume=False,
             prep_page=1,prep_pages=1,prep_entry_filter='all',prep_stage_filter='all',prep_stage_rows=[],
             prep_entry_search='',prep_table_count=0,
+            prep_training_record_open=False,prep_training_record_title='',prep_training_record=None,
             prep_saved='',prep_saved_options=[],prep_import_path='',prep_import_source='upload',
             prep_history_archive='',prep_history_archives=[],prep_download_href='')
         for key,value in values.items():setattr(s,key,value)
@@ -116,6 +117,7 @@ class PreparationMixin:
 
     def close_preparation_workspace(self,**_):
         s=self.server.state;s.workspace_view,s.setup_collapsed=self._prep_return or ('monitor',False)
+        s.prep_training_record_open=False
         if hasattr(s,'sx_preparation_notice'):s.sx_preparation_notice=self._prepared_selection_caption()
         if hasattr(s,'webmon_preparation_notice'):s.webmon_preparation_notice=self._prepared_selection_caption()
         s.flush()
@@ -371,6 +373,7 @@ class PreparationMixin:
 
     def _preparation_library_changed(self,**_):
         s=self.server.state;s.prep_page=1;s.prep_download_href='';s.prep_active_jobs=0
+        s.prep_training_record_open=False;s.prep_training_record=None
         if s.prep_library:self._preparation_store().registry.select(s.prep_library)
         self._preparation_table_changed()
 
@@ -473,7 +476,8 @@ class PreparationMixin:
                 if s.prep_entry_filter!='all' and row['state']!=s.prep_entry_filter:continue
                 if s.prep_stage_filter!='all' and model['kind']!=s.prep_stage_filter:continue
                 if text and text not in (' '.join(display.values())+' '+model['bank']+' '+reason).lower():continue
-                rows.append(dict(id=row['id'],bank=model['bank'],**display,state=row['state'],reason=reason))
+                rows.append(dict(id=row['id'],bank=model['bank'],**display,state=row['state'],reason=reason,
+                    has_training_record=row['state']=='prepared' and model['kind'] in {'structural-training','structural-ranking-model'}))
             s.prep_table_count=len(rows);s.prep_pages=max(1,math.ceil(len(rows)/25))
             page=min(max(1,finite_number(s.prep_page,integer=True)),s.prep_pages)
             if page!=s.prep_page:s.prep_page=page
@@ -491,6 +495,22 @@ class PreparationMixin:
         except (OSError,ValueError) as exc:
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1;s.prep_stage_rows=[]
             s.prep_error=str(exc)
+
+    def show_preparation_training_record(self,entry_id,**_):
+        key=self.server.state.prep_library
+        async def show():
+            from .preparation_training_record import describe
+            if not key:raise ValueError('Select a preparation library first')
+            library=self._preparation_store().registry.get(key);entry=library.row(entry_id)
+            record=await asyncio.to_thread(describe,library,entry)
+            if self.server.state.prep_library!=key or self.server.state.workspace_view!='preparation':
+                self.server.state.prep_message='';return
+            if record is None:raise ValueError('This entry has no completed model training record')
+            self.server.state.prep_training_record_title=library.document['name']+' · '+entry['model']['bank']
+            self.server.state.prep_training_record=record
+            self.server.state.prep_training_record_open=True
+            self.server.state.prep_message='Showing recorded model training; no calculation was submitted.'
+        return self._prep_action(show(),'Reading the saved training record')
 
     def pause_preparation(self,**_):
         async def pause():

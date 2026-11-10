@@ -19,6 +19,18 @@ def preparation_dashboard(app):
             scope_panel(app)
         with html.Div(v_show="prep_tab === 'libraries'"):
             libraries_panel(app)
+        with v.VDialog(v_model=('prep_training_record_open',),max_width=720,scrollable=True):
+            with v.VCard():
+                v.VCardTitle('Recorded training')
+                with v.VCardText(v_if='!!prep_training_record'):
+                    html.P('{{ prep_training_record_title }}',classes='text-subtitle-1')
+                    with html.Dl():
+                        with html.Div(v_for='row in prep_training_record.rows',key='row.label',classes='my-2'):
+                            html.Dt('{{ row.label }}',classes='font-weight-bold')
+                            html.Dd('{{ row.value }}')
+                    html.P('{{ prep_training_record.note }}',classes='text-caption mt-4')
+                with v.VCardActions():
+                    v.VSpacer();v.VBtn('Close',click='prep_training_record_open = false',variant='text')
 
 
 def inputs_panel(app):
@@ -130,6 +142,8 @@ def libraries_panel(app):
                     with html.Td():
                         html.Div('{{ item.model }}')
                         html.Div('{{ item.coordinates }}',v_if='!!item.coordinates',classes='text-caption')
+                        v.VBtn('Training record',v_if='item.has_training_record',
+                            click=(app.show_preparation_training_record,'[item.id]'),disabled=('prep_busy',),variant='text',size='small')
                         with html.Details(v_if='item.validation && item.validation.length',classes='text-caption my-2'):
                             html.Summary('Held-out model validation',style='cursor:pointer')
                             html.P('Top-five recall: at least one compatible space group appears among the first five. These are simulation results, not measured experimental accuracy.',classes='my-2',style='max-width:560px')

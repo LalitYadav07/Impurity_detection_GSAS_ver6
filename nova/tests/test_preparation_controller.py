@@ -43,6 +43,36 @@ def test_open_and_close_preserve_live_workspace_and_do_not_start_jobs(app):
     assert s.workspace_view=='experiment' and not s.setup_collapsed
 
 
+def test_training_record_inspection_does_not_submit_jobs_or_load_weights(app,monkeypatch):
+    from radar_pd_nova import preparation_training_record
+    application,store,key,service=app;s=application.server.state
+    application.open_preparation_workspace();before=len(service.submissions)
+    record=dict(summary='CUDA GPU · 60 of 60 completed epochs',rows=[],status='complete',note='Recorded values')
+    monkeypatch.setattr(preparation_training_record,'describe',lambda library,entry:record)
+    async def read():
+        await application.show_preparation_training_record(store.registry.get(key).document['entries'][0]['id'])
+    asyncio.run(read())
+    assert s.prep_training_record_open and s.prep_training_record==record
+    assert not s.prep_busy and len(service.submissions)==before
+    application.close_preparation_workspace()
+    assert not s.prep_training_record_open
+
+
+@pytest.mark.parametrize('leave',['library','workspace'])
+def test_training_record_arriving_after_navigation_cannot_reopen_a_stale_dialog(app,monkeypatch,leave):
+    application,store,key,service=app;s=application.server.state;application.open_preparation_workspace()
+    async def changed_selection(*_args,**_kwargs):
+        if leave=='library':s.prep_library='different-library'
+        else:s.workspace_view='monitor'
+        return dict(summary='Stale training record',rows=[],note='',status='complete')
+    monkeypatch.setattr(module.asyncio,'to_thread',changed_selection)
+    async def read():
+        await application.show_preparation_training_record(store.registry.get(key).document['entries'][0]['id'])
+    asyncio.run(read())
+    assert not s.prep_training_record_open and s.prep_training_record is None
+    assert not service.submissions
+
+
 def test_new_preparation_defaults_match_the_shared_structural_refinement_domain(app):
     from gpx_recipe.structural_live.service import SearchSettings
     application,_,_,_=app;s=application.server.state;settings=SearchSettings()
