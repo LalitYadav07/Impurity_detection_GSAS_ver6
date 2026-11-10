@@ -148,6 +148,41 @@ def test_an_active_gpu_bank_defers_other_trainers_but_leaves_cpu_generation_read
     assert router.preparation_operation_ready(TRAINING_OPERATION,jobs,library)
 
 
+@pytest.mark.parametrize('gpu_capable',[False,True])
+def test_multipart_capability_is_checked_on_the_gpu_producer_and_inputs_recover_there(tmp_path,monkeypatch,gpu_capable):
+    import shutil
+    from gpx_recipe.preparation import structural_jobs
+    from gpx_recipe.preparation.structural_input_parts import references
+    from test_structural_input_parts import captured
+    router,service,_,_=setup(tmp_path,monkeypatch)
+    root=tmp_path/'large-training';request,names=captured(root,monkeypatch)
+    monkeypatch.setattr(structural_jobs,'MAX_INPUT_BYTES',12000)
+    calls=[]
+    def capable(tool,key):
+        calls.append((tool,key));return gpu_capable and tool==TRAINING_TOOL_ID and key=='model_asset_parts'
+    monkeypatch.setattr(service,'tool_has_input',capable,raising=False)
+    source=dict(id='multipart-parent',source_sha256=request['expected_source_sha256'],
+        source_path=str(root/'parent.cif'),dataset_id='parent-data')
+    payload=copy.deepcopy(request['payload'])
+    for field in ('source','instrument','plan','destination'):payload[field]=str(root/payload[field])
+    if not gpu_capable:
+        before=len(service.data)
+        with pytest.raises(RuntimeUnavailable,match='No examples were dropped'):
+            submit_training(router,payload,source,root=root)
+        assert not service.submissions and len(service.data)==before
+    else:
+        handle=submit_training(router,payload,source,root=root)
+        assert len(references(handle['asset_id'])[1])==2 and len(service.submissions)==1
+        fresh=PreparationRuntime(tmp_path/'fresh-multipart-viewer',service)
+        patch_runtime(fresh,service,monkeypatch)
+        shutil.rmtree(root);shutil.rmtree(router.training.root)
+        restored=fresh.restore_native_inputs(handle,tmp_path/'restored-multipart')
+        assert {name:file_sha(path) for name,path in restored.items()}==handle['request']['input_hashes']
+        assert len(service.submissions)==1
+    assert (TRAINING_TOOL_ID,'model_asset_parts') in calls
+    assert all(tool==TRAINING_TOOL_ID for tool,_ in calls)
+
+
 @pytest.mark.parametrize('tool,limit',[(TRAINING_TOOL_ID,1),('neutrons_radar_pd_model_campaign_prototype',8)])
 def test_actual_utility_submission_uses_shared_admission_with_the_correct_family_limit(tmp_path,monkeypatch,tool,limit):
     from contextlib import contextmanager
