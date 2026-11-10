@@ -54,6 +54,18 @@ def discover_nomad_samples(ipts, sample_index, subfolder=nomad.MODERN_FOLDER, *,
     return result
 
 
+def _profile_fit_domain(setup, source_bank, snapshot, profile_bank, native_limits):
+    """Apply the same continuous guard to setup previews and each new scan."""
+    from gpx_recipe.tof_domain import assess_tof_domain
+    selected = next(b for b in setup.banks if b.bank == source_bank)
+    lower, upper = selected.minimum_tof, selected.maximum_tof
+    if native_limits is not None:
+        lower = max(lower, float(native_limits[0]))
+        upper = min(upper, float(native_limits[1]))
+    coefficients = next(dict(values) for label, _, values in snapshot.blocks if label == profile_bank)
+    return assess_tof_domain(coefficients, (lower, upper))
+
+
 def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks=None,
         sample_index=None,subfolder=nomad.MODERN_FOLDER,initial_backfill_limit=None,
         profile_path=None,profile_bank=None,profile_acknowledged=False,allow_exploratory=False,
@@ -92,15 +104,8 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
                 raise ValueError('Supply a matching .instprm and its Bank label; automatic NOMAD profiles are not yet validated')
             _,receipt=nomad.validate_profile(setup,selected_banks[0],profile_path,profile_bank,
                 acknowledged=profile_acknowledged,_profile_loader=profile_once)
-            from gpx_recipe.tof_domain import assess_tof_domain
-            selected=next(b for b in setup.banks if b.bank==selected_banks[0])
-            lower,upper=selected.minimum_tof,selected.maximum_tof
-            if native_limits is not None:
-                lower=max(lower,float(native_limits[0]))
-                upper=min(upper,float(native_limits[1]))
-            snapshot=profile_once(profile_path)
-            coefficients=next(dict(values) for label,_,values in snapshot.blocks if label==profile_bank)
-            receipt['fit_domain']=assess_tof_domain(coefficients,(lower,upper))
+            receipt['fit_domain']=_profile_fit_domain(
+                setup, selected_banks[0], profile_once(profile_path), profile_bank, native_limits)
             if setup.warnings and not allow_exploratory:
                 raise ValueError('Reduction-quality notices require explicit exploratory-analysis acknowledgement')
             return setup,receipt,None
@@ -325,6 +330,12 @@ class NomadWatchController(PowgenWatchController):
         if self._configuration.radiation.value!='neutron' or self._configuration.instrument_mode=='cw':
             raise ValueError('NOMAD requires a neutron TOF configuration')
         data,profile,receipt=self._prepare_run(run)
+        # Later arrivals can have a different measured interval from startup.
+        # Check the exact staged single-bank profile against this run and the
+        # saved fit limits before uploading inputs or submitting any job.
+        receipt['fit_domain']=_profile_fit_domain(
+            self._setup(run), receipt['source_bank'], nomad.read_profile_snapshot(profile),
+            receipt['staged_bank'], self._configuration.limits)
         profile_id=self._profile_dataset_id(profile)
         config=self._configuration.model_copy(update={'run_name':self._run_name(run),'instrument_mode':'tof'})
         inputs=InputSelection(source=InputSource.UPLOAD,data_path=str(data),bank=str(receipt['source_bank']),

@@ -215,7 +215,7 @@ jobs:
           PYTHONPATH=/src/src:/scientific-test-support python -m pytest -q test_model_preparation_retry.py test_model_runtime.py \
             test_model_checkpoint_coalescing.py test_model_enrollment.py test_checkpoint_uploads.py \
             test_model_checkpoint.py test_native_job_admission.py test_restored_display_inputs.py \
-            test_live_admission_guard.py test_restricted_watch_retention.py test_nomad_preflight_throughput.py'
+            test_live_admission_guard.py test_restricted_watch_retention.py test_nomad.py test_nomad_preflight_throughput.py'
 
       - name: Verify planner transport, storage and workspace navigation
         shell: bash

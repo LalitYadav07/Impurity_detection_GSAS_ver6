@@ -362,6 +362,33 @@ class Galaxy:
     def recent_runs(self,**kw):return self.jobs
 
 
+@pytest.mark.parametrize('bounded', [False, True])
+def test_new_scan_interval_is_checked_before_any_submission(source, supplied, monkeypatch, bounded):
+    """A wider arriving scan must not bypass the startup profile-domain gate."""
+    monkeypatch.setattr(WatchDefinition, 'source_directory', property(lambda self: str(source.parent)))
+    supplied.write_text(supplied.read_text().replace('sig-2:1', 'sig-2:-1'))
+    source.write_text(source.read_text().replace('1100', '30000'))
+    service = Galaxy(supplied.read_text())
+    config = AnalysisConfig(radiation='neutron', instrument_mode='tof', sample_elements=['Si'],
+                            **({'limits': (1000, 1100)} if bounded else {}))
+    service.load_configuration_dataset = lambda key: config
+    settings = NomadExperimentSettings('IPTS-1', 'h', 'c', instrument_profile_dataset_id='original',
+        selected_banks=(5,), profile_bank=1, profile_acknowledged=True, initial_backfill_limit=1)
+    controller = NomadWatchController(service, settings)
+    controller._read_scan_metadata = lambda run: {}
+    run = controller.discover(checkpoint=False)[0]
+    if bounded:
+        record = controller.launch_submission(run)
+        assert len(service.jobs) == 1
+        assert record.provenance['nomad_bank']['fit_domain']['native_limits'] == [1000, 1100]
+        assert not record.provenance['nomad_bank']['fit_domain']['trimmed_lower']
+    else:
+        with pytest.raises(ValueError, match='Gaussian variance is non-positive'):
+            controller.launch_submission(run)
+        assert not service.jobs and not service.snapshots
+        assert 'profile-hda' not in service.documents
+
+
 def test_trial_discovery_stages_one_nomad_bank_without_checkpoint(source,supplied,monkeypatch):
     monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda self:str(source.parent)))
     service=Galaxy(supplied.read_text())
