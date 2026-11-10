@@ -51,6 +51,38 @@ def _sample_values(parameters):
     return result
 
 
+def same_instrument_profile(left,right):
+    """Compare complete native calibration, apart from a fixed reader label.
+
+    GSAS-II selects the instrument block before storing these dictionaries.
+    Its scalar Bank entry is a reader/export identifier, excluded from the
+    native refinement parameters; measured import can relabel it. It is not
+    the selected profile-block index. Keep every physical scalar and the
+    entire second dictionary (including Pdabc) in the comparison. Callers
+    still require a unique compatible histogram when selecting a bank.
+    """
+    from ..symmetry.native_audit import same
+    profiles=[];labels=[]
+    for parameters in (left,right):
+        if (not isinstance(parameters,(list,tuple)) or len(parameters)!=2
+                or not all(isinstance(p,dict) for p in parameters)):
+            return False
+        scalar=parameters[0]
+        labels.append('Bank' in scalar)
+        if 'Bank' in scalar:
+            bank=scalar['Bank']
+            if (not isinstance(bank,(list,tuple,np.ndarray))
+                    or isinstance(bank,np.ndarray) and bank.ndim!=1 or len(bank)!=3
+                    or any(isinstance(v,(bool,np.bool_)) or not isinstance(v,(int,float,np.integer,np.floating))
+                           or not np.isfinite(v) or v<=0 or float(v)!=int(v) for v in bank[:2])
+                    or bank[0]!=bank[1]
+                    or not isinstance(bank[2],(bool,np.bool_,int,np.integer)) or bank[2]!=0):
+                return False
+        profiles.append([{k:v for k,v in scalar.items() if k!='Bank'},parameters[1]])
+    # Do not infer a missing reader identity from the other histogram.
+    return labels[0]==labels[1] and same(profiles[0],profiles[1])
+
+
 def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_metric):
     """Compare native physical context, allowing only sampled parent strain.
 
@@ -88,8 +120,8 @@ def require_compatible(parent,histogram,reference,reference_histogram,*,maximum_
     # second carries physical lookup tables (for example Pdabc), which the
     # native powder driver also consumes. Admit neither a different table nor
     # a table added to an otherwise identical scalar profile.
-    if not same(histogram.data['Instrument Parameters'],
-                reference_histogram.data['Instrument Parameters']):
+    if not same_instrument_profile(histogram.data['Instrument Parameters'],
+                                   reference_histogram.data['Instrument Parameters']):
         raise ValueError('Prepared instrument bank or profile coefficients differ from this native histogram')
     hap=parent.data['Histograms'][histogram.name]
     if hap.get('LeBail'):raise ValueError('Le Bail intensities do not define a structural ranking parent')

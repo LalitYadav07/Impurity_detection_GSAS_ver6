@@ -9,7 +9,7 @@ import pytest
 G=pytest.importorskip('GSASII.GSASIIscriptable')
 from GSASII import GSASIIstrMain as MAIN
 from gpx_recipe.preparation.reference import create_reference
-from gpx_recipe.preparation.structural_ranking_native import require_compatible,observed_features
+from gpx_recipe.preparation.structural_ranking_native import require_compatible,observed_features,same_instrument_profile
 from gpx_recipe.symmetry.compiler import file_sha
 from test_native_profile_capture import native_source
 
@@ -23,6 +23,52 @@ def pair(root,kind):
         lower=12. if kind=='PNC' else 3000.,upper=125. if kind=='PNC' else 40000.,bins=701,bank=1)
     other=G.G2Project(gpxfile=reference['path'])
     return source,project,other
+
+
+@pytest.mark.parametrize('kind',['PNC','PNT'])
+def test_reader_bank_label_is_not_a_native_profile_coefficient(tmp_path,kind):
+    source,p,r=pair(tmp_path/'control',kind)
+    h,rh=p.histogram(0),r.histogram(0)
+    original=file_sha(source)
+    reference_path=tmp_path/'control/reference/reference.gpx'
+    reference_before=file_sha(reference_path)
+    rh.InstrumentParameters['Bank']=[3.,3.,False]
+    assert require_compatible(p.phase(0),h,r.phase(0),rh,maximum_metric=.001)==pytest.approx(0.)
+    native=np.asarray(MAIN.DoNoFit(str(source),h.name),float)
+    features=observed_features(source,h,include_reference=True)
+    h.InstrumentParameters['Bank']=[3.,3.,False]
+    relabelled=tmp_path/'relabelled.gpx';p.save(str(relabelled))
+    np.testing.assert_array_equal(MAIN.DoNoFit(str(relabelled),h.name),native)
+    actual=observed_features(relabelled,h,include_reference=True)
+    for key in ('q','intensity','background','valid'):
+        np.testing.assert_array_equal(actual[key],features[key])
+        np.testing.assert_array_equal(actual['reference'][key],features['reference'][key])
+    assert file_sha(source)==original and file_sha(reference_path)==reference_before
+
+
+@pytest.mark.parametrize('bank',[
+    [True,True,False],[1.5,1.5,False],[float('nan'),float('nan'),False],
+    [float('inf'),float('inf'),False],[0,0,False],[-1,-1,False],
+    [1,2,False],[1,1,True],[1,1,.5],[1,1],[1,1,False,0],1,np.array(1),
+])
+def test_invalid_reader_bank_labels_cannot_enter_shared_profile_comparison(bank):
+    expected=[{'Type':['PNT','PNT',False],'Bank':[1,1,False],'difC':[6200.,6200.,False]},{}]
+    changed=copy.deepcopy(expected);changed[0]['Bank']=bank
+    assert not same_instrument_profile(changed,expected)
+
+
+def test_reader_label_exception_preserves_every_other_instrument_field():
+    expected=[{'Type':['PNT','PNT',False],'Bank':[1,1,False],'difC':[6200.,6200.,False]},
+              {'Pdabc':np.array([[.1,3.],[.01,.07],[.02,.08],[.03,.09]])}]
+    changed=copy.deepcopy(expected);changed[0]['Bank']=[3.,3.,0]
+    assert same_instrument_profile(changed,expected)
+    for edit in ('missing_bank','extra_field','coefficient','lookup'):
+        other=copy.deepcopy(changed)
+        if edit=='missing_bank':other[0].pop('Bank')
+        elif edit=='extra_field':other[0]['unprepared']=[1.,1.,False]
+        elif edit=='coefficient':other[0]['difC'][1]+=.1
+        else:other[1]['Pdabc'][1,1]+=.01
+        assert not same_instrument_profile(other,expected)
 
 
 @pytest.mark.parametrize('kind',['PNC','PNT'])
@@ -76,7 +122,7 @@ def test_three_curve_parent_is_fresh_native_profile_on_actual_acquisition_grid(t
     np.testing.assert_allclose(ref['intensity'],original[selected],rtol=1e-12,atol=1e-12)
 
 
-@pytest.mark.parametrize('change',['none','cell_within','cell_outside','profile','profile_lookup','position','adp','occupancy','sample','sample_contrast','legacy_contrast_zero','isotope'])
+@pytest.mark.parametrize('change',['none','cell_within','cell_outside','profile','profile_lookup','bank_profile','bank_twotheta','bank_difc','position','adp','occupancy','sample','sample_contrast','legacy_contrast_zero','isotope'])
 def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change):
     _,p,r=pair(tmp_path/'control','PNT');parent=p.phase(0);h=p.histogram(0)
     cx,_,_,cia=parent.data['General']['AtomPtrs']
@@ -84,6 +130,9 @@ def test_only_covered_native_contexts_enter_the_prepared_ranker(tmp_path,change)
     elif change=='cell_outside':parent.data['General']['Cell'][1]*=1.1
     elif change=='profile':h.InstrumentParameters['X'][1]+=.1
     elif change=='profile_lookup':h.data['Instrument Parameters'][1]['Pdabc']={'d':[.1,3.,20.],'sig':[.01,.07,.03]}
+    elif change in {'bank_profile','bank_twotheta','bank_difc'}:
+        h.InstrumentParameters['Bank']=[3.,3.,False]
+        h.InstrumentParameters[{'bank_profile':'X','bank_twotheta':'2-theta','bank_difc':'difC'}[change]][1]+=.1
     elif change=='position':parent.data['Atoms'][0][cx+1]+=.001
     elif change=='adp':parent.data['Atoms'][0][cia+1]+=.001
     elif change=='occupancy':parent.data['Atoms'][0][cx+3]=.9
@@ -102,6 +151,7 @@ def test_native_profile_lookup_values_are_part_of_structural_admission(tmp_path)
     """A table is a physical profile input even with identical scalar terms."""
     _,p,r=pair(tmp_path/'control','PNT')
     h,rh=p.histogram(0),r.histogram(0)
+    h.InstrumentParameters['Bank']=[3.,3.,False]
     table={'d':np.array([.1,3.,20.]),'sig':np.array([.01,.07,.03])}
     h.data['Instrument Parameters'][1]['Pdabc']=copy.deepcopy(table)
     rh.data['Instrument Parameters'][1]['Pdabc']=copy.deepcopy(table)

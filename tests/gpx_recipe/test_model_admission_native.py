@@ -57,6 +57,9 @@ def request(control,tmp_path,change=None):
     if change=='cell':phase.data['General']['Cell'][1]*=1.0001
     elif change=='outside':phase.data['General']['Cell'][1]*=1.1
     elif change=='profile':hist.InstrumentParameters['X'][1]+=.1
+    elif change=='bank_label':hist.InstrumentParameters['Bank']=[3.,3.,False]
+    elif change=='bank_profile':
+        hist.InstrumentParameters['Bank']=[3.,3.,False];hist.InstrumentParameters['difC'][1]+=.1
     elif change=='lookup':hist.data['Instrument Parameters'][1]['Pdabc']={'d':[.1,3.],'sig':[.1,.2]}
     elif change=='atom':phase.data['Atoms'][0][phase.data['General']['AtomPtrs'][0]+1]+=.001
     elif change=='sample':hist.data['Sample Parameters']['Absorption'][0]+=.1
@@ -77,7 +80,7 @@ def request(control,tmp_path,change=None):
     return payload
 
 
-@pytest.mark.parametrize('change',[None,'cell','name'])
+@pytest.mark.parametrize('change',[None,'cell','name','bank_label'])
 def test_admission_accepts_new_gpx_identity_name_and_covered_cell(control,tmp_path,change):
     payload=request(control,tmp_path,change);before=file_sha(payload['source'])
     result=execute(payload);validate_receipt(result,payload)
@@ -87,7 +90,7 @@ def test_admission_accepts_new_gpx_identity_name_and_covered_cell(control,tmp_pa
     assert len(result['candidate_checks'])==2
 
 
-@pytest.mark.parametrize('change',['outside','profile','lookup','atom','sample','hap','isotope','adp','constraint','k','bytes'])
+@pytest.mark.parametrize('change',['outside','profile','bank_profile','lookup','atom','sample','hap','isotope','adp','constraint','k','bytes'])
 def test_admission_rejects_incompatible_context_and_tampered_child(control,tmp_path,change):
     payload=request(control,tmp_path,change);result=execute(payload)
     assert not result['compatible'] and result['no_refinement'] and result['reason']
@@ -153,6 +156,22 @@ def test_reference_profile_is_checked_independently(control,tmp_path):
     payload['reference']=str(before)
     result=execute(payload)
     assert not result['compatible'] and 'profile' in result['reason']
+
+
+@pytest.mark.parametrize('ambiguous',[False,True])
+def test_reference_reader_labels_do_not_select_between_identical_profiles(control,tmp_path,ambiguous):
+    payload=request(control,tmp_path)
+    before=tmp_path/'before.gpx';shutil.copyfile(payload['source'],before)
+    project=G.G2Project(gpxfile=str(before));hist=project.histogram(0)
+    hist.InstrumentParameters['Bank']=[3.,3.,False]
+    if ambiguous:
+        project.add_simulated_powder_histogram('same profile with another reader label',payload['instrument'],
+            3.,40.,Npoints=1501,scale=120.,phases=[project.phase(0)])
+    project.save();payload['reference']=str(before)
+    original=file_sha(before);result=execute(payload)
+    assert result['compatible'] is (not ambiguous)
+    if ambiguous:assert 'unique compatible native bank' in result['reason']
+    assert file_sha(before)==original
 
 
 def test_no_selected_k_candidates_reports_all_exclusions(control,tmp_path):
