@@ -1,12 +1,13 @@
 """Durable Galaxy dispatch for provisional scan jobs; no native code in NOVA."""
 from __future__ import annotations
+from ..tool_ids import tool_id
 import hashlib,json,re,time,uuid
 from pathlib import Path
 from gpx_recipe.live.packet import create_packet,canonical,extract_result_archive,scientific_packet_identity
 from gpx_recipe.live.contracts import file_hash
 from ..refinement_runtime import GalaxyRefinementRuntime,RuntimeUnavailable
 
-LIVE_TOOL_ID='neutrons_radar_pd_live_snapshot_prototype'
+LIVE_TOOL_ID=tool_id('live_snapshot')
 
 
 class GalaxyLiveRuntime(GalaxyRefinementRuntime):

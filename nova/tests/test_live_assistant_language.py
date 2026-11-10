@@ -17,6 +17,28 @@ SELECTION = ReplyContext(step="selection", samples=SAMPLES, shown_samples=SAMPLE
 CHEMISTRY = ReplyContext(step="chemistry")
 
 
+def test_narrative_can_description_recovers_only_explicit_experiment_choice():
+    reply = interpret_reply(
+        "I want to analyse Er SSL (Er2Be2GeO7) on HB-2A, IPTS-28749, experiment 853. "
+        "Please find the reduced scans and sample metadata. I want to compare the cold "
+        "and warm scans; the sample is in an aluminium can."
+    )
+    assert reply.action == "clarify"
+    assert reply.value is None
+    assert len(reply.choices) == 1
+    assert reply.choices[0].value == {"live_beamline": "HB2A", "powgen_ipts": "IPTS-28749"}
+    assert "has not been applied" in reply.message
+
+
+def test_invalid_chemistry_does_not_apply_other_grouped_settings():
+    reply = interpret_reply("environment: Al; sample: CO", CHEMISTRY)
+    assert reply.action == "clarify"
+    assert reply.value is None
+    assert all(choice.value == {"live_environment_elements": "Al"} for choice in reply.choices)
+    assert all(choice.label.startswith("Apply only:") for choice in reply.choices)
+    assert "CO" in reply.message
+
+
 def test_discovery_count_decoration_does_not_hide_exact_sample_name():
     samples=(SampleOption('100805','100805 — RuTrimer1 (6 scans)'),
              SampleOption('100804','100804 — BaNbCrRu_Dimer (9 scans)'))

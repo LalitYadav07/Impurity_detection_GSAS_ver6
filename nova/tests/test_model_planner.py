@@ -774,6 +774,24 @@ def test_presentation_canting_requests_do_not_conflict_with_explicit_geometry(us
     assert _requested_moment_model(user_request)=='symmetry_allowed'
 
 
+@pytest.mark.parametrize('user_request', [
+    'Use moment_model=symmetry_allowed; allow all symmetry-permitted components including canting with x, y and z starts.',
+    'Allow every symmetry-allowed magnetic component including canting with z, x and y starts.',
+    'Allow all symmetry-permitted moment components with x, y and z starts.',
+])
+def test_explicit_component_scope_keeps_axis_start_lists_together(user_request):
+    from radar_pd_nova.model_planner import _requested_moment_model
+    assert _requested_moment_model(user_request) == 'symmetry_allowed'
+
+
+@pytest.mark.parametrize('conflict', ['Force all moments collinear.', 'Do not allow canting.'])
+def test_axis_start_lists_do_not_hide_conflicting_geometry(conflict):
+    from radar_pd_nova.model_planner import _requested_moment_model
+    request = 'Allow all symmetry-permitted components including canting with x, y and z starts. ' + conflict
+    with pytest.raises(ValueError, match='conflicting moment models'):
+        _requested_moment_model(request)
+
+
 @pytest.mark.parametrize('assignment',[
     'Use moment_model=symmetry_allowed:',
     'Use moment model: symmetry_allowed:',

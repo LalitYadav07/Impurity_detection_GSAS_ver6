@@ -4,6 +4,7 @@ This controls requests made by this NOVA process. Galaxy remains responsible
 for admission across viewers and for actual CPU and memory allocation. A slot
 is held only across the capacity check and submission, never during a fit.
 """
+from .tool_ids import is_interactive_tool, is_scientific_tool
 from contextlib import contextmanager
 import base64
 import binascii
@@ -128,8 +129,7 @@ class HistoryJobAdmission:
                 raise AdmissionUnavailable('Galaxy returned an invalid scientific-job queue')
             # Do not charge other tools or terminal jobs against this limit.
             tool = row.get('tool_id', '')
-            if (not isinstance(tool, str) or not tool.startswith('neutrons_radar_pd_')
-                    or row.get('state') not in ACTIVE_STATES):
+            if not is_scientific_tool(tool) or row.get('state') not in ACTIVE_STATES:
                 continue
             history = row.get('history_id')
             if history is not None and str(history) != str(self.service.history_id):
@@ -139,8 +139,7 @@ class HistoryJobAdmission:
                 raise AdmissionUnavailable('A queued scientific job has no identity')
             # The viewer is not a scientific batch, and must not consume its own
             # only slot. Hosted GSAS-II desktops are likewise separate sessions.
-            if tool in {'neutrons_radar_pd_interactive_prototype',
-                        'neutrons_radar_pd_gsasii_interactive_prototype'}:
+            if is_interactive_tool(tool):
                 continue
             jobs[uid] = row
         return list(jobs.values())

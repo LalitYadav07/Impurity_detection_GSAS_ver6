@@ -799,10 +799,19 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
         return _interpret_single_reply(text, context)
     if len(clauses) > MAX_CLAUSES:
         return _clarify("Please use at most eight setup clauses in one reply, or use the controls. No part of this answer has been applied.")
-    replies = [_interpret_single_reply(clause, context) for clause in clauses]
+    def interpret_clause(clause: str, *, defer_banks: bool = False) -> ParsedReply:
+        try:
+            return _interpret_single_reply(clause, context, defer_banks=defer_banks)
+        except ValueError as error:
+            # A narrative clause can resemble an explicit chemistry command.
+            # Keep a grouped reply atomic, but allow the existing experiment
+            # clarification to recover known beamline/IPTS values. Never turn
+            # malformed chemistry into guessed elements or a partial edit.
+            return _clarify(str(error))
+
+    replies = [interpret_clause(clause) for clause in clauses]
     if context.defer_sample_bank_membership and any(r.action == "patch" and "powgen_processing_scope" in r.value for r in replies):
-        replies = [_interpret_single_reply(clause, context, defer_banks=True)
-                   for clause in clauses]
+        replies = [interpret_clause(clause, defer_banks=True) for clause in clauses]
     # Existing goal actions are ordinary draft patches too. Combining one with
     # an explicit setting must retain both, including conflict validation.
     replies = [ParsedReply("patch", goal_patch(r.value), "Use " + r.value) if r.action == "goal" else r

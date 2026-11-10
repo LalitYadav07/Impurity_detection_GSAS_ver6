@@ -1,5 +1,6 @@
 """Explicit, source-bound acceptance of incomplete candidate libraries."""
 from __future__ import annotations
+from .tool_ids import tool_id
 
 from copy import deepcopy
 import json
@@ -125,7 +126,7 @@ class LibraryReviewMixin:
         except ValueError:
             base = urlsplit("")
         if (isinstance(action, UtilityActionRecord)
-                and action.tool_id == "neutrons_radar_pd_library_builder_prototype"
+                and action.tool_id == tool_id("library_builder")
                 and owner.get("signature") and owner.get("source_signature")
                 and isinstance(job, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job)
                 and job not in {"pending", "unknown"} and not job.startswith("pending-")

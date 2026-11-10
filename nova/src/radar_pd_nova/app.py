@@ -3282,6 +3282,12 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         with html.Div(v_if="!powgen_scientific_rows.length", classes="radar-result-not-ready"):
             vuetify.VAlert(
                 text="Results will appear after the first analysis finishes. Transition tracking can show a measured pattern before its refinement completes.",
+                v_if="!live_restored_checkpoint_id",
+                type="info", variant="tonal",
+            )
+            vuetify.VAlert(
+                text="No results are loaded from this saved checkpoint. Open Previous Run in the setup panel to find jobs that completed after it was saved. Refresh saved results checks only jobs already recorded in this watch; it does not discover or submit scans.",
+                v_if="!!live_restored_checkpoint_id",
                 type="info", variant="tonal",
             )
         with vuetify.VExpansionPanels(v_if="powgen_scientific_rows.length", variant="accordion", classes="radar-derived-results my-3"):
@@ -4580,7 +4586,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.powgen_dashboard_configuration = "No monitor started"
             state.powgen_dashboard_library = "No monitor started"
             state.powgen_dashboard_wavelength = ("Broadband neutron TOF" if draft_instrument in {"NOM", "SNAP"}
-                else "Calibrated CW profile" if draft_instrument == "HB2A" else "Automatic per run")
+                else "Selected CW profile" if draft_instrument == "HB2A" else "Automatic per run")
             state.powgen_dashboard_scope_changed = False
             return
         settings = controller.settings
@@ -4595,7 +4601,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         database_id = getattr(settings, "database_dataset_id", "")
         state.powgen_dashboard_library = self._dataset_display_label(database_id, "Custom monitor library") if database_id else "Built-in MP/COD catalog"
         state.powgen_dashboard_wavelength = ("Broadband neutron TOF" if instrument in {"NOM", "SNAP"} else
-            "Calibrated CW profile" if instrument == "HB2A" else
+            "Selected CW profile" if instrument == "HB2A" else
             str(getattr(settings, "wavelength_angstrom", "") or "Automatic per run"))
         state.powgen_dashboard_scope_changed = bool(ipts and (
             draft_ipts != ipts or draft_instrument != instrument or

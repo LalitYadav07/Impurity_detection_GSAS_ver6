@@ -223,6 +223,12 @@ def inspect_checkpoint_payload(payload: Mapping, service, dataset_id: str, *, do
         return "Unknown (not saved)" if name in missing else str(value)
     limit = settings.initial_backfill_limit
     recorded_utc = str(payload.get("updated_utc") or "")
+    if saved.instrument == "HB2A":
+        exclusion_row = {"label": "Excluded acquisitions", "value": displayed(
+            "excluded_acquisitions", ", ".join(settings.excluded_acquisitions) or "None")}
+    else:
+        exclusion_row = {"label": "Excluded runs", "value": displayed(
+            "excluded_run_numbers", ", ".join(map(str, settings.excluded_run_numbers)) or "None")}
     rows = [
         {"label": "Checkpoint", "value": dataset_id},
         {"label": "State recorded", "value": state_recorded_display(recorded_utc)},
@@ -233,7 +239,7 @@ def inspect_checkpoint_payload(payload: Mapping, service, dataset_id: str, *, do
         {"label": "Sample IDs", "value": displayed("selected_sample_ids", ", ".join(settings.selected_sample_ids or ()) or "All samples")},
         {"label": "Banks", "value": displayed("selected_banks", ", ".join(map(str, settings.selected_banks or ())) or "All banks")},
         {"label": "Initial scan selection", "value": displayed("initial_backfill_limit", "All existing matching scans" if limit is None else "Future matching scans only" if limit == 0 else f"Latest {limit} matching scans")},
-        {"label": "Excluded runs", "value": displayed("excluded_run_numbers", ", ".join(map(str, settings.excluded_run_numbers)) or "None")},
+        exclusion_row,
         {"label": "Instrument profile", "value": displayed("instrument_profile_dataset_id", settings.instrument_profile_dataset_id or "Saved automatic mapping")},
         {"label": "Candidate library", "value": displayed("database_dataset_id", settings.database_dataset_id or "Built-in catalog")},
         {"label": "Main-phase CIF", "value": displayed("main_cif_dataset_id", settings.main_cif_dataset_id or "None")},

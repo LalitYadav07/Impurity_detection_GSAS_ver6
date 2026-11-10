@@ -194,7 +194,7 @@ def preflight_hb2a_experiment(ipts, *, selected_sample_ids=None, selected_banks=
         'selected_wavelength':(profiles[-1]['wavelength_angstrom'] if profiles else
             registry_mappings[-1]['profile_parameters']['Lam'] if registry_mappings else ''),
         'detected_wavelength':latest.get('nominal_wavelength_angstrom',''),
-        'wavelength_source':'Calibrated CW profile; measured m1/Ge reflection is a sanity check',
+        'wavelength_source':'Selected CW profile; measured m1/Ge reflection is a sanity check',
         'profile_filename':matched_paths[-1].name if matched_paths else '',
         'profile_source':('Official facility calibration; exact dated Ge/collimation mapping' if registry_mappings else
             'User-reviewed cycle, Ge reflection, collimation and sample-environment mapping'),

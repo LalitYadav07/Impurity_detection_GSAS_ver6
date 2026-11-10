@@ -94,6 +94,6 @@ def test_switching_four_beamlines_keeps_facility_and_geometry_distinct(live):
         if instrument=='HB2A':
             assert live._powgen_processing_bank_ids()==(1,)
             assert not state.powgen_bank_options
-            assert state.powgen_dashboard_wavelength=='Calibrated CW profile'
+            assert state.powgen_dashboard_wavelength=='Selected CW profile'
         elif instrument in {'NOM','SNAP'}:
             assert state.powgen_dashboard_wavelength=='Broadband neutron TOF'

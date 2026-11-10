@@ -1,4 +1,5 @@
 """Editors shared by the two independent analysis workflows."""
+from .tool_ids import tool_id
 
 from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
@@ -570,7 +571,7 @@ class SetupEditorMixin:
             )
             html.A(
                 "Open the standalone Galaxy library utility",
-                href="/?tool_id=neutrons_radar_pd_library_builder_prototype&version=latest",
+                href="/?tool_id="+tool_id("library_builder")+"&version=latest",
                 target="_blank",
                 classes="radar-secondary-link mt-2",
             )

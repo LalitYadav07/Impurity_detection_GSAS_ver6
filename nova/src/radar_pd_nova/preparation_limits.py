@@ -3,14 +3,15 @@
 This is Galaxy job concurrency, not a CPU reservation. Scientific worker
 pools continue to use the allocation actually reported inside each job.
 """
+from .tool_ids import tool_id
 
 import os
 
 PREPARATION_JOBS = 8
 TRAINING_JOBS = 1
 TRAINING_OPERATION = 'preparation-structural-training'
-CPU_TRAINING_TOOL_ID = 'neutrons_radar_pd_model_campaign_prototype'
-CUDA_TRAINING_TOOL_ID = 'neutrons_radar_pd_preparation_cuda_training_prototype'
+CPU_TRAINING_TOOL_ID = tool_id('model_campaign')
+CUDA_TRAINING_TOOL_ID = tool_id('preparation_cuda_training')
 
 
 def training_device(environ=None):

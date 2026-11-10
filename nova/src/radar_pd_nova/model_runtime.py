@@ -1,5 +1,6 @@
 """Galaxy model preparation and chunk transport; credentials stay in NOVA."""
 from __future__ import annotations
+from .tool_ids import tool_id
 import copy
 from contextlib import contextmanager, nullcontext
 import hashlib
@@ -19,7 +20,7 @@ from .models import UtilityActionRecord,RunStatus
 from .model_checkpoint import job_record, compact_transport, portable_checkpoint, verify_archived_receipts
 from .checkpoint_uploads import CheckpointUploadPending
 
-MODEL_TOOL_ID='neutrons_radar_pd_model_campaign_prototype'
+MODEL_TOOL_ID=tool_id('model_campaign')
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
 MODEL_BATCH_LIMITS=(1,2,4,8)
 EMPTY_PACKET_NAME='radar-model-packet.json'
@@ -153,6 +154,47 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         if not isinstance(jobs,list) or len(jobs)>self.max_active_jobs:
             raise RuntimeUnavailable('Galaxy did not report the model resource queue')
         return self.max_active_jobs-len(jobs)
+
+    def find_dispatches_complete(self,keys):
+        """Exception-only reconciliation, including jobs without named outputs.
+
+        Pagination, details and ownership must all succeed before absence is
+        reported. Ordinary polling keeps the cheap exact-output lookup.
+        """
+        import requests
+        from .galaxy_service import _parameter_value,normalize_status
+        keys=set(keys)
+        found={key:None for key in keys}
+        seen=set();page_size=200
+        for offset in range(0,10000,page_size):
+            response=requests.get(self.service.galaxy_url+'/api/jobs',
+                headers=self.service._headers,
+                params={'history_id':self.service.history_id,'tool_id':self.tool_id,
+                        'order':'create_time-asc','limit':page_size,'offset':offset},
+                timeout=30,allow_redirects=False)
+            response.raise_for_status();rows=response.json()
+            if not isinstance(rows,list) or len(rows)>page_size:
+                raise RuntimeUnavailable('Galaxy did not return a complete model-job listing')
+            for row in rows:
+                uid=identifier(row.get('id'))
+                if uid in seen:
+                    raise RuntimeUnavailable('Galaxy repeated a job-list page; absence could not be verified')
+                seen.add(uid)
+                job=self.service._job_details(uid)
+                if (job.get('id')!=uid or job.get('history_id')!=self.service.history_id
+                        or job.get('tool_id')!=self.tool_id):
+                    raise RuntimeUnavailable('Galaxy returned a model job outside this History or tool')
+                key=_parameter_value(job.get('params') or job.get('parameters') or {},'dispatch_key')
+                if key not in keys:continue
+                if found[key] is not None:
+                    raise RuntimeUnavailable('Several Galaxy jobs share a model dispatch; review them before retrying')
+                record=UtilityActionRecord(uid='model-'+key,tool_id=self.tool_id,
+                    name='Recovered model '+key,galaxy_job_id=uid,
+                    status=normalize_status(job.get('state')),outputs=self.service._job_output_ids(job))
+                self.verify_job(record,key)
+                found[key]=record
+            if len(rows)<page_size:return found
+        raise RuntimeUnavailable('The model-job lookup reached its safety limit; absence was not established')
 
     def wait_capacity(self,cancel=None):
         """A bounded per-History queue; Galaxy still owns site-wide admission."""

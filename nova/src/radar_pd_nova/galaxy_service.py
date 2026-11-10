@@ -1,6 +1,7 @@
 """Galaxy-backed execution and recovery for the RADAR-PD NOVA client."""
 
 from __future__ import annotations
+from .tool_ids import tool_id, is_scientific_tool
 
 import json
 import hashlib
@@ -42,13 +43,14 @@ from .models import (
     UtilityActionRecord,
 )
 
-ANALYZE_TOOL_ID = os.getenv("RADAR_PD_ANALYZE_TOOL_ID", "neutrons_radar_pd_analyze_prototype")
-SNS_RESOLVER_TOOL_ID = "neutrons_radar_pd_resolve_sns_input_prototype"
-LIBRARY_BUILDER_TOOL_ID = "neutrons_radar_pd_library_builder_prototype"
-GPX_HANDOFF_TOOL_ID = "neutrons_radar_pd_gpx_handoff_prototype"
-COMPARE_SERIES_TOOL_ID = "neutrons_radar_pd_compare_series_prototype"
-RESULT_EXPLORER_TOOL_ID = "neutrons_radar_pd_result_explorer_prototype"
-GSASII_INTERACTIVE_TOOL_ID = "neutrons_radar_pd_gsasii_interactive_prototype"
+ANALYZE_TOOL_ID = tool_id("analyze")
+CONFIGURE_TOOL_ID = tool_id("configure")
+SNS_RESOLVER_TOOL_ID = tool_id("resolve_sns_input")
+LIBRARY_BUILDER_TOOL_ID = tool_id("library_builder")
+GPX_HANDOFF_TOOL_ID = tool_id("gpx_handoff")
+COMPARE_SERIES_TOOL_ID = tool_id("compare_series")
+RESULT_EXPLORER_TOOL_ID = tool_id("result_explorer")
+GSASII_INTERACTIVE_TOOL_ID = tool_id("gsasii_interactive")
 EXPORT_DATASETS_TOOL_ID = "neutrons_export"
 RUN_NAME_PREFIX = "RADAR-PD NOVA"
 SUBMISSION_ACK_TIMEOUT_SECONDS = float(os.getenv("RADAR_PD_SUBMISSION_ACK_TIMEOUT", "60"))
@@ -2190,10 +2192,7 @@ class GalaxyService:
                 serialized_inputs[parameter_name] = value
             resolved_inputs[parameter_name] = resolved
         from .native_job_admission import HistoryJobAdmission,operation_from_inputs
-        is_scientific = tool_id.startswith('neutrons_radar_pd_') and tool_id not in {
-            'neutrons_radar_pd_interactive_prototype',
-            'neutrons_radar_pd_gsasii_interactive_prototype',
-        }
+        is_scientific = is_scientific_tool(tool_id)
         gate = HistoryJobAdmission(self) if is_scientific else None
         # Workflow-specific controls still bound their own queues. This final
         # admission point accounts for other RADAR-PD workflows sharing the
@@ -2355,7 +2354,7 @@ class GalaxyService:
             dataset = self._upload_dataset(str(config_path), store, "configuration")
         return UtilityActionRecord(
             uid=f"utility-{uuid.uuid4().hex}",
-            tool_id="neutrons_radar_pd_configure_prototype",
+            tool_id=CONFIGURE_TOOL_ID,
             name="Save reusable configuration",
             associated_run_uid=associated_run_uid,
             inputs={"schema": "radar-pd-config/v1"},

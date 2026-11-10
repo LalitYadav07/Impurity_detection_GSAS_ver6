@@ -68,7 +68,7 @@ class SymmetryMixin(KSearchMixin):
             sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='',sx_preparation_notice='')
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=8,
-            sx_queue_notice='',sx_backend='',sx_batches=[],sx_structural_priority_rows=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
+            sx_queue_notice='',sx_backend='',sx_batches=[],sx_dispatch_recovery_notice='',sx_dispatch_retry_ready=False,sx_dispatch_retry_ack=False,sx_structural_priority_rows=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,
             sx_structural_starts=4,sx_structural_seconds=DEFAULT_FIT_SECONDS,
             sx_structural_radius=.05,sx_structural_cells=DEFAULT_CELL_RADIUS,sx_structural_recovery=0.,sx_parent_reference='')
@@ -282,6 +282,9 @@ class SymmetryMixin(KSearchMixin):
     def _model_following(self):return getattr(self,'_model_following_active',False)
 
     def _symmetry_campaign_changed(self,**_):
+        self.server.state.sx_dispatch_recovery_notice=''
+        self.server.state.sx_dispatch_retry_ready=False
+        self.server.state.sx_dispatch_retry_ack=False
         if not self._symmetry_loading:
             self._symmetry_explicit_selection=False
         self.refresh_symmetry()
@@ -1300,6 +1303,53 @@ class SymmetryMixin(KSearchMixin):
                 self.server.state.sx_campaign_running=False
                 if self._model_active_campaigns.get(campaign.root.name) is owner:
                     self._model_active_campaigns.pop(campaign.root.name,None)
+
+    def inspect_missing_model_submissions(self):
+        self._recover_missing_model_submissions(retry=False)
+
+    def retry_missing_model_submissions(self):
+        self._recover_missing_model_submissions(retry=True)
+
+    def _recover_missing_model_submissions(self,*,retry):
+        if self._symmetry_task and not self._symmetry_task.done():return
+        s=self.server.state
+        if s.sx_busy or s.sx_campaign_running or s.sx_pause_pending:return
+        selected=(s.sx_campaign,s.rf_experiment)
+        acknowledged=bool(s.sx_dispatch_retry_ack)
+        async def reconcile():
+            from .model_dispatch_recovery import inspect_missing,retry_reviewed
+            s.sx_busy=True;s.sx_error='';s.sx_dispatch_retry_ready=False;s.sx_dispatch_retry_ack=False
+            s.sx_dispatch_recovery_notice='Checking this History for accepted jobs, including jobs without named outputs.'
+            s.flush()
+            try:
+                root=(self._symmetry_root()/selected[0]).resolve()
+                if root.parent!=self._symmetry_root() or not (root/'campaign.sqlite').is_file():
+                    raise ValueError('Select an existing campaign')
+                campaign=self._symmetry_campaign(root)
+                if (campaign.setting('template') or {}).get('scope',{}).get('experiment')!=selected[1]:
+                    raise ValueError('Choose the experiment belonging to this campaign')
+                transport=self._symmetry_transport(campaign)
+                if not isinstance(transport,GalaxyChunkTransport):
+                    raise ValueError('This recovery action is for Galaxy model batches')
+                if retry:
+                    result=await asyncio.to_thread(retry_reviewed,transport,acknowledged=acknowledged)
+                    message=(f"Returned {result['retried_batches']} missing batch(es) to the reviewed queue; "
+                             f"recovered {result['recovered_batches']} accepted job(s). Click Continue saved campaign to run the queue.")
+                else:
+                    result=await asyncio.to_thread(inspect_missing,transport)
+                    await asyncio.to_thread(campaign.recover,transport)
+                    message=(f"Recovered {result['recovered_batches']} accepted job(s). "
+                             f"No matching Galaxy job was found for {result['missing_batches']} batch(es), "
+                             f"containing {result['missing_starts']} starts. No new jobs were submitted.")
+                if selected==(s.sx_campaign,s.rf_experiment):
+                    s.sx_dispatch_recovery_notice=message
+                    s.sx_dispatch_retry_ready=bool(not retry and result['missing_batches'])
+                self._symmetry_refresh_pending=True
+            except Exception as exc:
+                s.sx_error=str(exc)
+                s.sx_dispatch_recovery_notice='Recovery stopped without submitting a replacement batch.'
+            finally:self._finish_symmetry_preparation()
+        self._symmetry_task=self._refinement_schedule(reconcile(),'radar-model-dispatch-recovery')
 
     def continue_symmetry_campaign(self):
         if self._symmetry_task and not self._symmetry_task.done():return

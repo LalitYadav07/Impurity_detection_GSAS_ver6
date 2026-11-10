@@ -7,6 +7,7 @@ by the watcher process.
 """
 
 from __future__ import annotations
+from .tool_ids import tool_id
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -23,7 +24,7 @@ from .nomad import is_source_subfolder as nomad_subfolder, run_number_from_filen
 
 WATCH_STATE_SCHEMA = "radar-pd-powgen-watch-state/v1"
 LIVE_STATE_SCHEMA = "radar-pd-live-watch-state/v2"
-ANALYZE_TOOL_ID = "neutrons_radar_pd_analyze_prototype"
+ANALYZE_TOOL_ID = tool_id("analyze")
 _IPTS_RE = re.compile(r"^IPTS-\d+$", re.IGNORECASE)
 _FACILITY_ROOTS = frozenset({"SNS", "HFIR"})
 

@@ -1,7 +1,7 @@
 """Saved-watch restoration is explicit, source-bound and never starts science."""
 import asyncio
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import PurePosixPath
 import threading
@@ -125,6 +125,21 @@ def test_complete_settings_roundtrip_without_source_reads(instrument, monkeypatc
     assert restored.state_dataset_ids == ["checkpoint-1"]
     assert restored.restore_document_sha256 == review.document_sha256
     assert restored._retry_submission_allowed() is False
+
+
+def test_hb2a_preview_shows_experiment_scoped_exclusions_and_preserves_them():
+    service = SavedHistory()
+    original, _ = checkpoint(service, "HB2A")
+    excluded = ("HB2A_EXP42_SCAN0102", "HB2A_EXP43_SCAN0102")
+    adapter = beamline_adapter("HB2A")
+    controller = adapter.controller(service, replace(original.settings, excluded_acquisitions=excluded))
+    payload = json.loads(controller.capture_checkpoint().payload_json)
+    review = inspect_checkpoint_payload(payload, service, "saved-hb2a", document_sha256="hash")
+    rows = {row["label"]: row["value"] for row in review.rows}
+    assert rows["Excluded acquisitions"] == ", ".join(excluded)
+    assert "Excluded runs" not in rows
+    assert review.controller.settings.excluded_acquisitions == excluded
+    assert not review.missing and not review.blocked
 
 
 @pytest.mark.parametrize("partial", [False, True])

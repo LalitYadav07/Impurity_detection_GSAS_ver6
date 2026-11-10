@@ -120,6 +120,11 @@ def _requested_moment_model(request):
     missed paraphrase cannot silently select the legacy collinear default.
     """
     text = request.lower().translate(str.maketrans({'\u2019': "'", '\u2011': '-', '\u2013': '-'}))
+    # Keep an explicit axis-start list together when splitting prose at
+    # commas/conjunctions. These are initial seeds, not restrictions on the
+    # allowed moment components.
+    text = re.sub(r'\bwith\s+([xyz])\s*,\s*([xyz])\s+(?:and\s+)?([xyz])\s+starts\b',
+                  r'with \1/\2/\3 starts', text)
     # A completed setting may introduce an explanation with a colon. Keep the
     # setting and explanation as separate clauses so both are checked: an
     # explicit assignment must never hide a contradictory following sentence.
@@ -154,6 +159,10 @@ def _requested_moment_model(request):
     subgroup_modal = (r'(?:all|every)\s+(?:the\s+)?subgroup[- ](?:allowed|permitted)\s+'
                       r'(?:magnetic\s+)?(?:moment\s+)?components?\s+'
                       r'(?:may|can|must|should)\s+(?:refine|vary|be\s+refined)')
+    permitted_components = (r'(?:all|every)\s+(?:the\s+)?(?:site[- ]+)?symmetry[- ]+'
+                            r'(?:allowed|permitted)\s+(?:magnetic\s+)?(?:moment\s+)?components?'
+                            r'(?:\s+(?:including|with|allowing)\s+canting)?'
+                            r'(?:\s+with\s+[xyz](?:/[xyz]){1,2}\s+starts)?')
     symmetry_choice = (r'symmetry[- _]allowed(?:\s+(?:magnetic\s+)?(?:moments?|components?|moment\s+components?))?'
                        r'(?:\s+model)?(?:\s+(?:including|with|allowing)\s+canting)?')
     # A numeric ceiling alone does not choose collinear or free geometry.
@@ -228,7 +237,8 @@ def _requested_moment_model(request):
                 setting = re.fullmatch(assignment, argument)
                 if setting:
                     model = setting.group(1)
-                elif (re.fullmatch(components, argument) or re.fullmatch(subgroup_components, argument)
+                elif (re.fullmatch(components, argument) or re.fullmatch(permitted_components, argument)
+                      or re.fullmatch(subgroup_components, argument)
                       or re.fullmatch(subgroup_adjective, argument)
                       or re.fullmatch(r'(?:(?:all|every)\s+)?(?:site[- ]+)?symmetry[- ]permitted\s+(?:magnetic\s+)?moment\s+components?', argument)):
                     # Not releasing *all* components does not require a

@@ -1,5 +1,6 @@
 """Native refinement transport; NOVA never loads GSAS-II or unpickles GPXs."""
 from __future__ import annotations
+from .tool_ids import tool_id
 
 import json
 import hashlib
@@ -16,7 +17,7 @@ from gpx_recipe.execution import write_json
 from .refinement_sources import file_sha
 from .refinement_messages import retain_review_evidence
 
-REFINEMENT_TOOL_ID = 'neutrons_radar_pd_refine_recipe_prototype'
+REFINEMENT_TOOL_ID = tool_id('refine_recipe')
 WORKSPACE_LABEL = 'RADAR-PD Refinement workspace'
 
 

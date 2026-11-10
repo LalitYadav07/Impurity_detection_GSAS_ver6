@@ -3,6 +3,7 @@
 Example: python -m radar_pd_nova.launch --history HISTORY --version VERSION --with-illumine --with-bilbao
 The Galaxy API key is read from GALAXY_API_KEY or this Mac's existing Keychain.
 """
+from .tool_ids import tool_id, deployment
 import argparse
 import json
 import os
@@ -10,8 +11,8 @@ import subprocess
 import urllib.parse
 import urllib.request
 
-BASE = 'https://ndip-test.ornl.gov'
-TOOL = 'neutrons_radar_pd_interactive_prototype'
+BASE = os.getenv('GALAXY_URL') or ('https://ndip.ornl.gov' if deployment()=='production' else 'https://ndip-test.ornl.gov')
+TOOL = tool_id('interactive')
 
 
 def credential_context(rows,names=('ornl_illumine',)):
@@ -40,6 +41,8 @@ def main(argv=None):
     args=parser.parse_args(argv)
     key=os.getenv('GALAXY_API_KEY','')
     if not key:
+        if BASE.rstrip('/')!='https://ndip-test.ornl.gov':
+            raise ValueError('Supply GALAXY_API_KEY for this Galaxy site; the NDIP-test Keychain key is not reused')
         key=subprocess.run(['security','find-generic-password','-a','ly6','-s',
             'radar-pd.ndip-test.galaxy-api','-w'],capture_output=True,text=True,check=True,timeout=10).stdout.strip()
     class NoRedirect(urllib.request.HTTPRedirectHandler):

@@ -70,6 +70,18 @@ def model_exploration(app):
         html.P('{{ sx_backend }}',classes='rf-notice')
         html.P('{{ sx_queue_notice }}',v_if='!sx_setup && !!sx_queue_notice',classes='rf-notice')
         html.P('Pause or end any other viewer for this campaign before continuing here.',v_if='!sx_setup && sx_resumable && !sx_campaign_running',classes='rf-notice')
+        with html.Details(v_if='!sx_setup && !!sx_campaign && sx_resumable && !sx_campaign_running',classes='rf-card mb-3'):
+            html.Summary('Recover missing submissions')
+            html.P('Use this after a connection or server interruption leaves a batch without a Galaxy job ID. Pause other viewers for this campaign first. Accepted jobs are recovered without resubmission.',classes='rf-notice')
+            v.VBtn('Check missing submissions',click=app.inspect_missing_model_submissions,
+                disabled=('sx_busy || sx_pause_pending',),variant='outlined',classes='mt-2')
+            html.P('{{ sx_dispatch_recovery_notice }}',v_if='!!sx_dispatch_recovery_notice',classes='rf-notice',raw_attrs=['aria-live="polite"'])
+            with html.Div(v_if='sx_dispatch_retry_ready'):
+                v.VCheckbox(label='Retry the missing batches; I understand that a late server acceptance could still duplicate work',
+                    v_model=('sx_dispatch_retry_ack',),density='compact',hide_details=True)
+                v.VBtn('Return missing batches to queue',click=app.retry_missing_model_submissions,
+                    disabled=('sx_busy || !sx_dispatch_retry_ack',),variant='outlined',classes='mt-2')
+                html.P('The complete job lookup is repeated before retry. Earlier attempts and completed results stay recorded. This check expires after five minutes.',classes='rf-notice')
         with html.Details(classes='rf-card mb-3'):
             html.Summary('Compute budget')
             with html.Div(classes='sx-settings'):
