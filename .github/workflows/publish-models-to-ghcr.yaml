@@ -103,6 +103,8 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_training_counts.py \
             /validation/tests/gpx_recipe/test_structural_observation_metrics.py \
             /validation/tests/gpx_recipe/test_structural_training_curriculum.py \
+            /validation/tests/gpx_recipe/test_structural_training_cache.py \
+            /validation/tests/gpx_recipe/test_structural_replay.py \
             /validation/tests/gpx_recipe/test_structural_training_checkpoint.py \
             /validation/tests/gpx_recipe/test_structural_training_checkpoint_native.py \
             /validation/tests/gpx_recipe/test_structural_training_transfer.py \

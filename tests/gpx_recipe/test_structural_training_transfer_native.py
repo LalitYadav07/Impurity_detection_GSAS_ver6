@@ -74,7 +74,7 @@ def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_mo
     monkeypatch.setattr(segments,'SEGMENT_SECONDS',None)
     reference=jobs.execute_training(dict(payload,destination=str(tmp_path/'reference')))
     reference_model=json.loads((tmp_path/'reference/model/model.json').read_text())
-    assert reference_model['feature_storage']=='native_pair_replay'
+    assert reference_model['feature_storage']=='file_backed'
     assert not list((tmp_path/'reference').rglob('features.npy'))
     monkeypatch.setattr(segments,'SEGMENT_SECONDS',1e-9)
     resume=None;previous=None;partial_results=[]
@@ -118,7 +118,7 @@ def test_worker_plans_continue_on_fresh_workers_and_publish_only_the_complete_mo
 
 def test_worker_charges_both_assembly_and_normalization_before_checkpoint_admission(tmp_path,monkeypatch):
     from types import SimpleNamespace
-    from gpx_recipe.preparation import structural_jobs as jobs,structural_replay
+    from gpx_recipe.preparation import structural_jobs as jobs,structural_training_cache
     from gpx_recipe.preparation import structural_training_segments as segments
     from test_structural_training_continuation import request
     payload,_=request(tmp_path/'inputs')
@@ -127,12 +127,12 @@ def test_worker_charges_both_assembly_and_normalization_before_checkpoint_admiss
     monkeypatch.setattr(jobs,'time',SimpleNamespace(monotonic=lambda:job_clock[0]))
     monkeypatch.setattr(training,'time',SimpleNamespace(monotonic=lambda:training_clock[0]))
     monkeypatch.setattr(segments,'SEGMENT_SECONDS',100.)
-    original_build=structural_replay.build;statistics=training.channel_statistics
+    original_build=structural_training_cache.build;statistics=training.channel_statistics
     def build(*args,**kwargs):
         result=original_build(*args,**kwargs);job_clock[0]+=60.;return result
     def setup(*args,**kwargs):
         result=statistics(*args,**kwargs);training_clock[0]+=45.;return result
-    monkeypatch.setattr(structural_replay,'build',build)
+    monkeypatch.setattr(structural_training_cache,'build',build)
     monkeypatch.setattr(training,'channel_statistics',setup)
     monkeypatch.setattr(training,'evaluate',lambda *a,**k:pytest.fail('The complete checkpoint boundary should precede validation'))
     result=jobs.execute_training(payload)

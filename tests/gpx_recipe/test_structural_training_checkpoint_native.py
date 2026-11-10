@@ -109,13 +109,8 @@ def test_shared_worker_recovers_verified_features_and_keeps_checkpoints_out_of_l
     plan=tmp_path/'inputs/plan.json';create_plan(example['source'],[directory],plan)
     request=dict(source=example['source'],instrument=example['instrument'],plan=str(plan),grid=example['grid'],
         destination=str(tmp_path/'reference'),settings=dict(representation=REPRESENTATION,bins=128,epochs=4,workers=1,augmentation=None))
-    # Seed the prior verified file-cache format under the worker's actual
-    # ownership boundary. Recovery must still read this format without
-    # rebuilding or changing the scientific row stream.
-    def prior_cache(directories,*,destination,**kwargs):
-        destination.rmdir()  # The new reader was given an empty owned workspace.
-        return structural_paired_store.build(directories,destination,**kwargs)
-    monkeypatch.setattr(structural_replay,'build',prior_cache)
+    # The complete cohort fits the existing verified file-cache format.
+    # Recovery must reuse it without changing the scientific row stream.
     reference=execute('structural-training',request)
     request['destination']=str(tmp_path/'interrupted');original=interrupt(monkeypatch,'epoch')
     with pytest.raises(InterruptedError):execute('structural-training',request)
@@ -142,17 +137,18 @@ def test_shared_worker_recovers_verified_features_and_keeps_checkpoints_out_of_l
 
 @pytest.mark.parametrize('kind',['partial_file','symlink'])
 def test_unverified_working_files_are_preserved_and_never_used_as_a_feature_cache(tmp_path,monkeypatch,kind):
-    from gpx_recipe.preparation import structural_jobs as jobs,structural_replay
+    from gpx_recipe.preparation import structural_jobs as jobs,structural_training_cache
     from test_structural_training_continuation import request
     payload,_=request(tmp_path/'inputs');cache=Path(payload['destination'])/'working-features'
     outside=tmp_path/'outside';outside.mkdir();(outside/'keep.txt').write_text('untouched')
-    def interrupted(*args,destination,**kwargs):
+    def interrupted(directories,destination,**kwargs):
+        destination.mkdir(exist_ok=True)
         if kind=='partial_file':(destination/'features.npy').write_bytes(b'unverified partial bytes')
         else:destination.rmdir();destination.symlink_to(outside,target_is_directory=True)
         raise InterruptedError('Incomplete prior working data')
-    monkeypatch.setattr(structural_replay,'build',interrupted)
+    monkeypatch.setattr(structural_training_cache,'build',interrupted)
     with pytest.raises(InterruptedError):jobs.execute_training(payload)
-    monkeypatch.setattr(structural_replay,'build',lambda *a,**k:pytest.fail('Unverified working data reached reconstruction'))
+    monkeypatch.setattr(structural_training_cache,'build',lambda *a,**k:pytest.fail('Unverified working data reached reconstruction'))
     with pytest.raises(ValueError,match='Unverified partial|owned directory'):jobs.execute_training(payload)
     if kind=='partial_file':assert (cache/'features.npy').read_bytes()==b'unverified partial bytes'
     else:assert cache.is_symlink() and (outside/'keep.txt').read_text()=='untouched'
@@ -161,8 +157,10 @@ def test_unverified_working_files_are_preserved_and_never_used_as_a_feature_cach
 
 def test_worker_closes_owned_native_replay_after_training_failure(tmp_path,monkeypatch):
     from gpx_recipe.preparation import structural_jobs as jobs,structural_replay,structural_ranker
+    from gpx_recipe.preparation import structural_training_cache
     from test_structural_training_continuation import request
     payload,_=request(tmp_path/'inputs');original=structural_replay.build;captured=[]
+    monkeypatch.setattr(structural_training_cache,'MAX_ROWS',1)
     def build(*args,**kwargs):
         cohort=original(*args,**kwargs);captured.append(cohort['features']);return cohort
     def stop(*args,**kwargs):raise InterruptedError('Controlled training interruption')

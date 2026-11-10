@@ -136,7 +136,7 @@ def test_three_curve_training_runs_through_the_actual_galaxy_wrapper(tmp_path,mo
         from gpx_recipe.preparation.structural_joint_modes import OBJECTIVE,SELECTION
         assert model.metadata['training_objective']==OBJECTIVE and model.metadata['checkpoint_selection']==SELECTION
         assert model.metadata['test']['mode_validation']['available']
-    assert model.metadata['feature_storage']=='native_pair_replay'
+    assert model.metadata['feature_storage']=='file_backed'
     entry=json.loads((collected/'native/trained/entry.json').read_text())
     assert entry['detail']['dataset']==model.metadata['dataset']
     assert not model.metadata['screening_qualified'] and not model.metadata['candidate_pruning_authorized']

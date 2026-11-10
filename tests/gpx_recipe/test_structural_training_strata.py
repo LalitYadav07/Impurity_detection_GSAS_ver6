@@ -266,9 +266,12 @@ def test_multipart_handoff_preserves_every_stratum_and_its_resume_state(tmp_path
         assert receipt['warmup_completed']==20 and receipt['trained_model'] is False
 
 
-def test_actual_training_and_cold_continuation_keep_both_ranges_and_identical_optimizer_state(tmp_path,monkeypatch):
+@pytest.mark.parametrize('storage',['file_backed','native_pair_replay'])
+def test_actual_training_and_cold_continuation_keep_both_ranges_and_identical_optimizer_state(tmp_path,monkeypatch,storage):
     pytest.importorskip('torch')
     from gpx_recipe.preparation import structural_training_segments as segments
+    from gpx_recipe.preparation import structural_training_cache
+    if storage=='native_pair_replay':monkeypatch.setattr(structural_training_cache,'MAX_ROWS',1)
     from gpx_recipe.preparation import structural_paired_training as training
     from gpx_recipe.preparation.structural_replay import build
     payload,paths=inputs(tmp_path/'inputs');root=Path(payload['source']).parent
@@ -306,6 +309,6 @@ def test_actual_training_and_cold_continuation_keep_both_ranges_and_identical_op
         full=jobs.execute_training(dict(request,destination=str(tmp_path/'full')))
         assert full['status']=='prepared' and full['candidate_pruning_authorized'] is False
         model=json.loads((tmp_path/'full/model/model.json').read_text())
-        assert model['dataset']==reference['dataset'] and model['feature_storage']=='native_pair_replay'
+        assert model['dataset']==reference['dataset'] and model['feature_storage']==storage
         assert jobs.execute_training(dict(request,destination=str(tmp_path/'full')))==full
     finally:cohort['features'].close()

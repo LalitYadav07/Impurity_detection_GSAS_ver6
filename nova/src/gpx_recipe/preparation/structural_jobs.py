@@ -439,7 +439,7 @@ def execute_training(request):
     paired=plan.get('representation')==REPRESENTATION
     if paired:
         from .structural_paired_store import load
-        from .structural_replay import build as build_replay
+        from .structural_training_cache import build as build_training_rows
     else:
         from .structural_store import build
     source = Path(request['source'])
@@ -487,14 +487,12 @@ def execute_training(request):
                 cohort['features'].close()
                 raise ValueError('Recovered feature cache differs from the captured native inputs')
         elif paired:
-            cache.mkdir(exist_ok=True)
-            if any(cache.iterdir()):
+            if cache.exists() and any(cache.iterdir()):
                 raise ValueError('Unverified partial feature-cache files remain; refusing to replace or use them')
-            # One automatic path for new paired training. The reader retains
-            # native arrays and verifies exact reconstructed feature rows;
-            # it never materializes the expanded multi-gigabyte feature plane.
-            cohort=build_replay(directories,bins=settings['bins'],split_seed=settings['split_seed'],
-                augmenter=augmenter,names='examples',destination=cache,
+            # Cache complete rows once when the original bounded disk store
+            # fits; larger cohorts retain the exact checked replay path.
+            cohort=build_training_rows(directories,cache,bins=settings['bins'],split_seed=settings['split_seed'],
+                augmenter=augmenter,names='examples',
                 reference_kind=settings.get('reference_kind'))
         else:
             cohort = build(directories, cache, bins=settings['bins'],
@@ -520,6 +518,9 @@ def execute_training(request):
                 or file_sha(instrument)!=plan['instrument_sha256']):
             raise ValueError('Training source or declared plan changed during the job')
         checked_blocks(plan_path, plan)
+        if paired:
+            from .structural_training_cache import discard_completed
+            discard_completed(cache)
         if paired and model.get('schema')=='radar-attention-training-segment/v1':
             return segments.publish(request,out,plan_sha,model,seconds=time.monotonic()-began)
         receipt = dict(schema='radar-structural-training-worker/v1', status='trained',
