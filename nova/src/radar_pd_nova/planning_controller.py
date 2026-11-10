@@ -261,6 +261,16 @@ class PlanningMixin(PlanningStorageMixin):
         return self._planning_runtime_cache
 
     def _planning_job_progress(self, *, operation, state, job_id='', message='', cancel=None):
+        loop=getattr(self,'_planning_progress_loop',None)
+        try:current=asyncio.get_running_loop()
+        except RuntimeError:current=None
+        if loop is not None and current is not loop:
+            try:
+                loop.call_soon_threadsafe(lambda:self._planning_job_progress(
+                    operation=operation,state=state,job_id=job_id,message=message,cancel=cancel))
+            except RuntimeError:
+                pass  # A closed viewer must not interrupt the durable worker.
+            return
         s=self.server.state
         if self._planning_cancel is None or self._planning_cancel is not cancel or self._planning_cancel.is_set():return
         s.plan_job_operation=operation;s.plan_job_state=state;s.plan_job_id=job_id
@@ -304,7 +314,7 @@ class PlanningMixin(PlanningStorageMixin):
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:
                 self._planning_finish_job(event)
-        self._refinement_schedule(prepare(),'radar-planning-parent')
+        self._planning_schedule(prepare(),'radar-planning-parent')
 
     def _planning_resolution_edited(self, **_):
         if self._planning_restoring:return
@@ -568,7 +578,7 @@ class PlanningMixin(PlanningStorageMixin):
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:
                 self._planning_finish_job(event)
-        self._refinement_schedule(discover(),'radar-planning-magnetic-discovery')
+        self._planning_schedule(discover(),'radar-planning-magnetic-discovery')
 
     def prepare_planning_magnetic_moments(self, **_):
         async def prepare():
@@ -600,7 +610,7 @@ class PlanningMixin(PlanningStorageMixin):
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:
                 self._planning_finish_job(event)
-        self._refinement_schedule(prepare(),'radar-planning-magnetic-prepare')
+        self._planning_schedule(prepare(),'radar-planning-magnetic-prepare')
 
     def discover_planning_structural_groups(self, **_):
         async def discover():
@@ -656,7 +666,7 @@ class PlanningMixin(PlanningStorageMixin):
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:
                 self._planning_finish_job(event)
-        self._refinement_schedule(discover(),'radar-planning-structural-discovery')
+        self._planning_schedule(discover(),'radar-planning-structural-discovery')
 
     def prepare_planning_structural_modes(self, **_):
         async def prepare():
@@ -690,7 +700,7 @@ class PlanningMixin(PlanningStorageMixin):
             except Exception as exc:
                 if generation==self._planning_generation and not event.is_set():s.plan_error=str(exc)
             finally:self._planning_finish_job(event)
-        self._refinement_schedule(prepare(),'radar-planning-structural-prepare')
+        self._planning_schedule(prepare(),'radar-planning-structural-prepare')
 
     def open_planning_workspace(self, **_):
         s=self.server.state
@@ -762,7 +772,7 @@ class PlanningMixin(PlanningStorageMixin):
 
     def run_planning_simulation(self, **_):
         if self.server.state.plan_busy:return
-        self._refinement_schedule(self._run_planning_simulation(),'radar-powgen-planning')
+        self._planning_schedule(self._run_planning_simulation(),'radar-powgen-planning')
 
     async def _run_planning_simulation(self):
         if self.server.state.plan_busy:return

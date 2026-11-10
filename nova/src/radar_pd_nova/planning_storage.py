@@ -39,6 +39,13 @@ def implementation_signature():
 
 
 class PlanningStorageMixin:
+    def _planning_schedule(self, coroutine, name):
+        # Progress callbacks run in worker threads; only this loop owns Trame
+        # state publication, including during saved-operation recovery.
+        try:self._planning_progress_loop=asyncio.get_running_loop()
+        except RuntimeError:pass
+        return self._refinement_schedule(coroutine,name)
+
     def _planning_root(self):
         if not hasattr(self, '_planning_owned_root'):
             root=getattr(getattr(self, 'service', None), 'output_root', None)
@@ -91,7 +98,7 @@ class PlanningStorageMixin:
             finally:s.plan_busy=False;s.flush()
         if hasattr(self,'_refinement_schedule'):
             s.plan_busy=True;s.plan_error='';s.plan_save_message=message;s.flush()
-            self._refinement_schedule(run(),'radar-planner-storage')
+            self._planning_schedule(run(),'radar-planner-storage')
         else:
             try:action()
             except Exception as exc:s.plan_error=str(exc)
@@ -417,4 +424,4 @@ class PlanningStorageMixin:
             except Exception as exc:
                 if not event.is_set():s.plan_error=str(exc)
             finally:self._planning_finish_job(event)
-        self._refinement_schedule(recover(),'radar-planner-recover')
+        self._planning_schedule(recover(),'radar-planner-recover')

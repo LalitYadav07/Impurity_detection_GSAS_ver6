@@ -1,5 +1,6 @@
 """Managed planner transport uses real durable native handles, without GSAS-II."""
 import copy
+import asyncio
 import hashlib
 import io
 import importlib.util
@@ -161,6 +162,41 @@ def test_visible_staging_precedes_uploads_checkpoint_and_native_execution(remote
     assert all(row[2] for row in seen[5:])
     assert all('Previous calculation' not in row[1] for row in seen)
     assert len(service.submissions)==1
+
+
+def test_worker_progress_publishes_through_real_trame_on_active_loop_before_completion():
+    from trame_server.state import State
+    from wslink.publish import PublishManager
+    from radar_pd_nova.planning_controller import PlanningMixin
+    async def check():
+        owner=threading.get_ident();frames=[];sent=asyncio.Event();release=threading.Event()
+        publisher=PublishManager()
+        class Wire:
+            network_monitor=SimpleNamespace(on_enter=lambda:None,on_exit=lambda *_:None)
+            async def sendWrappedMessage(self,topic,data,**kwargs):
+                frames.append((threading.get_ident(),topic,dict(data)));sent.set()
+        publisher.registerProtocol(Wire())
+        state=State(commit_fn=lambda data:publisher.publish('trame.state.topic',dict(data)),ready=True)
+        app=PlanningMixin();app.server=SimpleNamespace(state=state)
+        app._refinement_schedule=lambda coroutine,name:asyncio.create_task(coroutine,name=name)
+        cancel=threading.Event();app._planning_cancel=cancel
+        def worker():
+            assert threading.get_ident()!=owner
+            app._planning_job_progress(operation='planning-parent',state='uploading source',
+                message='Uploading the calculation source to Galaxy History.',cancel=cancel)
+            assert release.wait(2), 'Test did not release the blocked upload'
+        async def operation():await asyncio.to_thread(worker)
+        task=app._planning_schedule(operation(),'blocked-upload')
+        try:
+            await asyncio.wait_for(sent.wait(),1)
+            assert not task.done(), 'Progress must publish while the worker is still blocked'
+            assert frames[-1][0]==owner
+            assert frames[-1][2]['plan_job_state']=='uploading source'
+            assert frames[-1][2]['plan_job_id']==''
+            assert frames[-1][2]['plan_message']=='Uploading the calculation source to Galaxy History.'
+        finally:
+            release.set();await task
+    asyncio.run(check())
 
 
 def test_ambiguous_post_cannot_duplicate_and_recovery_only_collects(remote,tmp_path,monkeypatch):
