@@ -324,7 +324,7 @@ def test_switching_exploration_kind_removes_stale_candidate_choices():
     s=SimpleNamespace(sx_kind='structural',sx_parent='Parent',sx_k='0, 0, 0',sx_start_source='scan',
         sx_opd_policy='all',sx_construct_limit=50,sx_discovered=True,sx_candidates=['old'],sx_candidate_options=['old'])
     app=SymmetryMixin();app.server=SimpleNamespace(state=s)
-    app._symmetry_draft={'discovery_identity':('magnetic','Parent','0, 0, 0','scan')}
+    app._symmetry_draft={'discovery_identity':('','magnetic','Parent','0, 0, 0','scan')}
     app._symmetry_unapprove()
     assert not s.sx_discovered and not s.sx_candidates and not s.sx_candidate_options
 

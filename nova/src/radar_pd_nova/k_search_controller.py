@@ -162,7 +162,7 @@ class KSearchMixin:
             if catalog['parent_setting_sha256']!=next(p for p in d['context']['phases'] if p['name']==s.sx_parent)['setting_sha256']:raise ValueError('The selected catalog belongs to another parent setting')
             s.sx_k=', '.join(family['k']);self._symmetry_unapprove()
             d.pop('protocol',None);write_json(d['root']/'catalog.json',catalog)
-            d.update(catalog=catalog,discovery_identity=(s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source))
+            d.update(catalog=catalog,discovery_identity=self._discovery_identity())
             s.sx_candidate_options=[dict(title=(c['magnetic_space_group'] or c['irrep'])+' · '+c['id'][-6:],value=c['id']) for c in catalog['candidates']]
             compatible=set(family['compatible_candidate_ids'])
             canted=getattr(s,'sx_moment_model','collinear')=='symmetry_allowed'

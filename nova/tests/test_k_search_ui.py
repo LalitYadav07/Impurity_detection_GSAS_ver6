@@ -68,8 +68,20 @@ def test_selected_k_reuses_catalog_but_requires_a_new_refinement_plan(tmp_path):
     assert not s.sx_approved and not s.sx_plan_ready and app._symmetry_approved==''
     assert 'protocol' not in app._symmetry_draft
     assert app._symmetry_draft['catalog']==result['catalogs']['0,0,1/2']
-    assert app._symmetry_draft['discovery_identity']==('magnetic','parent','0, 0, 1/2','original')
+    assert app._symmetry_draft['discovery_identity']==('IPTS-1','magnetic','parent','0, 0, 1/2','original')
     assert 'sampled only a subset' in s.sx_discovery_scope
+
+
+def test_k_handoff_survives_reactive_invalidation_but_not_an_experiment_change(tmp_path):
+    app,_=app_and_result(tmp_path)
+    app.use_candidate_k()
+    app._symmetry_unapprove()
+    assert app.server.state.sx_discovered
+    assert app.server.state.sx_candidates==['mag:one']
+    assert app._symmetry_draft['discovery_identity']==app._discovery_identity()
+    app.server.state.rf_experiment='IPTS-2'
+    app._symmetry_unapprove()
+    assert not app.server.state.sx_discovered and not app.server.state.sx_candidates
 
 
 def test_k_handoff_defaults_to_translation_and_site_compatible_embeddings(tmp_path):
