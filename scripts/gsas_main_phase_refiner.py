@@ -694,24 +694,28 @@ class GSASMainPhaseRefiner:
                     print(captured, end="", file=_sys.__stdout__)
 
                 results = self._extract_refinement_results("Full")
-                silent_metric = _is_metric_stdout(captured) or results.rwp >= degenerate_rwp
+                rejection = ""
+                if not math.isfinite(results.rwp) or results.rwp < 0:
+                    rejection = "invalid_residual"
+                elif _is_metric_stdout(captured):
+                    rejection = "native_metric_error"
+                elif results.rwp >= degenerate_rwp:
+                    rejection = "degenerate_residual"
                 if cell_before is not None:
                     reason = candidate_cell_rejection(cell_before, self._read_cell_from_data(), 0.0, 1.0)
                     if reason:
-                        silent_metric = True
-                        last_exc = RuntimeError(f"Cell trial rejected: {reason}")
-                if silent_metric:
+                        rejection = reason
+                if rejection:
+                    last_exc = RuntimeError(
+                        f"Cell trial rejected: {rejection} (Rwp={results.rwp:.3f}%)"
+                    )
                     if attempt < len(schedule) - 1:
                         logger.warning(
-                            f"Cell refinement attempt {attempt + 1}/{len(schedule)} detected silent metric failure "
-                            f"(Rwp={results.rwp:.3f}%, metric_in_stdout={_is_metric_stdout(captured)}); retrying."
+                            f"Cell refinement attempt {attempt + 1}/{len(schedule)} rejected: "
+                            f"{rejection} (Rwp={results.rwp:.3f}%); retrying."
                         )
                         self._disable_cell_refinement()
                         continue
-                    last_exc = RuntimeError(
-                        f"Cell metric failure persisted through all {len(schedule)} attempts "
-                        f"(Rwp={results.rwp:.3f}%)"
-                    )
                     self._disable_cell_refinement()
                     break
 
@@ -739,7 +743,7 @@ class GSASMainPhaseRefiner:
             self._set_max_cyc(orig_max_cyc)
 
         logger.warning(
-            f"Cell refinement failed after {len(schedule)} attempts, "
+            f"Cell refinement failed after {attempt + 1} attempts, "
             f"falling back to Scale+Background only. Last error: {last_exc}"
         )
         self._disable_cell_refinement()

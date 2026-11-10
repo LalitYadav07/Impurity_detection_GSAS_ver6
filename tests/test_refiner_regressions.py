@@ -151,6 +151,34 @@ class RefineStageCellTests(unittest.TestCase):
         self.assertEqual(project.refine_calls, 2)
         self.assertIn("ordinary refinement failure", result.error_message)
 
+    def test_cell_bound_rejection_preserves_its_reason_through_fallback(self):
+        project = _FakeProject([""] * 5)
+        refiner = self._make_refiner(project)
+        before = (1.0, 2.0, 3.0, 90.0, 90.0, 90.0)
+        outside = (1.03, 2.0, 3.0, 90.0, 90.0, 90.0)
+        refiner._read_cell_from_data.side_effect = [before] + [outside] * 4
+        refiner._extract_refinement_results = MagicMock(side_effect=[
+            _mk_results(12.0) for _ in range(4)
+        ] + [_mk_results(22.0)])
+        result = refiner.refine_stage_cell()
+        self.assertEqual(project.refine_calls, 5)
+        self.assertEqual(result.rwp, 22.0)
+        self.assertIn("cell_length_out_of_bounds", result.error_message)
+        self.assertNotIn("metric failure", result.error_message.lower())
+        self.assertEqual(project.data["Controls"]["data"]["max cyc"], 5)
+
+    def test_invalid_cell_stage_residual_cannot_be_accepted(self):
+        for invalid in (float('nan'), float('inf'), -1.0):
+            with self.subTest(residual=invalid):
+                project = _FakeProject(["", ""])
+                refiner = self._make_refiner(project)
+                refiner._extract_refinement_results = MagicMock(side_effect=[
+                    _mk_results(invalid), _mk_results(12.0)
+                ])
+                result = refiner.refine_stage_cell()
+                self.assertEqual(project.refine_calls, 2)
+                self.assertEqual(result.rwp, 12.0)
+
 
 class ParseLstFallbackTests(unittest.TestCase):
     def test_quoted_and_unquoted_multi_phase_labels_report_the_same_fitted_weights(self):
