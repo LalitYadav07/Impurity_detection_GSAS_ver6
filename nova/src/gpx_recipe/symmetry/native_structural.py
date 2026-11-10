@@ -34,7 +34,7 @@ def _mapped_parent_sites(parent,child,transform,origin,S):
     return mapping
 
 
-def run(source_gpx,ctx,protocol,candidate,seed):
+def run(source_gpx,ctx,protocol,candidate,seed,*,forward_only=False):
     from .contracts import structural_cell_budget
     try:structural_cell_budget(candidate,protocol['policy'])
     except ValueError as exc:raise TrialDisposition('unsupported',str(exc)) from exc
@@ -72,6 +72,9 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     child,import_receipt=add_isodistort_phase(p,authoritative,phasename=old_name+' distortion '+candidate['id'][-8:],histograms=[h.name],fmthint='CIF')
     ctx.save_json('cif-import.json',import_receipt)
     child.data['General']['Cell'][1:]=child_cell
+    if forward_only:
+        child.data['General']['Isotope']=copy.deepcopy(old['General'].get('Isotope',{}))
+        G.SetupGeneral(child.data,None)
     iso=child.data.get('ISODISTORT',{});native_names=[g.name for g in iso.get('G2ModeList',[])]
     if not native_names or not set(candidate['modes']).issubset(native_names):raise TrialDisposition('integrity_failure','The discovered native mode identities changed')
     if set(seed['mode_values'])!=set(candidate['modes']):raise TrialDisposition('unsupported','Provide a nonzero signed start for every selected native mode')
@@ -91,7 +94,10 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     ch=child.data['Histograms'][h.name]
     for family in ['Size','Mustrain']:
         if str(hap[family][0]).lower()!='isotropic':raise TrialDisposition('unsupported','Non-isotropic '+family+' needs a verified tensor transfer')
-        ch[family][1][0]=hap[family][1][0]
+        if forward_only:
+            ch[family][1]=copy.deepcopy(hap[family][1])
+        else:
+            ch[family][1][0]=hap[family][1][0]
     if abs(hap['Pref.Ori.'][1]-1.)>1e-12:raise TrialDisposition('unsupported','Nontrivial texture needs an exact orientation transfer')
     for family in ['Extinction','Babinet']:ch[family]=copy.deepcopy(hap[family])
     ch['Scale']=[hap['Scale'][0]/det,False];ch['HStrain']=[[0.]*len(S.HStrainNames(child.data['General']['SGData'])),[False]*len(S.HStrainNames(child.data['General']['SGData']))]
@@ -107,6 +113,23 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     iso['modeDispl']=[seed['mode_values'].get(name,0.) for name in native_names]
     drawing=child.data.setdefault('Drawing',{});drawing['atomPtrs']=[2,1,6,17];drawing['Atoms']=[M.MakeDrawAtom(child.data,a) for a in child.data['Atoms']]
     if M.ApplyModeDisp(child.data):raise TrialDisposition('effect_mismatch','Native mode displacement application failed')
+    if forward_only:
+        if seed.get('cell') is not None:
+            from .displacements import metric
+            values=list(map(float,seed['cell']));metric(values)
+            a=np.asarray(L.cell2A(values))
+            io=importlib.import_module(prefix+'GSASIIstrIO')
+            filled=np.asarray(io.cellFill('',child.data['General']['SGData'],{f'A{i}':v for i,v in enumerate(a)},{})[0])
+            if not np.allclose(a,filled,rtol=1e-9,atol=1e-10):
+                raise TrialDisposition('unsupported','Requested child lattice breaks its selected space-group symmetry')
+            child.data['General']['Cell'][1:]=values+[float(L.calc_V(a))]
+        freeze(p);p.save()
+        final=np.asarray(R.DoNoFit(str(output),h.name),dtype=float)
+        if final.shape!=baseline.shape or not np.isfinite(final).all():
+            raise TrialDisposition('effect_mismatch','Structural forward profile is nonfinite or has a changed grid')
+        return dict(status='simulated',gpx=output.name,no_refinement=True,
+                    modes=seed['mode_values'],zero_control_error=error,
+                    cell=child.data['General']['Cell'][1:7])
     mode_constraints=[c for c in p.data['Constraints']['data']['Phase'] if c[-1]=='f']
     if len(mode_constraints)!=len(native_names):raise TrialDisposition('integrity_failure','Native mode-constraint inventory changed')
     for constraint,name in zip(mode_constraints,native_names):constraint[-2]=name in candidate['modes']

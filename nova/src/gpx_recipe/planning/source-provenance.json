@@ -1,0 +1,125 @@
+{
+  "schema": "powgen-planning-source-provenance/v1",
+  "sources": [
+    {
+      "source": "virtual-powder-beamline/virtual_powder/physics.py",
+      "source_sha256": "8a32f6fad79b100b1969d66c3374dad8816659d6ffdcc6baf22b823cd15a43f3",
+      "destination": "physics.py"
+    },
+    {
+      "source": "virtual-powder-beamline/virtual_powder/counting.py",
+      "source_sha256": "dd193f8fd84ce1548add86589834e8f97f8fa99ab87777a1216aee4b085d301f",
+      "destination": "counting.py"
+    },
+    {
+      "source": "virtual-powder-beamline/virtual_powder/io.py",
+      "source_sha256": "c8af0801df6a381bc8870375272b3ed9332591be848eaaafc566cf01c74eb520",
+      "destination": "io.py"
+    },
+    {
+      "source": "virtual-powder-beamline/virtual_powder/response.py",
+      "source_sha256": "bf44087be30563808e3f8932f2dfc1b9648dcf502d8fb4f2867ba20cd13df720",
+      "destination": "response.py"
+    },
+    {
+      "source": "virtual-powder-beamline/virtual_powder/gsas.py",
+      "source_sha256": "35e7fa01f12fd0712e3815901e2627b5116a984e431640bf0e8d65a418d8da19",
+      "destination": "gsas.py"
+    },
+    {
+      "source": "virtual-powder-beamline/calibration/cross-sections.json",
+      "source_sha256": "a9af88471b32f5bf8f37f33db97e2f7f8796729a3c1464e0ead2dac82ab0b475",
+      "destination": "data/calibration/cross-sections.json"
+    },
+    {
+      "source": "virtual-powder-beamline/calibration/pg3-53998/calibration.json",
+      "source_sha256": "b08b4db0d1182debf93450981a84e484977f42c8d4d27f76a3bcba7cda70e5e8",
+      "destination": "data/calibration/pg3-53998/calibration.json",
+      "packaged_sha256": "6017b20b56d3d0ba361ce175f4db60f84119e50ba876dc5d66242fba0cef08b0",
+      "transformation": "Retain calibration parameters and provenance; omit nested local native project metadata; public metadata uses instrument-relative provenance and retains the original metadata hash"
+    },
+    {
+      "source": "virtual-powder-beamline/calibration/pg3-53998/response.npz",
+      "source_sha256": "73804c7c3c901e45034610a9d4c6baf8befe6590436eea7dff6a0669cd1a8c92",
+      "destination": "data/calibration/pg3-53998/response.npz",
+      "packaged_sha256": "c8f789e6b5d97095dd93c1ed9d8f787160058a2f4f5b4c57cee05a2d56e6cb12",
+      "transformation": "Retain only derived transfer coefficients; measured observations and fitted curves remain in private audit",
+      "retained_arrays": [
+        "background_y",
+        "bin_width_us",
+        "d",
+        "effective_response_per_uah",
+        "standard_transmission"
+      ],
+      "omitted_arrays": [
+        "calculated",
+        "fitted",
+        "observed",
+        "sigma",
+        "x"
+      ]
+    },
+    {
+      "source": "virtual-powder-beamline/calibration/pg3-53999/calibration.json",
+      "source_sha256": "d4ddad196d16c61f6b4011b297c520786e8503b9a45b5667c5a75e0e5aac4d5d",
+      "destination": "data/calibration/pg3-53999/calibration.json",
+      "packaged_sha256": "5a3a764ebeb85220168d41c26fad53f7ba3a01ce04611effc52f3ab7544ad675",
+      "transformation": "Retain calibration parameters and provenance; omit nested local native project metadata; public metadata uses instrument-relative provenance and retains the original metadata hash"
+    },
+    {
+      "source": "virtual-powder-beamline/calibration/pg3-53999/response.npz",
+      "source_sha256": "55f525c286f7c87b1c71a52dc1f410162db0cb066708da3c9ddfb3f896deb77a",
+      "destination": "data/calibration/pg3-53999/response.npz",
+      "packaged_sha256": "7b3e8459d84562d38dff879da7bb214c65540a94a30bdf136623260fe11f9c6b",
+      "transformation": "Retain only derived transfer coefficients; measured observations and fitted curves remain in private audit",
+      "retained_arrays": [
+        "background_y",
+        "bin_width_us",
+        "d",
+        "effective_response_per_uah",
+        "standard_transmission"
+      ],
+      "omitted_arrays": [
+        "calculated",
+        "fitted",
+        "observed",
+        "sigma",
+        "x"
+      ]
+    },
+    {
+      "source": "virtual-powder-beamline/calibration/pg3-54000/calibration.json",
+      "source_sha256": "fb21370f9b682b80b1466316ae2d841296d9d5a814202f7e164de1b9199ed935",
+      "destination": "data/calibration/pg3-54000/calibration.json",
+      "packaged_sha256": "87267b95d6cf8cbd61a2ad6abb8198852e677c9417beb1f3b478141544086328",
+      "transformation": "Retain calibration parameters and provenance; omit nested local native project metadata; public metadata uses instrument-relative provenance and retains the original metadata hash"
+    },
+    {
+      "source": "virtual-powder-beamline/calibration/pg3-54000/response.npz",
+      "source_sha256": "2f9502e32b0e8025b2c7c58da3c8588e6cbc7ef4e22744ada6ae00361e8ff509",
+      "destination": "data/calibration/pg3-54000/response.npz",
+      "packaged_sha256": "75bdbe14f3d75540ba61e6cf1792fa06d895a587440dd70074aedce82701d744",
+      "transformation": "Retain only derived transfer coefficients; measured observations and fitted curves remain in private audit",
+      "retained_arrays": [
+        "background_y",
+        "bin_width_us",
+        "d",
+        "effective_response_per_uah",
+        "standard_transmission"
+      ],
+      "omitted_arrays": [
+        "calculated",
+        "fitted",
+        "observed",
+        "sigma",
+        "x"
+      ]
+    }
+  ],
+  "qualification": "Existing researched implementation ported with explicit experimental qualifications; no new accuracy certification",
+  "public_metadata_provenance": {
+    "schema": "radar-public-calibration-metadata/v1",
+    "original_metadata_sha256": "93a7cff64b6cff664b2650823e6ff14b9348ea4a49758cb0b595a3d52f7add0b",
+    "transformation": "Packaged metadata integrity hashes updated; original source hashes retained."
+  }
+}

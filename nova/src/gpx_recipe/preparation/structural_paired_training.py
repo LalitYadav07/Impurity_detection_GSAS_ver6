@@ -1,0 +1,359 @@
+"""Bounded three-curve attention training with trajectory-isolated evaluation."""
+import copy
+import hashlib
+import io
+import json
+import math
+from pathlib import Path
+import time
+
+import numpy as np
+
+from ..execution import write_json
+from ..live.array_limits import validate_npz_bytes
+from ..symmetry.resources import allocation
+from .structural_attention import network
+from . import structural_attention_weights as weights
+from .structural_attention_metrics import evaluate
+from .structural_model_files import MAX_BYTES,MAX_METADATA_BYTES
+from .structural_ranker import _class_routes
+from .structural_support import fit_batches as fit_support
+from .structural_training_data import feature_rows,batches,channel_statistics,MAX_ROWS
+from .structural_training_counts import describe as describe_counts
+from . import structural_training_checkpoint as checkpoint
+from . import structural_training_backend as backend
+from .structural_readout_health import training_health
+from .structural_training_curriculum import replay_batches,REPLAY_ROWS
+from .tof_kernel_arrays import checksum
+from .structural_compatible_objective import OBJECTIVE,SELECTION,terms,checkpoint_key
+
+
+def _inputs(cohort):
+    rows=feature_rows(cohort['features']);targets=np.asarray(cohort['compatible_labels'])
+    classes=np.asarray(cohort['classes']);split=np.asarray(cohort['split']);n=len(rows)
+    if (rows.shape[1]!=3 or cohort.get('channels')!=3
+            or cohort.get('representation')!=weights.REPRESENTATION
+            or not isinstance(cohort.get('reference_kind'),str) or cohort['reference_kind'] not in weights.REFERENCE_KINDS
+            or cohort.get('partition_method')!='class-supported-whole-trajectories/v1'
+            or classes.dtype!=np.int32 or classes.ndim!=1 or not 2<=len(classes)<=230
+            or np.any(classes<1) or np.any(classes>230) or np.any(np.diff(classes)<=0)
+            or targets.dtype!=bool or targets.shape!=(n,len(classes)) or not targets.any(1).all()
+            or split.dtype!=np.int8 or split.shape!=(n,) or set(split)!={0,1,2}
+            or not all(targets[split==code].any(0).all() for code in range(3))
+            or any(not checksum(cohort.get(k)) for k in ('parent_sha256','instrument_sha256'))):
+        raise ValueError('A complete three-curve cohort with every family in independent holdouts is required')
+    groups=cohort['groups'];assignments={}
+    if len(groups)!=n or any(not isinstance(g,str) or not 1<=len(g)<=500 for g in groups):
+        raise ValueError('Complete physical trajectory groups required')
+    for group,code in zip(groups,split):assignments.setdefault(group,set()).add(int(code))
+    if any(len(codes)!=1 for codes in assignments.values()):raise ValueError('Physical trajectories cannot cross training holdouts')
+    reference=np.asarray(cohort['reference_features']);edges=np.asarray(cohort['q_edges'])
+    if (reference.dtype!=np.float32 or reference.shape!=(3,rows.shape[2]) or not np.isfinite(reference).all()
+            or hashlib.sha256(reference.tobytes()).hexdigest()!=cohort.get('reference_feature_sha256')
+            or edges.dtype!=np.float64 or edges.shape!=(rows.shape[2]+1,) or not np.isfinite(edges).all()
+            or edges[0]<=0 or np.any(np.diff(edges)<=0)):
+        raise ValueError('The exact finite three-curve reference and Q grid are required')
+    provenance=cohort.get('example_simulations')
+    if (not isinstance(provenance,list) or len(provenance)!=n
+            or any(not isinstance(p,list) or not p or any(not isinstance(v,dict) for v in p) for p in provenance)):
+        raise ValueError('Clean/noisy simulation provenance is required for the training curriculum')
+    clean=np.array([any(v.get('kind')=='clean_native' for v in p) for p in provenance],bool)
+    routes=_class_routes(classes,cohort['candidate_groups'],cohort.get('class_candidate_ids'))
+    if cohort.get('training_domain') is not None:
+        from .structural_domain import validate
+        validate(cohort['training_domain'])
+    family_targets=cohort.get('mode_family_targets')
+    if family_targets is not None:
+        from .structural_family_targets import TargetRows
+        if not isinstance(family_targets,TargetRows):raise ValueError('Mode targets require their checked native cohort builder')
+        family_targets.verify(cohort)
+        if (cohort.get('mode_family_target_identity')!=family_targets.metadata['identity']
+                or cohort.get('mode_family_supervision')!=family_targets.metadata):
+            raise ValueError('Mode-family supervision differs from its bound target table')
+    return rows,targets,classes,split,clean,routes
+
+
+def _representatives(rows,clean,targets,classes):
+    # Training examples alone select strong clean prototypes. No validation
+    # curve, test curve or held-out score chooses a warmup example.
+    best=np.full(len(classes),-np.inf);chosen=np.full(len(classes),-1,np.int64)
+    from .structural_replay import ReplayRows
+    captured=rows.residual_strengths(clean) if isinstance(rows,ReplayRows) else None
+    signals=((clean[start:start+64],captured[start:start+64]) for start in range(0,len(clean),64)) if captured is not None else (
+        (selected,np.linalg.norm(values[:,2],axis=1)) for selected,values in batches(rows,clean))
+    for selected,signal in signals:
+        for c in range(len(classes)):
+            allowed=np.flatnonzero(targets[selected,c])
+            if len(allowed):
+                local=allowed[np.argmax(signal[allowed])]
+                if signal[local]>best[c]:best[c]=signal[local];chosen[c]=selected[local]
+    if np.any(chosen<0):raise ValueError('Every family needs clean independent training examples')
+    return chosen
+
+
+def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=None,_resume=None):
+    began=time.monotonic()
+    import torch
+    if (type(epochs) is not int or not 1<=epochs<=1000
+            or type(seed) is not int or not 0<=seed<2**32):
+        raise ValueError('Bounded attention training epochs and seed required')
+    if (_segment_seconds is not None and (type(_segment_seconds) not in (int,float)
+            or not np.isfinite(_segment_seconds) or _segment_seconds<=0)):
+        raise ValueError('An internal training segment needs a positive finite work budget')
+    rows,targets,classes,split,clean,routes=_inputs(cohort)
+    from .structural_calibration_partition import reserve
+    reservation=reserve(cohort['groups'],split,clean,targets)
+    split=reservation.split
+    from . import structural_joint_modes as joint
+    modes=joint.prepare(cohort,split)
+    objective=OBJECTIVE if modes is None else joint.OBJECTIVE
+    selection=SELECTION if modes is None else joint.SELECTION
+    architecture=weights.ARCHITECTURE if modes is None else weights.MODE_ARCHITECTURE
+    network_options={} if modes is None else dict(architecture=architecture,family_count=len(modes.spec['families']))
+    cohort=dict(cohort,calibration_partition=reservation.metadata,training_objective=objective,
+        checkpoint_selection=selection)
+    if modes is not None:cohort['mode_readout']=modes.spec
+    row_layout=rows.row_layout if len(rows)>MAX_ROWS else None
+    dataset=describe_counts(cohort['groups'],split.tolist(),clean.tolist(),
+        generated_pairs=cohort['original_examples'],
+        simulated_observations=cohort.get('augmented_examples',0),
+        compatible_labels=(row.tolist() for row in targets),classes=classes.tolist(),row_layout=row_layout,
+        calibration=reservation.metadata['available'])
+    from .structural_training_counts import partition_names
+    partitions=partition_names(dataset)
+    train_rows,validation_rows,test_rows=(np.flatnonzero(split==code) for code in range(3))
+    clean_rows=train_rows[clean[train_rows]]
+    representatives=_representatives(rows,clean_rows,targets,classes)
+    budget=allocation(threads);torch.set_num_threads(budget['workers'])
+    mean,scale=channel_statistics(rows,train_rows,minimum_scale=.01,center=False)
+    setup_seconds=time.monotonic()-began
+    out=Path(destination)
+    engine=backend.select(out,segmented=_segment_seconds is not None,transferred=_resume is not None,continuation=_resume)
+    recovery=engine.checkpoint
+    run_identity=recovery.identity(cohort,rows,targets,split,clean,mean,scale,
+        epochs=epochs,seed=seed,workers=budget['workers'])
+    if _resume is not None:
+        from .structural_training_transfer import restore
+        restore(_resume,out,identity=run_identity,epochs=epochs)
+
+    with recovery.owned_run(out,run_identity):
+        def progress(state,**values):
+            write_json(out/'progress.json',dict(state=state,dataset=dataset,
+                data_preparation_seconds=setup_seconds,**values))
+
+        rng=np.random.default_rng(seed);visited=np.zeros(len(rows),bool);history=[]
+        clean_epochs=min(10,epochs//4);best=None;best_key=None;selected_epoch=None
+        warmup_steps=200
+        with torch.random.fork_rng(devices=[]),engine.random_state(seed):
+            torch.manual_seed(seed);model=network(len(classes),**network_options)
+            # Keep convolution/readout initialization independent of how many
+            # attention parameters consume the random stream. This is the same
+            # controlled initialization used in the attention/CNN pilot.
+            torch.manual_seed(seed);control=network(len(classes),attention=False,**network_options)
+            model.local.load_state_dict(control.local.state_dict())
+            model.head.load_state_dict(control.head.state_dict());del control
+            model=engine.place(model)
+            optimizer=torch.optim.AdamW(model.parameters(),lr=.0003,weight_decay=.0001)
+            scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=epochs,eta_min=.00001)
+            recovered=recovery.restore(out,run_identity,model,optimizer,scheduler,rng,visited,
+                epochs=epochs,warmup_steps=warmup_steps,row_layout=row_layout)
+            warmup_done=completed_epochs=0;previous_seconds=0.
+            if recovered is not None:
+                warmup_done=recovered['warmup'];completed_epochs=recovered['epochs']
+                history=recovered['history'];best=recovered['best'];best_key=recovered['best_key']
+                selected_epoch=recovered['selected_epoch'];previous_seconds=recovered['elapsed_seconds']
+                progress('recovering_training',warmup_completed=warmup_done,epochs_completed=completed_epochs)
+
+            def save_checkpoint(warmup,completed):
+                recovery.save(out,run_identity,model,optimizer,scheduler,rng,visited,
+                    warmup=warmup,epochs=completed,history=history,best=best,selected_epoch=selected_epoch,
+                    best_key=best_key,elapsed_seconds=previous_seconds+time.monotonic()-began,row_layout=row_layout)
+
+            def continuation(warmup,completed,*,next_seconds=0.):
+                # Budget changes only job boundaries, never the complete
+                # curriculum, data, epoch target or validation selection.
+                if (_segment_seconds is None
+                        or time.monotonic()-began+next_seconds<_segment_seconds):return None
+                if (completed,warmup)<=(completed_epochs,warmup_done):
+                    raise ValueError('The training work budget cannot advance a complete checkpoint boundary')
+                elapsed=previous_seconds+time.monotonic()-began
+                progress('checkpointed_for_continuation',warmup_completed=warmup,
+                    epochs_completed=completed,epochs=epochs,seconds=elapsed)
+                return dict(schema='radar-attention-training-segment/v1',status='checkpointed',
+                    identity=run_identity,warmup_completed=warmup,epochs_completed=completed,epochs=epochs,
+                    dataset=dataset,seconds=elapsed,trained_model=False,
+                    scientific_result=False,candidate_pruning_authorized=False)
+
+            def require_readout():
+                health=training_health(model,rows,representatives,mean,scale)
+                if not health['readout_active']:
+                    reason='The attention hidden readout is inactive on every training representative; no ranking model was published'
+                    progress('training_rejected',reason=reason,readout_health=health)
+                    raise ValueError(reason)
+                return health
+
+            if recovered is None:save_checkpoint(0,0)
+
+            def update(selected,values):
+                model.train();inputs=torch.from_numpy((values-mean)/scale)
+                if modes is None:logits=backend.forward(model,inputs)
+                else:logits,embedding=joint.shared(model,inputs)
+                allowed=torch.from_numpy(targets[selected])
+                batch_objective=terms(logits,allowed)[0].mean()
+                if modes is not None:batch_objective=batch_objective/math.log(len(classes))+modes.objective(model,embedding,selected)
+                if not torch.isfinite(batch_objective):raise ValueError('Nonfinite attention training objective; no model was published')
+                optimizer.zero_grad(set_to_none=True);batch_objective.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(),1.,error_if_nonfinite=True);optimizer.step()
+                visited[selected]=True
+
+            for step in range(warmup_done,warmup_steps):
+                # Even a 230-class model uses bounded feature/activation batches.
+                for selected,values in batches(rows,representatives,size=64):update(selected,values)
+                if (step+1)%20==0:
+                    save_checkpoint(step+1,0)
+                    progress('clean_prototype_warmup',step=step+1,steps=warmup_steps)
+                    pending=continuation(step+1,0)
+                    if pending is not None:return pending
+            require_readout()
+            for epoch in range(completed_epochs,epochs):
+                epoch_began=time.monotonic()
+                pool=clean_rows if epoch<clean_epochs else train_rows
+                buckets=[pool[targets[pool,c]] for c in range(len(classes))]
+                order=np.concatenate([np.concatenate([rng.choice(bucket,4,replace=True) for bucket in buckets])
+                    for _ in range(int(np.ceil(len(pool)/(4*len(classes)))))])
+                batch_size=min(64,4*len(classes))
+                for chosen,values in replay_batches(rows,order,representatives,split=split,size=batch_size):
+                    update(chosen,values)
+                if epoch in (clean_epochs,epochs-1):
+                    # Make checkpoints eligible after the first noisy epoch,
+                    # rather than discovering unseen rows only at the very end
+                    # and forcing validation to choose the final checkpoint.
+                    missing=train_rows[~visited[train_rows]]
+                    for chosen,values in replay_batches(rows,rng.permutation(missing),representatives,split=split):
+                        update(chosen,values)
+                health=require_readout()
+                model.eval()
+                # Retention is a small training diagnostic. Keep full per-class
+                # detail for independent validation, without doubling the
+                # portable history size for a 230-family catalog.
+                strong_recall={key:value for key,value in
+                    evaluate(model,rows,targets,representatives,mean,scale,classes).items()
+                    if key!='per_class'}
+                strong_recall['representatives']=len(representatives)
+                metrics=evaluate(model,rows,targets,validation_rows,mean,scale,classes,clean=clean,_mode_context=modes)
+                eligible=epoch>=clean_epochs and visited[train_rows].all()
+                key=checkpoint_key(metrics)
+                if eligible and (best_key is None or key<best_key):
+                    best_key=key;selected_epoch=epoch+1;best=copy.deepcopy(model.state_dict())
+                history.append(dict(epoch=epoch+1,validation=metrics,checkpoint_eligible=bool(eligible),
+                    training_rows_seen=int(visited[train_rows].sum()),readout_health=health,
+                    strong_training_recall=strong_recall))
+                scheduler.step()
+                save_checkpoint(warmup_steps,epoch+1)
+                progress('training',epoch=epoch+1,epochs=epochs,
+                    selected_epoch=selected_epoch,validation=metrics,training_rows_seen=int(visited[train_rows].sum()),
+                    readout_health=health,strong_training_recall=strong_recall)
+                elapsed_epoch=time.monotonic()-epoch_began
+                next_rows=len(clean_rows) if epoch+1<clean_epochs else len(train_rows)
+                # Retain room for the first full noisy-pool coverage pass and
+                # native publication. A fresh job must still make progress.
+                estimate=(3.*elapsed_epoch*next_rows/max(1,len(pool))+120.
+                          if epoch+1<epochs else 600.)
+                pending=continuation(warmup_steps,epoch+1,next_seconds=estimate)
+                if pending is not None:return pending
+            if best is None:raise ValueError('No attention checkpoint saw the complete declared training pool')
+            model.load_state_dict(best);model.eval()
+            health=require_readout()
+            portable,transport=engine.portable_model(model,rows,representatives,mean,scale,**({} if modes is None else dict(mode_context=modes)))
+            progress('calibrating_training_support',selected_epoch=selected_epoch)
+            support=fit_support(rows,train_rows,validation_rows,targets,mean,scale,seed=seed)
+            progress('packing_frozen_model',selected_epoch=selected_epoch)
+            plane,layout=weights.pack(portable)
+            arrays=dict(parameters=plane,q_edges=cohort['q_edges'],
+                normalization=np.r_[mean.ravel().astype(np.float64),scale.ravel().astype(np.float64),support['limit']],
+                classes=classes,reference_features=cohort['reference_features'],support_prototypes=support['prototypes'])
+            if modes is not None:arrays[joint.ARRAY]=joint.encode(modes.spec)
+            stream=io.BytesIO();np.savez_compressed(stream,**arrays);raw=stream.getvalue()
+            validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
+            adaptive_calibration=adaptive_test=None;test_capture=None
+            mode_calibration=mode_interval_test=None;mode_evaluation=None
+            if reservation.metadata['available']:
+                from .structural_calibration_training import calibrate,Logits
+                progress('scoring_independent_calibration',selected_epoch=selected_epoch)
+                identities=dict(weights_sha256=hashlib.sha256(raw).hexdigest(),parent_sha256=cohort['parent_sha256'],
+                    instrument_sha256=cohort['instrument_sha256'],dataset_sha256=run_identity)
+                mode_collector=None
+                if modes is not None:
+                    from .structural_mode_calibration import Calibration,Evaluation
+                    mode_collector=Calibration(modes.spec,identities=identities,
+                        groups=reservation.metadata['calibration_groups'],
+                        used_groups=sorted({g for g,c in zip(cohort['groups'],split) if c!=3}))
+                adaptive_calibration=calibrate(portable,rows,targets,split,cohort['groups'],classes,mean,scale,
+                    identities=identities,_mode_context=modes,_mode_calibration=mode_collector)
+                if mode_collector is not None:
+                    mode_calibration=mode_collector.finish()
+                    mode_evaluation=Evaluation(mode_calibration,modes.spec,identities=identities)
+                test_capture=Logits(test_rows,len(classes))
+            # Test labels have no influence on initialization, normalization,
+            # sampling, prototypes, stopping or checkpoint selection.
+            progress('scoring_holdout',selected_epoch=selected_epoch)
+            test=evaluate(portable,rows,targets,test_rows,mean,scale,classes,clean=clean,
+                _logits_sink=None if test_capture is None else test_capture.add,_mode_context=modes,
+                _mode_interval_evaluation=mode_evaluation,_groups=cohort['groups'])
+            if mode_evaluation is not None:
+                from .structural_mode_calibration import validate_evaluation
+                mode_interval_test=mode_evaluation.finish()
+                validate_evaluation(mode_interval_test,mode_calibration,modes.spec,identities=identities,
+                    native_metrics=test['mode_validation'],rows=len(test_rows),groups=len({cohort['groups'][i] for i in test_rows}))
+            if test_capture is not None:
+                from .structural_adaptive_sets import evaluate as evaluate_adaptive
+                adaptive_test=evaluate_adaptive(test_capture.finish(),targets[test_rows],
+                    [cohort['groups'][i] for i in test_rows],adaptive_calibration,identities=identities)
+            prior=evaluate(portable,rows,targets,test_rows,mean,scale,classes,prior=targets[train_rows].sum(0),clean=clean)
+        progress('packing_model',selected_epoch=selected_epoch)
+        metadata=dict(schema=weights.SCHEMA,architecture=architecture,representation=weights.REPRESENTATION,
+            channels=3,reference_kind=cohort['reference_kind'],normalization_method=weights.NORMALIZATION,
+            parent_sha256=cohort['parent_sha256'],instrument_sha256=cohort['instrument_sha256'],
+            input_sha256=cohort['input_sha256'],candidates=cohort['candidates'],candidate_groups=cohort['candidate_groups'],
+            class_candidate_ids=routes,weights_sha256=hashlib.sha256(raw).hexdigest(),tensor_layout_sha256=layout,
+            classes=classes.tolist(),bins=rows.shape[2],epochs=epochs,seed=seed,allocation=budget,
+            counts={name:targets[split==code].sum(0).tolist() for code,name in enumerate(partitions)},
+            partition_rows=[int(np.count_nonzero(split==code)) for code in range(len(partitions))],dataset=dataset,test=test,prior_only_test=prior,
+            calibration_partition=reservation.metadata,adaptive_calibration=adaptive_calibration,adaptive_test=adaptive_test,
+            selected_epoch=selected_epoch,training_objective=objective,checkpoint_selection=selection,
+            readout_health=health,
+            curriculum=dict(warmup_steps=warmup_steps,clean_epochs=clean_epochs,gradient_norm_limit=1.,
+                initialization='shared-convolution-and-readout/independent-attention-parameters/v1',
+                sampling='four draws per compatible family; bounded clean replay; first-noisy-epoch coverage pass',
+                clean_replay=dict(maximum_rows_per_update=REPLAY_ROWS,
+                    selection='strong training-only representatives; cyclic family coverage per pass',
+                    additional_independent_pairs=0),
+                training_rows_seen=int(visited[train_rows].sum()),clean_training_representatives=representatives.tolist()),
+            feature_storage=rows.storage,support_training_pool_rows=support['training_pool_rows'],
+            support_method=support['method'],support_validation_rows=support['validation_rows'],support_coverage_qualified=False,
+            augmentation=cohort.get('augmentation'),augmentation_sha256=cohort.get('augmentation_sha256'),
+            augmented_examples=cohort.get('augmented_examples',0),reference_feature_sha256=cohort['reference_feature_sha256'],
+            training_domain=cohort.get('training_domain'),ambiguous_examples=cohort['ambiguous_examples'],
+            examples=len(rows),original_examples=cohort['original_examples'],independent_groups=len(set(cohort['groups'])),
+            background_required=True,screening_qualified=False,candidate_pruning_authorized=False,scientific_result=False,
+            seconds=previous_seconds+time.monotonic()-began,history=history,
+            training_recovery=dict(identity=run_identity,warmup_completed_on_resume=warmup_done,
+                epochs_completed_on_resume=completed_epochs,
+                scope=backend.recovery_scope(engine.kind)))
+        if transport is not None:metadata['training_device_transport']=transport
+        if 'partition_anchor' in cohort:metadata['partition_anchor']=cohort['partition_anchor']
+        if 'mode_projection_coverage' in cohort:metadata['mode_projection_coverage']=cohort['mode_projection_coverage']
+        if 'additive_pair_inventory' in cohort:metadata['additive_pair_inventory']=cohort['additive_pair_inventory']
+        if 'mode_family_supervision' in cohort:
+            metadata.update(mode_family_supervision=cohort['mode_family_supervision'],mode_head_trained=modes is not None)
+        if modes is not None:
+            metadata.update(mode_readout=modes.spec,mode_interval_calibration=mode_calibration,
+                mode_interval_test=mode_interval_test)
+        from .structural_history import pack as pack_history
+        stored_metadata=dict(metadata,history=pack_history(metadata['history']))
+        encoded=(json.dumps(stored_metadata,indent=2,allow_nan=False)+'\n').encode()
+        if len(encoded)>MAX_METADATA_BYTES:raise ValueError('Attention model metadata exceeds the portable reader budget')
+        (out/'weights.npz').write_bytes(raw);write_json(out/'model.json',stored_metadata)
+        progress('complete',examples=len(rows),selected_epoch=selected_epoch,
+            screening_qualified=False,seconds=time.monotonic()-began)
+        return metadata

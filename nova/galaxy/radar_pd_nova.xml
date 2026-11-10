@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.6.64" profile="22.01">
+<tool id="neutrons_radar_pd_interactive_prototype" tool_type="interactive" name="RADAR-PD Interactive" version="0.7.0" profile="22.01">
     <description>from IPTS data to phase analysis, transition tracking and guided refinement</description>
     <creator>
         <person name="Lalit Yadav"/>
@@ -38,6 +38,7 @@
         supervisord -c /etc/supervisord.conf > >(tee -a $output) 2> >(tee -a $output >&2)
     ]]></command>
     <inputs>
+        <section name="preparation_overview" title="Before measurement: plan and prepare" expanded="true" help="Experiment Planner simulates a proposed POWGEN measurement from structures, instrument configuration, sample assumptions and exposure. Experiment preparation builds reusable magnetic responses and structural model libraries, generates examples and trains a ranking model. Save plans and libraries to History and carry reviewed inputs into analysis. Measured scans are not required for these preparation workflows."/>
         <section name="experiment_overview" title="1. Start with your IPTS" expanded="true" help="Connect to the SNS or HFIR experiment data available in NDIP. Find recorded samples, run numbers, reduced patterns and measurement conditions. Resolve supported instrument profiles or review the required bank/profile choice. Use chat to prepare the analysis configuration and choose a built-in or custom CIF library."/>
         <section name="analysis_overview" title="2. Analyze the scans and follow what changes" expanded="true" help="Run preliminary Rietveld analysis across selected scans and new arrivals: identify candidate crystalline phases and refine phase contributions, background and lattice parameters. Plot fractions and cell changes against temperature, time or other available conditions. Explore linked diffraction maps and optional ML-assisted feature suggestions for peaks appearing, disappearing, splitting or changing shape."/>
         <section name="advanced_overview" title="3. Refine further and explore structural or magnetic models" expanded="true" help="Describe a custom GSAS-II refinement through chat, review its stages and apply it across the series. Search commensurate magnetic k-vector candidates and compare compatible subgroups; generate and refine supported structural distortion models. For POWGEN, inspect WebMON snapshots and update reviewed, fixed-reference magnetic fits while data are collected."/>
@@ -56,6 +57,14 @@ pattern or reopen saved work.
 What you can do
 ===============
 
+* **Plan a measurement.** Preview POWGEN patterns, sample and isotope choices,
+  structural or magnetic changes, exposure and conditional counting noise.
+  Matched 2026B configurations support count predictions; unmatched profiles
+  provide shape previews. Save the plan and its inputs to Galaxy History.
+* **Prepare reusable calculations.** Supply a nuclear CIF and bank profiles,
+  select a commensurate scope, and prepare magnetic responses or structural
+  candidates and training examples before beamtime. A trained ranking model
+  prioritizes native comparisons; it does not prove a unique structure.
 * **Find an experiment from its IPTS.** Discover samples and scans from the
   facility data mounted in NDIP, read recorded conditions, and review the
   instrument setup. POWGEN supports automatic profile matching for registered

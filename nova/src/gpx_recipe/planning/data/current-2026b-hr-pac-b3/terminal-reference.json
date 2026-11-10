@@ -1,0 +1,88 @@
+{
+  "schema": "powgen-multiband-native-reference/v2",
+  "band": 3,
+  "mantid_version": "6.16.1",
+  "source_sha256": "f6268d36f4e40abcce473184255d97add75347ebeb56107d027485e474b22e41",
+  "input_request_sha256": "97de475f32b28e47200bce496febfdf7bc8d95d6cb6035d253cab350792b6ffd",
+  "operation_identity": "7e0f8a29f331ec57705fc882885481ee9b985947af888e3376b589d144ba5be9",
+  "raw_files": {
+    "calibration": {
+      "path": "/inputs/PG3_PAC_d63561_2026-08-4.h5",
+      "bytes": 385321,
+      "sha256": "cc75eb0cfed744c78d5d0c7a3d596a100cb118b91b46dab416fe2a3f1a0e7a31"
+    },
+    "characterization_highres": {
+      "path": "/inputs/PG3_char_2026_8-HighRes_PAC.txt",
+      "bytes": 572,
+      "sha256": "bce8bfebb0497f6cc79df786b358b420a8bf85916acd4b8321c2c70c735b8f43"
+    },
+    "characterization_limits": {
+      "path": "/inputs/PG3_char_2026_8_PAC_limit.txt",
+      "bytes": 1904,
+      "sha256": "38de592778ec7ffa989864ef5bdddd54eec9c6f2455e99e62fb244edb5e55e41"
+    },
+    "empty_can_processing_input": {
+      "path": "/inputs/PG3_63571.nxs.h5",
+      "bytes": 1198364628,
+      "sha256": "9bddd940a2f5b80e886fd70c89ff845ec9ac2480e8201e0d0bf5e8569a8affb6"
+    },
+    "normalization_blank": {
+      "path": "/inputs/PG3_63564.nxs.h5",
+      "bytes": 601330788,
+      "sha256": "1d8ae8f4a157d57f46c678d3ecc5038e9bbf1165e8e021db1e2b8670bb737e3d"
+    },
+    "normalization_reference": {
+      "path": "/inputs/PG3_63567.nxs.h5",
+      "bytes": 5928277932,
+      "sha256": "bf107105cad4746027380da7dbab9c39c566db37217dee8dfae7d9a78469d2f4"
+    }
+  },
+  "reference_runs": {
+    "vanadium": 63567,
+    "blank": 63564,
+    "PAC06": 63571
+  },
+  "can_charge_uah": 4146.786367572222,
+  "focused_can_counts": 36090754.0,
+  "native_bins": 7337,
+  "tof_domain_us": [
+    24618.472574397198,
+    463007.97043597634
+  ],
+  "geometry": {
+    "primary_flight_path_m": 60.0,
+    "secondary_flight_path_m": 3.18,
+    "two_theta_deg": 90.0
+  },
+  "terminal_replay_relative_l2": {
+    "y": 9.167366523023447e-17,
+    "e": 9.497952206977438e-17
+  },
+  "terminal_replay_tolerance": 1e-12,
+  "terminal_replay_scope": "Full SNSPowderReduction PAC06 histogram branch, using one can acquisition as both numerical sample (local filename alias) and background, with replayed already-processed V.",
+  "native_event_branch_export_max_absolute_error": {
+    "x": 4.99923771712929e-06,
+    "y": 4.999959557494549e-09,
+    "e": 4.9989514472326135e-09
+  },
+  "native_export_rounding_limits": {
+    "x": 5.1e-06,
+    "y": 5.1e-09,
+    "e": 5.1e-09
+  },
+  "original_no_background_histogram_formula_failure": {
+    "y": 0.00012562420672983487,
+    "e": 1.1750157644764932e-05
+  },
+  "native_event_compression_after_division_changes_bins": true,
+  "original_failed_control_retained": true,
+  "alias_is_same_acquisition_not_independent_sample": true,
+  "processed_V_reuse_explicit": true,
+  "terminal_reference_sha256": "eff5c59472ba5bd53d9ecd913867353878ff91633b624f3959dd5c4ee19aa5ee",
+  "control_sha256": "991aed12713ec28d9061dbb1fda02f8eafbefa8eccf83621639ce085963b6cba",
+  "sample_powder_acquisition_used": false,
+  "independent_experimental_validation": false,
+  "elapsed_seconds": 65.9860204470001,
+  "peak_rss_bytes": 2832580608,
+  "experimental_accuracy_certified": false
+}

@@ -59,3 +59,35 @@ def test_worker_envelope_runs_without_nova_and_records_packet_identity(tmp_path,
     assert result['rows'][0]['posterior']=='models/test/posterior.json'
     assert result['native_result_sha256']==file_hash(tmp_path/'job/native-result.json')
     with zipfile.ZipFile(tmp_path/'result.zip') as z:assert 'transport.json' in z.namelist() and 'verified_projects/test.gpx' in z.namelist()
+
+
+@pytest.mark.parametrize('response_available',[True,False])
+def test_prepared_response_and_factors_share_the_complete_live_packet_dependency_closure(tmp_path,response_available):
+    from gpx_recipe.preparation import hints
+    from gpx_recipe.symmetry.contracts import digest
+    from gpx_recipe.live.packet import scientific_packet_identity
+    source=tmp_path/'source';source.mkdir();request,_=scientific_request(source)
+    catalog=json.loads(Path(request['catalog']).read_text());context=hints.live_context(request,catalog)
+    root=tmp_path/'preparation';folder=root/'_prepared_scattering';folder.mkdir(parents=True)
+    factor=b'artificial transport factor bytes';response=b'artificial transport response bytes'
+    factor_sha=hashlib.sha256(factor).hexdigest();response_sha=hashlib.sha256(response).hexdigest()
+    row=dict(entry='a'*24,candidate='mag:test',bank='one bank',identity='b'*64,
+        path='_prepared_scattering/'+factor_sha+'.npz',sha256=factor_sha,entry_sha256='c'*64,
+        response=dict(identity='d'*64,physics_sha256='e'*64,
+            path='_prepared_scattering/'+response_sha+'.response.npz',sha256=response_sha))
+    (root/row['path']).write_bytes(factor)
+    if response_available:(root/row['response']['path']).write_bytes(response)
+    document=dict(schema=hints.SCHEMA,protocol_sha256=digest(context),library_id='f'*24,
+        library_name='Artificial portable library',entries=[row],eligible_entries=1,omitted_entries=0,
+        observations_included=False)
+    document['snapshot_sha256']=digest(document)
+    bare=tmp_path/'bare.zip';create_packet(request,bare)
+    request['prepared_scattering']=document
+    packet=tmp_path/'prepared.zip';create_packet(request,packet,prepared_root=root)
+    assert scientific_packet_identity(bare)==scientific_packet_identity(packet)
+    restored,_=unpack_packet(packet,tmp_path/'received')
+    assert restored['prepared_scattering']==document
+    with zipfile.ZipFile(packet) as archive:
+        assert archive.read(row['path'])==factor
+        if response_available:assert archive.read(row['response']['path'])==response
+        else:assert row['response']['path'] not in archive.namelist()

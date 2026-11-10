@@ -118,7 +118,21 @@ def curve(project, histogram):
     # Native GPX offsets can be stale after same-size rewrites. Explicitly
     # invalidate the native cache, without replacing a native function.
     io.gpxSize = -1
-    y = np.asarray(native.DoNoFit(str(project.filename), histogram.name), float)
+    data = histogram.data['data'][1]
+    if not np.any(np.ma.getdata(data[1])):
+        # DoNoFit interprets empty observations as permission to synthesize
+        # random counts. An explicit preparation reference carries no such
+        # observations: use the shared forward-only adapter instead.
+        if (histogram.data['data'][0].get('Dummy') is not True
+                or not np.all(np.asarray(data[2]) == 1.)
+                or any(np.ma.getmaskarray(a).any() for a in data[:3])):
+            raise ValueError('Empty observations require an explicit unmasked theory-only reference')
+        from ..live.native_profile import NativeReducedProfile
+        forward = NativeReducedProfile(project.filename)
+        forward.profile(forward.x0)
+        y = np.asarray(forward.histo_phases[0][histogram.name]['Data'][3], float)
+    else:
+        y = np.asarray(native.DoNoFit(str(project.filename), histogram.name), float)
     if y.shape != np.asarray(histogram.data['data'][1][0]).shape or not np.isfinite(y).all():
         raise ValueError('Invalid native structural profile')
     return y
@@ -377,6 +391,8 @@ def prepare(source_gpx, child_cif, transform, origin, output, *, phase_name=None
                   isotope_selection=isotope_selection,
                   transformation_matrix=t.tolist(), origin_shift=o.tolist(),
                   zero_profile_error=error, gauge_profile_errors=gauge_errors,
+                  observations_included=bool(np.any(np.ma.getdata(h.data['data'][1][1]))),
+                  scientific_result=False,
                   inventory=details, statistical_policy_qualified=False,
                   implementation_sha256=package_signature(),
                   scattering_identity=scattering_identity,

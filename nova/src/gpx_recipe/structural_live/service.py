@@ -18,6 +18,27 @@ from .reduced import from_arrays, native_limits, verify_native_observation, Redu
 from .defaults import DEFAULT_CELL_RADIUS, DEFAULT_FIT_SECONDS
 
 
+def workflow_timings(preparation_seconds, fitting_seconds, *, scope):
+    """Current call durations, never a persisted library's historical cost.
+
+    These service stages are a subtotal of the worker's native wall time.
+    Other worker tasks and Galaxy queue/startup/transfer remain separate.
+    """
+    if type(scope) is not str or scope not in {'model', 'acquisition'}:
+        raise ValueError('A measured structural service scope is required')
+    values=(preparation_seconds,fitting_seconds)
+    if any(type(v) not in (int,float) or v<0 for v in values):
+        raise ValueError('Finite nonnegative current service durations are required')
+    try:finite=np.isfinite([float(v) for v in values]).all()
+    except OverflowError:finite=False
+    if not finite or not np.isfinite(sum(float(v) for v in values)):
+        raise ValueError('Finite nonnegative current service durations are required')
+    return dict(schema='radar-structural-service-timing/v1',scope=scope,
+        preparation_seconds=float(preparation_seconds),fit_service_seconds=float(fitting_seconds),
+        combined_service_seconds=float(sum(values)),
+        queue_startup_transfer_included=False)
+
+
 @dataclass(frozen=True)
 class SearchSettings:
     mode_radius: float = .05
@@ -46,20 +67,23 @@ def make_source(prepared, work, settings):
                          mode_radius=settings.mode_radius,cell_radius=settings.cell_radius)
 
 
-def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=None, **roles):
+def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=None, prepared_banks=(), prepared_profiles=(), **roles):
     """Build immutable native geometry and reusable starting curves once.
 
     Starting curves contain no fitted likelihood or evidence. Their identity
     includes the native implementation, instrument/grid, chemistry and bounds.
     """
-    from .optimization.offline_native_start_bank import build
+    from ..preparation.structural_consume import prepare_starting_bank
     settings=settings or SearchSettings()
     if not isinstance(settings,SearchSettings): raise TypeError('Explicit SearchSettings required')
     metadata=prepare(source_gpx,child_cif,transform,origin,output,**roles)
     output=Path(output)
     source=make_source(output,output/'bank-construction',settings)
-    bank=build(source,output/'starting-curves.npz',policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
-    write_json(output/'starting-curve-contract.json',bank)
+    from ..preparation.tof_profile_hints import bind as bind_profiles
+    profile_preparation=bind_profiles(source,prepared_profiles)
+    bank,qualification=prepare_starting_bank(source,output/'starting-curves.npz',prepared_banks)
+    qualification['profile_table']=profile_preparation
+    write_json(output/'starting-curve-contract.json',dict(bank,portable_preparation=qualification))
     return metadata
 
 
@@ -72,8 +96,10 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     occupancy, ADPs, secondary phases and all higher background coefficients.
     """
     from .optimization.native_background_context import fit_table
-    from .optimization.offline_native_start_bank import build, OfflineNativeStartBank
+    from .optimization.starting_proposals import load_current_bank
+    from ..preparation.structural_consume import prepare_starting_bank
     from .optimization.profiled_native_fit import fit
+    from .optimization.captured_cell_derivative import CapturedCellDerivative
     from .optimization.refinable_gpx import export_refinable
     settings = settings or SearchSettings()
     if not isinstance(settings,SearchSettings): raise TypeError('Explicit SearchSettings required')
@@ -108,20 +134,28 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     bank_reused=bank_path.is_file()
     if not bank_reused:
         bank_path=output/'starts.npz'
-        build(source,bank_path,policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
-    bank=OfflineNativeStartBank(source,bank_path)
+        prepare_starting_bank(source,bank_path)
+    bank,initialization_execution=load_current_bank(source,bank_path,output)
+    if initialization_execution['regenerated']:bank_reused=False
+    portable_preparation=None
+    contract=Path(prepared)/'starting-curve-contract.json'
+    if contract.is_file():
+        if contract.stat().st_size>4*1024*1024:raise ValueError('Starting-curve provenance exceeds its budget')
+        import json
+        portable_preparation=json.loads(contract.read_text()).get('portable_preparation')
     timings['start_bank_seconds']=time.monotonic()-checkpoint
     checkpoint=time.monotonic()
+    evaluator=CapturedCellDerivative(source,max_cells=2)
     fitted,prediction=fit(source,table,observation,bank,seconds=settings.seconds,
-        starts=settings.starts,warm_pool=list(warm_starts) or None,
-        force_native_mode_derivatives=True)
+        starts=settings.starts,warm_pool=list(warm_starts) or None,evaluator=evaluator)
     if settings.recovery_seconds:
         from .optimization.automatic_fit_recovery import improve, RecoveryPolicy
         budget=settings.recovery_seconds/3
         recovered,prediction=improve(source,table,observation,fitted['best']['parameters'],bank=bank,
             policy=RecoveryPolicy(local_seconds=budget,proposal_seconds=budget,joint_seconds=budget,
-                                  starts=settings.starts),force_native_mode_derivatives=True)
-        fitted=dict(fitted,best=recovered['best'],recovery=recovered)
+                                  starts=settings.starts),evaluator=evaluator)
+        fitted=dict(fitted,best=recovered['best'],recovery=recovered,
+            rwp_percent=recovered['rwp_percent'],exact_native_deviance=recovered['best']['deviance'])
     timings['optimization_seconds']=time.monotonic()-checkpoint
     z=np.asarray(fitted['best']['parameters'],float);m=source.mode_dimensions;d=len(source.radii)
     physical=source.lift@(z[:d]*source.radii)
@@ -173,9 +207,12 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
         physical_mode_count=m,cell_parameter_count=d-m,all_physical_modes_retained=True,
         result=fitted,metrics=metrics,verification=dict(relative_error=relative,max_sigma_error=sigma,saved_observations=contracts),
         starting_curves_reused=bank_reused,
+        initialization_execution=initialization_execution,
+        portable_preparation=portable_preparation,
         frozen=frozen,continuation=continuation,timings=timings,wall_seconds=time.monotonic()-started,
         previous_likelihood_accumulated=False,instrument_parameters_fixed=True,
         higher_background_coefficients_fixed=True,covariance_available=False,
+        background_execution=table.background_execution,
         nuisance_scope=dict(common_scale_bounds=[float(np.exp(-.3)),float(np.exp(.3))],
             background0_initial=background,background_scale=background_scale,
             background0_bounds=[background-.75*background_scale,background+3*background_scale]),

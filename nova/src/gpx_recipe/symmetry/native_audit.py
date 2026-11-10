@@ -31,7 +31,7 @@ def nuclear_atoms(phase):
     return {a[ct-1]:[a[ct],*a[cx:cx+4],a[cia],*a[cia+1:cia+8]] for a in phase.data['Atoms']}
 
 
-def inspect_source(path):
+def inspect_source(path,*,include_runtime=True):
     from gsas_magnetic_preflight import setting_fingerprint
     from gsas_cif_import import _gsas_operations
     from .compiler import file_sha
@@ -44,7 +44,8 @@ def inspect_source(path):
             histograms=list(phase.data['Histograms'])))
     from .worker import runtime_identity
     return json_safe(dict(schema='radar-symmetry-source/v1',sha256=file_sha(path),phases=phases,
-        histograms=[dict(name=h.name,points=len(h.data['data'][1][0]),limits=h.data['Limits'],instrument=h.InstrumentParameters) for h in p.histograms()],runtime=runtime_identity()))
+        histograms=[dict(name=h.name,points=len(h.data['data'][1][0]),limits=h.data['Limits'],instrument=h.InstrumentParameters) for h in p.histograms()],
+        **({'runtime':runtime_identity()} if include_runtime else {})))
 
 
 def audit_trial(source,output,protocol,candidate,*,reference_source=None,input_root=None):

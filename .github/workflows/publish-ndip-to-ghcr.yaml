@@ -6,9 +6,11 @@ on:
       - birthright-container
     paths:
       - Dockerfile.ndip
+      - .dockerignore
       - requirements.txt
       - scripts/**
       - tests/test_image_scientific_contract.py
+      - tests/test_production_image_payload.py
       - nova/src/gpx_recipe/**
       - nova/src/radar_pd_nova/signal_quality.py
       - schemas/**
@@ -60,8 +62,15 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:ndip
             ${{ env.IMAGE_NAME }}:ndip-${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache
-          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache-v2
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache-v2,mode=max
+
+      - name: Verify production image excludes development fixtures
+        run: |
+          docker run --rm --entrypoint python \
+            -v "$PWD/tests/test_production_image_payload.py:/validation/test_production_image_payload.py:ro" \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" \
+            /validation/test_production_image_payload.py --image-kind ndip
 
       - name: Verify native TOF profile recovery in the built image
         shell: bash
@@ -128,8 +137,13 @@ jobs:
           from gpx_recipe.symmetry.compiler import package_signature
           from gpx_recipe.battery.transport import implementation_signature
           from gpx_recipe.worker import work
+          from GSASII import GSASIIpwd
+          from gpx_recipe.live.native_peak_batch import NativePeakBatch
           assert len(package_signature()) == 64
           assert len(implementation_signature()) == 64
+          helper=NativePeakBatch(GSASIIpwd)
+          assert helper.diagnostics()["interpolation"] is False
+          assert hasattr(helper.library,"proposal_tof_profile_sum")
           print("Reviewed preparation package and adapter identities available", work.__name__)'
 
       - name: Verify recovered-stage publication in the built worker
@@ -144,7 +158,9 @@ jobs:
       - name: Check phase discovery regressions in the scientific runtime
         shell: bash
         run: |
-          docker run --rm --entrypoint python "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -m unittest tests.test_lattice_nudger_regressions tests.test_refiner_regressions tests.test_db_pack_regressions tests.test_ndip_lattice_covariance_native tests.test_ndip_export_schema tests.test_gsas_signed_fxye_native tests.test_main_phase_identity tests.test_image_scientific_contract tests.test_library_cli_intake tests.test_library_fingerprint_guard
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+          cd /validation/tests &&
+          python -m unittest test_lattice_nudger_regressions test_refiner_regressions test_db_pack_regressions test_ndip_lattice_covariance_native test_ndip_export_schema test_gsas_signed_fxye_native test_main_phase_identity test_image_scientific_contract test_library_cli_intake test_library_fingerprint_guard'
 
       - name: Verify shared scientific worker allocation
         shell: bash
@@ -158,5 +174,7 @@ jobs:
       - name: Push Docker schema v2 manifests
         shell: bash
         run: |
-          docker push "${IMAGE_NAME}:ndip"
           docker push "${IMAGE_NAME}:ndip-${GITHUB_SHA}"
+          if [[ "$GITHUB_REF" == "refs/heads/birthright-container" ]]; then
+            docker push "${IMAGE_NAME}:ndip"
+          fi

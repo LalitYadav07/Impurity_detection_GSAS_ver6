@@ -1,9 +1,10 @@
 """Exact-cell GSAS-II profile response reuse; no profile interpolation."""
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 import copy,hashlib,json,pickle,time
 from pathlib import Path
 import numpy as np
 from scipy.sparse import csc_matrix
+from .native_profile_capture import CaptureUnavailable, capture_response
 
 def physics_policy():
     p=json.loads(Path(__file__).with_name('structural_forward_model_policy.json').read_text())
@@ -13,9 +14,12 @@ def physics_policy():
         raise ValueError('Fixed-instrument, native-profile policy is required')
     return {k:p[k] for k in ['instrument_parameters','profile_generation','surrogate_scope']}
 
+MAXIMUM_RESPONSE_COORDINATES = 256
+
+
 class NativeProfileBank:
     """Memory-bounded reuse of exact-cell, fully GSAS-II-generated responses."""
-    def __init__(self,source,maximum_bytes=64*1024*1024):
+    def __init__(self,source,maximum_bytes=64*1024*1024,*,_snapshot=None):
         if type(maximum_bytes) is not int or maximum_bytes<1:raise ValueError('Positive cache budget required')
         physics_policy()
         self.source=source;self.n=source.fast.native;self.maximum_bytes=maximum_bytes
@@ -24,9 +28,11 @@ class NativeProfileBank:
         # Response generation is linear in reflections, not a tensor over
         # structural parameters. It also supports a pure-strain (zero-mode)
         # model. The byte budget still bounds each response cache.
-        if not (1<=self.dimension<=256 and 1<=self.cell_dimensions<=min(6,self.dimension)):
+        if not (1<=self.dimension<=MAXIMUM_RESPONSE_COORDINATES and 1<=self.cell_dimensions<=min(6,self.dimension)):
             raise ValueError('Bounded structural and cell coordinates required')
-        full,refs,bg,phase,hist=source.snapshot(np.zeros(self.dimension))
+        # An owned capture may supply the snapshot of its already-required
+        # native call. It is never an imported/serialized trust assertion.
+        full,refs,bg,phase,hist=(source.snapshot(np.zeros(self.dimension)) if _snapshot is None else _snapshot)
         self.hkls=refs[:,:3].copy();self.background=bg.copy();self.background.flags.writeable=False
         self.histogram_name=self.n.parts[0][0]
         self.phase_name=source.fast.slow.phase.name
@@ -45,6 +51,7 @@ class NativeProfileBank:
         self.fixed_identity=self._identity()
         self.cache=OrderedDict();self.bytes=0;self.hits=0;self.builds=0;self.evictions=0
         self.native_profile_calls=0;self.maximum_reconstruction_error=0.;self.build_seconds=[]
+        self.response_methods=Counter();self.capture_fallbacks=Counter()
 
     def _identity(self):
         hist=self.n.histo_phases[0][self.histogram_name]
@@ -98,31 +105,31 @@ class NativeProfileBank:
         controls=self.n.controls.copy()
         if controls.get('PhasePartials'):raise ValueError('Partial-output side effects not allowed while generating cached responses')
         axis=np.asarray(self.source.fast.x[self.source.fast.slice],float)
-        indices=[];values=[];pointers=[0]
-        for row in refs:
-            reflection_dict['RefList']=row[None,:].copy()
-            reflection_dict['RefList'][0,9]=1.
-            h,k,l=map(int,row[:3])
-            lookup={self.pfx+f'{h},{k},{l}':0}
-            parameters[self.pfx+'PWLref:0']=1.
-            # The full native routine owns position, profile width, shape,
-            # truncation, absorption, multiplicity and all other corrections.
-            signal,background=self.profile_function(parameters,self.n.histdict,axis,[],local_hist,
-                {self.phase_name:local_phase},controls,lookup,histogram=self.histogram_name)
-            self.native_profile_calls+=1
-            if not np.allclose(background,bg[self.source.fast.slice],rtol=1e-13,atol=1e-13):
-                raise ValueError('Native unit-response background differs from full profile')
-            signal=np.asarray(signal,float)
-            if not np.isfinite(signal).all():raise ValueError('Nonfinite native profile response')
-            nonzero=np.flatnonzero(signal)  # exact zeros only; no tail clipping
-            indices.append(nonzero.astype(np.int32));values.append(signal[nonzero])
-            pointers.append(pointers[-1]+len(nonzero))
-        matrix=csc_matrix((np.concatenate(values),np.concatenate(indices),np.asarray(pointers)),
-            shape=(len(axis),len(refs)))
+        reflection_dict['RefList']=refs.copy()
+        lookup={}
+        for index,row in enumerate(refs):
+            h,k,l=map(int,row[:3]);lookup[self.pfx+f'{h},{k},{l}']=index
+            parameters[self.pfx+f'PWLref:{index}']=1.
+        try:
+            matrix,background,receipt=capture_response(self.profile_function,self.n.math.G2pwd,
+                parameters,self.n.histdict,axis,local_hist,{self.phase_name:local_phase},controls,
+                lookup,histogram_name=self.histogram_name,phase_name=self.phase_name)
+            self.native_profile_calls+=receipt['native_driver_calls']
+            self.response_methods[receipt['method']]+=1
+        except CaptureUnavailable as exc:
+            # An unrecognized native call layout is an accelerator limitation,
+            # not grounds to reject a scientifically supported candidate.
+            self.native_profile_calls+=exc.native_driver_calls
+            self.capture_fallbacks[str(exc)]+=1
+            matrix,background=self._individual_responses(refs,axis,reflection_dict,parameters,
+                local_hist,local_phase,controls)
+            self.response_methods['individual native reflection calls']+=1
+        if not np.allclose(background,bg[self.source.fast.slice],rtol=1e-13,atol=1e-13):
+            raise ValueError('Native unit-response background differs from full profile')
         rebuilt=matrix@refs[:,9]+bg[self.source.fast.slice]
         err=float(np.linalg.norm(rebuilt-full[self.source.fast.slice])/max(np.linalg.norm((full-bg)[self.source.fast.slice]),1e-30))
         self.maximum_reconstruction_error=max(self.maximum_reconstruction_error,err)
-        if err>1e-9:raise ValueError(f'Native unit responses are not equivalent to the full Rietveld profile: {err}')
+        if not np.isfinite(err) or err>1e-9:raise ValueError(f'Native unit responses are not equivalent to the full Rietveld profile: {err}')
         self.check();self.builds+=1;self.build_seconds.append(time.perf_counter()-began)
         size=matrix.data.nbytes+matrix.indices.nbytes+matrix.indptr.nbytes
         for a in [matrix.data,matrix.indices,matrix.indptr]:a.flags.writeable=False
@@ -132,12 +139,37 @@ class NativeProfileBank:
             self.cache[key]=matrix;self.bytes+=size
         return matrix
 
+    def _individual_responses(self,refs,axis,reflection_dict,parameters,local_hist,local_phase,controls):
+        """Original native construction for contexts without capture support."""
+        indices=[];values=[];pointers=[0];background=self.background[self.source.fast.slice]
+        for row in refs:
+            reflection_dict['RefList']=row[None,:].copy()
+            reflection_dict['RefList'][0,9]=1.
+            h,k,l=map(int,row[:3])
+            lookup={self.pfx+f'{h},{k},{l}':0}
+            parameters[self.pfx+'PWLref:0']=1.
+            signal,background=self.profile_function(parameters,self.n.histdict,axis,[],local_hist,
+                {self.phase_name:local_phase},controls,lookup,histogram=self.histogram_name)
+            self.native_profile_calls+=1
+            if not np.allclose(background,self.background[self.source.fast.slice],rtol=1e-13,atol=1e-13):
+                raise ValueError('Native unit-response background differs from full profile')
+            signal=np.asarray(signal,float)
+            if not np.isfinite(signal).all():raise ValueError('Nonfinite native profile response')
+            nonzero=np.flatnonzero(signal)
+            indices.append(nonzero.astype(np.int32));values.append(signal[nonzero])
+            pointers.append(pointers[-1]+len(nonzero))
+        matrix=csc_matrix((np.concatenate(values) if values else np.empty(0),
+            np.concatenate(indices) if indices else np.empty(0,np.int32),np.asarray(pointers)),
+            shape=(len(axis),len(refs)))
+        return matrix,np.asarray(background,float)
+
     def diagnostics(self):
         return dict(strategy=self.strategy,entries=len(self.cache),estimated_bytes=self.bytes,maximum_bytes=self.maximum_bytes,
             hits=self.hits,builds=self.builds,evictions=self.evictions,native_profile_calls=self.native_profile_calls,
             maximum_reconstruction_error=self.maximum_reconstruction_error,
             median_build_seconds=float(np.median(self.build_seconds)) if self.build_seconds else None,
             fixed_context_sha256=self.fixed_identity,
+            response_methods=dict(self.response_methods),capture_fallbacks=dict(self.capture_fallbacks),
             native_driver='GSASIIstrMath.getPowderProfile; private native fixed-intensity mode',
             custom_width_shape_position_or_convolution=False,interpolated_profile_parameters=False)
 

@@ -4,6 +4,8 @@
 FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6:ndip-ac3bf6ff93d163c7a58d07322fcb1d5e44961215@sha256:6c19f717e9a644252553a008babc2b86e7258bd9a45992d4d28504f2bfada8d4
 
 USER root
+# COPY cannot remove files inherited from the pinned runtime image.
+RUN rm -rf /opt/radar-pd/nova/tests /opt/radar-pd/tests /opt/radar-symmetry/tests /src/tests
 WORKDIR /opt/radar-pd
 ARG RADAR_PD_BUILD_SHA=unknown
 ENV RADAR_PD_GIT_COMMIT=${RADAR_PD_BUILD_SHA}
@@ -30,7 +32,9 @@ ENV PYTHONPATH=/opt/radar-pd/nova/src:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-I
 
 # The recipe worker and model worker use one reviewed native powder kernel.
 # Apply once at image build; existing containers and sealed results are intact.
-RUN python tests/gpx_recipe/kernel_geometry_control.py \
+RUN mkdir -p /opt/radar-native/gpx_recipe/live \
+    && python -m gpx_recipe.live.native_peak_batch --build \
+    && python tests/gpx_recipe/kernel_geometry_control.py \
         --kernel-patch nova/src/gpx_recipe/symmetry/kernel_patch.py \
         > /opt/radar-pd/kernel-geometry-validation.log \
     && python tests/gpx_recipe/nuclear_powder_control.py \

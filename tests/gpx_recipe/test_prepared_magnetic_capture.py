@@ -75,6 +75,10 @@ def test_native_prepared_copy_matches_independent_reconstruction(tmp_path,sites,
     del project.data['Phases'][magnetic.name]
     for names in project.names:
         if names[0]=='Phases':names.remove(magnetic.name)
+    # Real GSAS-II saves can retain the removed phase's output cache. Both
+    # independently reconstructed and prepared fits must ignore that orphan
+    # while keeping all active nuclear/magnetic scattering dependencies.
+    assert magnetic.name in project.histograms()[0].data['Reflection Lists']
     project.save()
     candidate=dict(id='public-p1',magnetic_space_group='P1',bns_number='1.1',
         bns_lattice='',origin_shift=[0.,0.,0.],transformation_matrix=np.eye(3).tolist())

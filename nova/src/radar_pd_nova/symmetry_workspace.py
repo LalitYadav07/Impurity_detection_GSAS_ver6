@@ -21,6 +21,22 @@ _verified_receipts=OrderedDict()
 _evidence_lock=threading.RLock()
 
 
+def structural_timing_summary(value):
+    """Keep missing/older timing receipts distinct from zero-duration work."""
+    if (not isinstance(value,dict) or value.get('schema')!='radar-structural-service-timing/v1'
+            or type(value.get('scope')) is not str or value['scope'] not in {'model','acquisition'}
+            or value.get('queue_startup_transfer_included') is not False):return ''
+    values=[value.get(k) for k in ('preparation_seconds','fit_service_seconds','combined_service_seconds')]
+    if any(type(v) not in (int,float) or v<0 for v in values):return ''
+    try:values=[float(v) for v in values]
+    except OverflowError:return ''
+    if not np.isfinite(values).all():return ''
+    preparation,fitting,total=values
+    if not np.isclose(preparation+fitting,total,rtol=1e-8,atol=1e-8):return ''
+    return (f'{preparation:.1f} s preparation · {fitting:.1f} s fitting and GPX checks · '
+            f'{total:.1f} s combined service time. Other worker tasks, queue, startup and transfer are additional.')
+
+
 def candidate_display_name(catalog,candidate):
     """Use the authoritative constructed-child label, including its subgroup."""
     if candidate.get('magnetic_space_group'):return candidate['magnetic_space_group']
@@ -123,6 +139,7 @@ def read_trial(directory,metadata=None,*,expected_receipt=None):
             row['refined_moments']=result.get('moments',[])
             row['resources']=result.get('resources',{})
             row['timings']=result.get('timings',{})
+            row['structural_fit']=result.get('structural_fit',{})
             row['screening_only']=result.get('screening_only',False)
             row['native_reference']=(result.get('native_reference') or {}).get('id','')
             row['native_verified']=bool(result.get('effects_verified') and result.get('audit',{}).get('passed'))

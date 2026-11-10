@@ -175,7 +175,18 @@ def prepare(source_gpx,ctx,protocol,candidate_record,seed):
     return _run(source_gpx,ctx,protocol,candidate_record,seed,forward_only=False,prepare_only=True)
 
 
-def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_only=False,screened=None):
+def construct_theory(source_gpx,ctx,protocol,candidate_record,seed):
+    """Use the common audited constructor without observations or a fit.
+
+    The input must be an explicitly theory-only native project. This path
+    bypasses measured-baseline diagnostics, not the BNS, site, material-amount,
+    fixed-input or propagation-periodicity audits.
+    """
+    return _run(source_gpx,ctx,protocol,candidate_record,seed,
+        forward_only=False,theory_only=True)
+
+
+def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_only=False,screened=None,theory_only=False):
     from pathlib import Path
     import copy,hashlib,math,re,time
     stage_started=time.monotonic()
@@ -250,22 +261,33 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
         for name, hap in (phase.data.get('Histograms') or {}).items():
             if isinstance(hap, dict):
                 hap['Use'] = name in selected_histograms
-    baseline_residuals = {name: dict(available_histograms[name].residuals) for name in selected_histograms}
-
-    from GSASII import GSASIIstrMain as _G2strMain
-    gpx.save()
-    baseline_refresh = []
-    for _name in selected_histograms:
-        _hist = available_histograms[_name]
-        _old = np.asarray(_hist.data['data'][1][3], dtype=float).copy()
-        _fresh = np.asarray(_G2strMain.DoNoFit(str(output_gpx), _name), dtype=float)
-        if _fresh.shape != _old.shape or not np.all(np.isfinite(_fresh)):
-            raise ValueError('Nuclear control could not be recalculated')
-        _hist.data['data'][1][3] = _fresh
-        _hist.data['data'][1][5] = np.asarray(_hist.data['data'][1][1]) - _fresh
-        baseline_refresh.append(dict(histogram=_name, maximum_stale_curve_difference=float(np.max(np.abs(_old - _fresh)))))
-    ctx.save_json('baseline-refresh.json', baseline_refresh)
-    baseline_target_profiles = {name: find_positive_residual_targets(available_histograms[name]) for name in selected_histograms}
+    if theory_only:
+        if forward_only or prepare_only or screened is not None:
+            raise ValueError('Theory construction cannot request a measured refinement')
+        for name in selected_histograms:
+            histogram=available_histograms[name]
+            arrays=histogram.data['data'][1]
+            if (histogram.data['data'][0].get('Dummy') is not True
+                    or np.any(arrays[1]) or not np.array_equal(arrays[2],np.ones_like(arrays[2]))
+                    or any(np.ma.getmaskarray(a).any() for a in arrays[:3])):
+                raise ValueError('Theory construction requires an explicit observation-free reference')
+        baseline_residuals={};baseline_target_profiles={}
+    else:
+        baseline_residuals = {name: dict(available_histograms[name].residuals) for name in selected_histograms}
+        from GSASII import GSASIIstrMain as _G2strMain
+        gpx.save()
+        baseline_refresh = []
+        for _name in selected_histograms:
+            _hist = available_histograms[_name]
+            _old = np.asarray(_hist.data['data'][1][3], dtype=float).copy()
+            _fresh = np.asarray(_G2strMain.DoNoFit(str(output_gpx), _name), dtype=float)
+            if _fresh.shape != _old.shape or not np.all(np.isfinite(_fresh)):
+                raise ValueError('Nuclear control could not be recalculated')
+            _hist.data['data'][1][3] = _fresh
+            _hist.data['data'][1][5] = np.asarray(_hist.data['data'][1][1]) - _fresh
+            baseline_refresh.append(dict(histogram=_name, maximum_stale_curve_difference=float(np.max(np.abs(_old - _fresh)))))
+        ctx.save_json('baseline-refresh.json', baseline_refresh)
+        baseline_target_profiles = {name: find_positive_residual_targets(available_histograms[name]) for name in selected_histograms}
     from gpx_recipe.execution import freeze
     freeze(gpx)
     for histogram in gpx.histograms():
@@ -690,7 +712,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
         from .prepared_magnetic import seal_prepared
         prepared=seal_prepared(ctx,protocol,candidate_record,template,state,output_gpx)
         return dict(gpx=output_gpx.name,seed_template=template,prepared=prepared)
-    if forward_only:
+    if forward_only or theory_only:
         from .k_native import audit_simulation
         from .k_periodicity import audit_structure
         audit=audit_simulation(source_gpx,output_gpx,protocol,candidate_record)
@@ -700,6 +722,10 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
         except ValueError as exc:periodicity=dict(passed=False,reason=str(exc))
         ctx.save_json('propagation-periodicity-audit.json',periodicity)
         if not periodicity['passed']:raise TrialDisposition('k_periodicity_mismatch',periodicity['reason'])
+        if theory_only:
+            return dict(status='theory_constructed',gpx=output_gpx.name,audit=audit,
+                periodicity=periodicity,no_refinement=True,observations_included=False,
+                magnetic_atoms=len(new_phase['Atoms']))
         histogram=gpx.histogram(protocol['histogram'])
         baseline=baseline_target_profiles[protocol['histogram']]['arrays'][3]
         from ..native_forward import forward_profile,tick_arrays

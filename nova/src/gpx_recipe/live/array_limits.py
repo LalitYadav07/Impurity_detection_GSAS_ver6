@@ -1,5 +1,6 @@
 """Inspect NPZ/NPY headers before NumPy can allocate untrusted arrays."""
 import math
+import io
 from pathlib import Path
 import zipfile
 
@@ -10,12 +11,32 @@ MAX_ARRAY_ELEMENTS = 48_000_000
 MAX_OBSERVATION_BINS = 1_000_000
 
 
-def validate_npz(path, *, observation=False):
+def validate_npz(path, *, observation=False, maximum_bytes=None):
+    limit = _array_budget(observation,maximum_bytes)
     path = Path(path)
+    return _validate_npz(path,path.stat().st_size,observation=observation,limit=limit)
+
+
+def validate_npz_bytes(data, *, observation=False, maximum_bytes=None):
+    """Inspect the exact immutable bytes that a subsequent reader will parse."""
+    if not isinstance(data,bytes):raise TypeError('Immutable NPZ bytes required')
+    return _validate_npz(io.BytesIO(data),len(data),observation=observation,
+        limit=_array_budget(observation,maximum_bytes))
+
+
+def _array_budget(observation,maximum_bytes):
     limit = 32 * 1024 * 1024 if observation else MAX_ARRAY_BYTES
-    if path.stat().st_size > limit:
+    if maximum_bytes is not None:
+        if type(maximum_bytes) is not int or not 1 <= maximum_bytes <= limit:
+            raise ValueError('An array budget can only tighten the existing limit')
+        limit = maximum_bytes
+    return limit
+
+
+def _validate_npz(source,size,*,observation,limit):
+    if size > limit:
         raise ValueError('NPZ exceeds the array byte budget')
-    with zipfile.ZipFile(path) as archive:
+    with zipfile.ZipFile(source) as archive:
         entries = archive.infolist()
         if not entries or len(entries) > 16 or len({v.filename for v in entries}) != len(entries):
             raise ValueError('NPZ has an invalid array inventory')

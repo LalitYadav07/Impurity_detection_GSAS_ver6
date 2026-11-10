@@ -1,0 +1,73 @@
+{
+  "schema": "powgen-current-standard-normalization/v1",
+  "id": "silicon_63584",
+  "run": 63584,
+  "calibration_protocol_sha256": "7262db493d430b9f9fa3b164d68d07db56d781f3c69ee3950083097f5eb7c1e7",
+  "sources": {
+    "sample_counts": {
+      "path": "provenance/counts.npz",
+      "sha256": "fcb9f647b8a55809747d0299db9c788cd599eb790f0de4572e5a6146fdc25b7d"
+    },
+    "sample_count_receipt": {
+      "path": "provenance/result.json",
+      "sha256": "2f1ae9d86e39b2a0d51fef1fd2bba0f1ed9fbb3e90bc908bf77a4eecf30d65fd"
+    },
+    "fixed_regions": {
+      "path": "provenance/result.json",
+      "sha256": "2fa1ce7cca978ab99a9af7b0bb6a975233e96b314943048f976527739de3c156"
+    },
+    "standard_forward_reference": {
+      "path": "provenance/reference-model.npz",
+      "sha256": "2d94f8e3f7a112ede983de6df40dbefc5d9bdd106a23c279e5d3d9f54870bf55"
+    },
+    "standard_forward_grid": {
+      "path": "provenance/curves.npz",
+      "sha256": "6f39ded1a70517c9498bc2f608b5ca45204fb76154e1500ec1fae05318bb48d5"
+    },
+    "standard_request": {
+      "path": "provenance/scenario.json",
+      "sha256": "77aaed7d40ff12b14f06e1e2fe45b0980c42d76fd968e1a061add427c807fef8"
+    },
+    "standard_cif": {
+      "path": "provenance/cif.cif",
+      "sha256": "c17f3be1c300090068ad6ff371adcc353335c5af0854db71c1b70ec73b93fbac"
+    },
+    "current_reference_manifest": {
+      "path": "provenance/bundle.json",
+      "sha256": "b292e16d64b5a5efe1967a90992537a0c2b6f461f85812a8d13f7fa2e618336f"
+    }
+  },
+  "standard_assumptions": {
+    "mass_g": 0.95,
+    "radius_cm": 0.295,
+    "packing_fraction": 0.3730165664701342,
+    "beam_width_cm": 1.0,
+    "beam_height_cm": 4.0,
+    "inner_radius_cm": 0.0,
+    "wall_thickness_cm": 0.0
+  },
+  "physical_mass_and_fill_independently_verified": false,
+  "reference_regions": 31,
+  "original_model_only_peak_regions": 12,
+  "standard_on_counts": 14719925,
+  "empty_can_off_counts": 3963181,
+  "standard_charge_uah": 3463.626379894444,
+  "can_charge_uah": 4124.913502030556,
+  "reference_denominator": 2812.4578628803883,
+  "reference_denominator_cv": 0.00040533327085161313,
+  "standard_signal_rate": 3289.0681105883405,
+  "mean_gain": 1.1694639603310644,
+  "calibration_role": "Si63584, previously opened development, now explicit scale calibration",
+  "development_role": "NAC63586, already opened; no parameters fitted to NAC",
+  "likelihood": "Aggregate Si ON and PAC06 OFF counts with flat nonnegative S/B priors. Within selected OFF cells, independent aggregate B and uniform Dirichlet proportions before conditioning. Outside cells retain independent flat rate priors.",
+  "prediction": "S * A_sample*s/(a_standard*s) plus shared background. Positive exact nonlinear sampling; first-order V-ratio moments with exact S/B and Dirichlet moments.",
+  "aggregation": "Whole existing coarse reference cells; unweighted integer data only. Local PAC06 extraction has 35 fewer accepted events than the native compressed histogram over the full range.",
+  "target_scale_or_structure_fitted": false,
+  "new_independent_acceptance_cases": 0,
+  "experimental_accuracy_certified": false,
+  "public_metadata_provenance": {
+    "schema": "radar-public-calibration-metadata/v1",
+    "original_metadata_sha256": "a64b151550674c21d9c5fcf45c733e127414956c170b925779dc66cdf9755174",
+    "transformation": "Local paths and transport/session details removed; source content hashes and calibration values retained."
+  }
+}

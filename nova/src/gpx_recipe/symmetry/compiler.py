@@ -9,6 +9,8 @@ import uuid
 
 from .contracts import validate_candidate, digest, trial_id, validate_protocol, iter_trials
 
+SOURCE_SUFFIXES=frozenset({'.py','.json','.csv','.c'})
+
 
 def file_sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -36,6 +38,16 @@ def require_adapters():
             spec=importlib.util.find_spec(name);origin=spec.origin if spec else None
         if not origin or file_sha(origin)!=file_sha(Path(__file__).parent/'adapters'/(name+'.py')):
             raise ValueError('The native adapter differs from the pinned package: '+name)
+
+
+def native_environment(gsasii_root=None):
+    """Credential-free child environment with this package's reviewed adapters."""
+    import os
+    from ..jobs import scientific_environment
+    environment=scientific_environment(gsasii_root)
+    environment['PYTHONPATH']=os.pathsep.join([str(Path(__file__).resolve().parent/'adapters'),
+                                            environment['PYTHONPATH']])
+    return environment
 
 
 def job_inputs(directory, job):
@@ -121,20 +133,29 @@ def verify_inputs(protocol,root):
             raise ValueError('A candidate differs from the sealed discovery record')
 
 
-def package_signature():
-    """Bind the scientific implementation independently of installation paths."""
-    root=Path(__file__).parent.parent
+def source_inventory(root=None):
+    """One confined source inventory for installed and frozen worker code.
+
+    Older bundles without C files retain their original inventory/hash. A
+    native executable or build receipt is never an approved source asset.
+    """
+    root=Path(__file__).parent.parent if root is None else Path(root)
     # Include transitive native dependencies such as freeze(), extraction and
     # constraint auditing, not just the new symmetry entry points.
-    values={str(p.relative_to(root)):file_sha(p) for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json','.csv'}}
-    return digest(values)
+    return {str(p.relative_to(root)):file_sha(confined(root,str(p.relative_to(root))))
+            for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in SOURCE_SUFFIXES}
+
+
+def package_signature():
+    """Bind the scientific implementation independently of installation paths."""
+    return digest(source_inventory())
 
 
 def freeze_runtime(destination):
     """Ship the approved code as data beside the compiled, trusted entry point."""
     root=Path(__file__).parent.parent;destination=Path(destination)
     for path in root.rglob('*'):
-        if path.is_file() and (path.suffix in {'.py','.json','.csv'} or path.name.endswith('LICENSE')):
+        if path.is_file() and (path.suffix in SOURCE_SUFFIXES or path.name.endswith('LICENSE')):
             target=destination/'gpx_recipe'/path.relative_to(root)
             target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
     for name in ['gsas_magnetic_preflight.py','gsas_isodistort_import.py','gsas_cif_import.py']:
@@ -142,6 +163,22 @@ def freeze_runtime(destination):
 
 
 def compile_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approved_hash):
+    return _compile_bundle(protocol,input_root,destination,candidate_id=candidate_id,
+        seed_id=seed_id,approved_hash=approved_hash,standalone=True)
+
+
+def compile_native_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approved_hash):
+    """Data-only inputs for the pinned installed native API, not worker.py.
+
+    Native entry points independently check package_signature and every input
+    before/after execution. No per-start runtime copy or executable is needed.
+    The ordinary standalone bundle retains its complete captured runtime.
+    """
+    return _compile_bundle(protocol,input_root,destination,candidate_id=candidate_id,
+        seed_id=seed_id,approved_hash=approved_hash,standalone=False)
+
+
+def _compile_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approved_hash,standalone):
     protocol=validate_protocol(protocol)
     if approved_hash!=digest(protocol):raise ValueError('Approval does not bind the complete protocol')
     if protocol['implementation_sha256']!=package_signature():raise ValueError('The scientific implementation changed after approval')
@@ -158,8 +195,9 @@ def compile_bundle(protocol,input_root,destination,*,candidate_id,seed_id,approv
         target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
     job=dict(schema='radar-symmetry-job/v1',protocol=protocol,protocol_sha256=approved_hash,
              candidate_id=candidate_id,seed_id=seed_id,id=trial_id(protocol,candidate_id,seed_id),package_sha256=package_signature())
-    freeze_runtime(destination/'runtime')
     (destination/'job.json').write_text(json.dumps(job,indent=2,allow_nan=False)+'\n')
+    if not standalone:return job
+    freeze_runtime(destination/'runtime')
     # Only this trusted entry point is generated; no model-written Python runs.
     code='from pathlib import Path\nimport sys\nroot=Path(__file__).resolve().parent\nsys.path[:0]=[str(root/"runtime"),str(root/"runtime/scripts")]\nfrom gpx_recipe.symmetry.worker import main\nif __name__ == "__main__":\n    main(root)\n'
     (destination/'worker.py').write_text(code)

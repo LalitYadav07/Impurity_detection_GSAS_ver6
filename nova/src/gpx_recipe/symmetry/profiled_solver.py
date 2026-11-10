@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import copy
 import time
+from pathlib import Path
 import numpy as np
 
 from .native_profiled import NativeMagneticStartingPoint
@@ -95,17 +96,23 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None,screened=None)
         cache_identity=None;cache_path=None
         if cache_root is not None and candidate is not None:
             from .contracts import digest
-            from pathlib import Path
             # The full protocol binds source, calibration, masks, runtime,
             # implementation, nuisance scope and the candidate catalog. Native
             # variable names/maps additionally bind the constructed basis.
             cache_identity=digest(dict(protocol=protocol,candidate=candidate,
                 variables=context.moment_names,maps=context.cartesian_maps.tolist()))
             cache_path=Path(cache_root)/(cache_identity+'.npz')
-        model,identity=context.build(heldouts=4,cache_path=cache_path,cache_identity=cache_identity)
+        factor_cache=None;prepared_scattering=dict(attached=0,native_qualification_required=True)
+        if cache_root is not None:
+            from ..preparation.hints import cache_for
+            factor_cache,prepared_scattering=cache_for(Path(cache_root).parent,protocol,
+                candidate=candidate['id'] if candidate is not None else None)
+        model,identity=context.build(heldouts=4,cache_path=cache_path,cache_identity=cache_identity,
+            factor_cache=factor_cache)
+        identity['prepared_scattering']=prepared_scattering
     except ValueError as exc:
         raise ProfiledScopeError(str(exc)) from exc
-    null_cost,_,null_scale=model._evaluate(np.zeros(model.dimension))
+    null_cost,_,null_scale=model._evaluate_full(np.zeros(model.dimension))
     null_curve=model.offset+null_scale*model.nuclear
     null_background=np.linalg.lstsq(model.background,-null_curve,rcond=None)[0] if model.background.shape[1] else np.empty(0)
     null_residual=context.residual(np.zeros(model.dimension),null_scale,null_background)
@@ -125,6 +132,8 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None,screened=None)
         magnetic_variables=list(context.moment_names),nuisance_scope=dict(common_scale=p['refine_histogram_scale'],
             existing_background_coefficients=p['refine_background']),
         objective_identity=identity,raw_solution=json_safe(dataclasses.asdict(fit)),
+        residual_reduction=dict(model.reduction_diagnostics,
+            reduced_evaluations=model.reduction_evaluations,full_evaluations=model.full_evaluations),
         reused_group_screen=screened is not None,
         nuclear_baseline=dict(rwp=100*np.sqrt(2*null_cost/model.normalization),native_identity_error=null_identity,
             common_scale=null_scale,background=null_background.tolist(),same_nuisance_scope=True))

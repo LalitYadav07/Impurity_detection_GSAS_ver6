@@ -1,0 +1,1707 @@
+{
+  "source": "https://ncnr.nist.gov/resources/n-lengths/list.html",
+  "sha256": "eedaa0ecbe123a681c64bc52f53b30e7dce1f444b3a8143ac486ce397afec101",
+  "reference_wavelength_a": 1.798,
+  "elements": {
+    "H": {
+      "incoherent_b": 80.26,
+      "scattering_b": 82.02,
+      "absorption_2200_b": 0.3326
+    },
+    "1H": {
+      "incoherent_b": 80.27,
+      "scattering_b": 82.03,
+      "absorption_2200_b": 0.3326
+    },
+    "2H": {
+      "incoherent_b": 2.05,
+      "scattering_b": 7.64,
+      "absorption_2200_b": 0.000519
+    },
+    "3H": {
+      "incoherent_b": 0.14,
+      "scattering_b": 3.03,
+      "absorption_2200_b": 0.0
+    },
+    "He": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.34,
+      "absorption_2200_b": 0.00747
+    },
+    "3He": {
+      "incoherent_b": 1.6,
+      "scattering_b": 6.0,
+      "absorption_2200_b": 5333.0
+    },
+    "4He": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.34,
+      "absorption_2200_b": 0.0
+    },
+    "Li": {
+      "incoherent_b": 0.92,
+      "scattering_b": 1.37,
+      "absorption_2200_b": 70.5
+    },
+    "6Li": {
+      "incoherent_b": 0.46,
+      "scattering_b": 0.97,
+      "absorption_2200_b": 940.0
+    },
+    "7Li": {
+      "incoherent_b": 0.78,
+      "scattering_b": 1.4,
+      "absorption_2200_b": 0.0454
+    },
+    "Be": {
+      "incoherent_b": 0.0018,
+      "scattering_b": 7.63,
+      "absorption_2200_b": 0.0076
+    },
+    "B": {
+      "incoherent_b": 1.7,
+      "scattering_b": 5.24,
+      "absorption_2200_b": 767.0
+    },
+    "10B": {
+      "incoherent_b": 3.0,
+      "scattering_b": 3.1,
+      "absorption_2200_b": 3835.0
+    },
+    "11B": {
+      "incoherent_b": 0.21,
+      "scattering_b": 5.77,
+      "absorption_2200_b": 0.0055
+    },
+    "C": {
+      "incoherent_b": 0.001,
+      "scattering_b": 5.551,
+      "absorption_2200_b": 0.0035
+    },
+    "12C": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.559,
+      "absorption_2200_b": 0.00353
+    },
+    "13C": {
+      "incoherent_b": 0.034,
+      "scattering_b": 4.84,
+      "absorption_2200_b": 0.00137
+    },
+    "N": {
+      "incoherent_b": 0.5,
+      "scattering_b": 11.51,
+      "absorption_2200_b": 1.9
+    },
+    "14N": {
+      "incoherent_b": 0.5,
+      "scattering_b": 11.53,
+      "absorption_2200_b": 1.91
+    },
+    "15N": {
+      "incoherent_b": 5e-05,
+      "scattering_b": 5.21,
+      "absorption_2200_b": 2.4e-05
+    },
+    "O": {
+      "incoherent_b": 0.0008,
+      "scattering_b": 4.232,
+      "absorption_2200_b": 0.00019
+    },
+    "16O": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.232,
+      "absorption_2200_b": 0.0001
+    },
+    "17O": {
+      "incoherent_b": 0.004,
+      "scattering_b": 4.2,
+      "absorption_2200_b": 0.236
+    },
+    "18O": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.29,
+      "absorption_2200_b": 0.00016
+    },
+    "F": {
+      "incoherent_b": 0.0008,
+      "scattering_b": 4.018,
+      "absorption_2200_b": 0.0096
+    },
+    "Ne": {
+      "incoherent_b": 0.008,
+      "scattering_b": 2.628,
+      "absorption_2200_b": 0.039
+    },
+    "20Ne": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.695,
+      "absorption_2200_b": 0.036
+    },
+    "21Ne": {
+      "incoherent_b": 0.05,
+      "scattering_b": 5.7,
+      "absorption_2200_b": 0.67
+    },
+    "22Ne": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.88,
+      "absorption_2200_b": 0.046
+    },
+    "Na": {
+      "incoherent_b": 1.62,
+      "scattering_b": 3.28,
+      "absorption_2200_b": 0.53
+    },
+    "Mg": {
+      "incoherent_b": 0.08,
+      "scattering_b": 3.71,
+      "absorption_2200_b": 0.063
+    },
+    "24Mg": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.03,
+      "absorption_2200_b": 0.05
+    },
+    "25Mg": {
+      "incoherent_b": 0.28,
+      "scattering_b": 1.93,
+      "absorption_2200_b": 0.19
+    },
+    "26Mg": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.0,
+      "absorption_2200_b": 0.0382
+    },
+    "Al": {
+      "incoherent_b": 0.0082,
+      "scattering_b": 1.503,
+      "absorption_2200_b": 0.231
+    },
+    "Si": {
+      "incoherent_b": 0.004,
+      "scattering_b": 2.167,
+      "absorption_2200_b": 0.171
+    },
+    "28Si": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.12,
+      "absorption_2200_b": 0.177
+    },
+    "29Si": {
+      "incoherent_b": 0.001,
+      "scattering_b": 2.78,
+      "absorption_2200_b": 0.101
+    },
+    "30Si": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.64,
+      "absorption_2200_b": 0.107
+    },
+    "P": {
+      "incoherent_b": 0.005,
+      "scattering_b": 3.312,
+      "absorption_2200_b": 0.172
+    },
+    "S": {
+      "incoherent_b": 0.007,
+      "scattering_b": 1.026,
+      "absorption_2200_b": 0.53
+    },
+    "32S": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.988,
+      "absorption_2200_b": 0.54
+    },
+    "33S": {
+      "incoherent_b": 0.3,
+      "scattering_b": 3.1,
+      "absorption_2200_b": 0.54
+    },
+    "34S": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.52,
+      "absorption_2200_b": 0.227
+    },
+    "36S": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.1,
+      "absorption_2200_b": 0.15
+    },
+    "Cl": {
+      "incoherent_b": 5.3,
+      "scattering_b": 16.8,
+      "absorption_2200_b": 33.5
+    },
+    "35Cl": {
+      "incoherent_b": 4.7,
+      "scattering_b": 21.8,
+      "absorption_2200_b": 44.1
+    },
+    "37Cl": {
+      "incoherent_b": 0.001,
+      "scattering_b": 1.19,
+      "absorption_2200_b": 0.433
+    },
+    "Ar": {
+      "incoherent_b": 0.225,
+      "scattering_b": 0.683,
+      "absorption_2200_b": 0.675
+    },
+    "36Ar": {
+      "incoherent_b": 0.0,
+      "scattering_b": 77.9,
+      "absorption_2200_b": 5.2
+    },
+    "38Ar": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.5,
+      "absorption_2200_b": 0.8
+    },
+    "40Ar": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.421,
+      "absorption_2200_b": 0.66
+    },
+    "K": {
+      "incoherent_b": 0.27,
+      "scattering_b": 1.96,
+      "absorption_2200_b": 2.1
+    },
+    "39K": {
+      "incoherent_b": 0.25,
+      "scattering_b": 2.01,
+      "absorption_2200_b": 2.1
+    },
+    "40K": {
+      "incoherent_b": 0.5,
+      "scattering_b": 1.6,
+      "absorption_2200_b": 35.0
+    },
+    "41K": {
+      "incoherent_b": 0.3,
+      "scattering_b": 1.2,
+      "absorption_2200_b": 1.46
+    },
+    "Ca": {
+      "incoherent_b": 0.05,
+      "scattering_b": 2.83,
+      "absorption_2200_b": 0.43
+    },
+    "40Ca": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.9,
+      "absorption_2200_b": 0.41
+    },
+    "42Ca": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.42,
+      "absorption_2200_b": 0.68
+    },
+    "43Ca": {
+      "incoherent_b": 0.5,
+      "scattering_b": 0.8,
+      "absorption_2200_b": 6.2
+    },
+    "44Ca": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.25,
+      "absorption_2200_b": 0.88
+    },
+    "46Ca": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.6,
+      "absorption_2200_b": 0.74
+    },
+    "48Ca": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.019,
+      "absorption_2200_b": 1.09
+    },
+    "Sc": {
+      "incoherent_b": 4.5,
+      "scattering_b": 23.5,
+      "absorption_2200_b": 27.5
+    },
+    "Ti": {
+      "incoherent_b": 2.87,
+      "scattering_b": 4.35,
+      "absorption_2200_b": 6.09
+    },
+    "46Ti": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.05,
+      "absorption_2200_b": 0.59
+    },
+    "47Ti": {
+      "incoherent_b": 1.5,
+      "scattering_b": 3.2,
+      "absorption_2200_b": 1.7
+    },
+    "48Ti": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.65,
+      "absorption_2200_b": 7.84
+    },
+    "49Ti": {
+      "incoherent_b": 3.3,
+      "scattering_b": 3.4,
+      "absorption_2200_b": 2.2
+    },
+    "50Ti": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.8,
+      "absorption_2200_b": 0.179
+    },
+    "V": {
+      "incoherent_b": 5.08,
+      "scattering_b": 5.1,
+      "absorption_2200_b": 5.08
+    },
+    "50V": {
+      "incoherent_b": 0.5,
+      "scattering_b": 7.8,
+      "absorption_2200_b": 60.0
+    },
+    "51V": {
+      "incoherent_b": 5.07,
+      "scattering_b": 5.09,
+      "absorption_2200_b": 4.9
+    },
+    "Cr": {
+      "incoherent_b": 1.83,
+      "scattering_b": 3.49,
+      "absorption_2200_b": 3.05
+    },
+    "50Cr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.54,
+      "absorption_2200_b": 15.8
+    },
+    "52Cr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.042,
+      "absorption_2200_b": 0.76
+    },
+    "53Cr": {
+      "incoherent_b": 5.93,
+      "scattering_b": 8.15,
+      "absorption_2200_b": 18.1
+    },
+    "54Cr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.6,
+      "absorption_2200_b": 0.36
+    },
+    "Mn": {
+      "incoherent_b": 0.4,
+      "scattering_b": 2.15,
+      "absorption_2200_b": 13.3
+    },
+    "Fe": {
+      "incoherent_b": 0.4,
+      "scattering_b": 11.62,
+      "absorption_2200_b": 2.56
+    },
+    "54Fe": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.2,
+      "absorption_2200_b": 2.25
+    },
+    "56Fe": {
+      "incoherent_b": 0.0,
+      "scattering_b": 12.42,
+      "absorption_2200_b": 2.59
+    },
+    "57Fe": {
+      "incoherent_b": 0.3,
+      "scattering_b": 1.0,
+      "absorption_2200_b": 2.48
+    },
+    "58Fe": {
+      "incoherent_b": 0.0,
+      "scattering_b": 28.0,
+      "absorption_2200_b": 1.28
+    },
+    "Co": {
+      "incoherent_b": 4.8,
+      "scattering_b": 5.6,
+      "absorption_2200_b": 37.18
+    },
+    "Ni": {
+      "incoherent_b": 5.2,
+      "scattering_b": 18.5,
+      "absorption_2200_b": 4.49
+    },
+    "58Ni": {
+      "incoherent_b": 0.0,
+      "scattering_b": 26.1,
+      "absorption_2200_b": 4.6
+    },
+    "60Ni": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.99,
+      "absorption_2200_b": 2.9
+    },
+    "61Ni": {
+      "incoherent_b": 1.9,
+      "scattering_b": 9.2,
+      "absorption_2200_b": 2.5
+    },
+    "62Ni": {
+      "incoherent_b": 0.0,
+      "scattering_b": 9.5,
+      "absorption_2200_b": 14.5
+    },
+    "64Ni": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.017,
+      "absorption_2200_b": 1.52
+    },
+    "Cu": {
+      "incoherent_b": 0.55,
+      "scattering_b": 8.03,
+      "absorption_2200_b": 3.78
+    },
+    "63Cu": {
+      "incoherent_b": 0.006,
+      "scattering_b": 5.2,
+      "absorption_2200_b": 4.5
+    },
+    "65Cu": {
+      "incoherent_b": 0.4,
+      "scattering_b": 14.5,
+      "absorption_2200_b": 2.17
+    },
+    "Zn": {
+      "incoherent_b": 0.077,
+      "scattering_b": 4.131,
+      "absorption_2200_b": 1.11
+    },
+    "64Zn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.42,
+      "absorption_2200_b": 0.93
+    },
+    "66Zn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.48,
+      "absorption_2200_b": 0.62
+    },
+    "67Zn": {
+      "incoherent_b": 0.28,
+      "scattering_b": 7.46,
+      "absorption_2200_b": 6.8
+    },
+    "68Zn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.57,
+      "absorption_2200_b": 1.1
+    },
+    "70Zn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.5,
+      "absorption_2200_b": 0.092
+    },
+    "Ga": {
+      "incoherent_b": 0.16,
+      "scattering_b": 6.83,
+      "absorption_2200_b": 2.75
+    },
+    "69Ga": {
+      "incoherent_b": 0.091,
+      "scattering_b": 7.89,
+      "absorption_2200_b": 2.18
+    },
+    "71Ga": {
+      "incoherent_b": 0.084,
+      "scattering_b": 5.23,
+      "absorption_2200_b": 3.61
+    },
+    "Ge": {
+      "incoherent_b": 0.18,
+      "scattering_b": 8.6,
+      "absorption_2200_b": 2.2
+    },
+    "70Ge": {
+      "incoherent_b": 0.0,
+      "scattering_b": 12.6,
+      "absorption_2200_b": 3.0
+    },
+    "72Ge": {
+      "incoherent_b": 0.0,
+      "scattering_b": 9.1,
+      "absorption_2200_b": 0.8
+    },
+    "73Ge": {
+      "incoherent_b": 1.5,
+      "scattering_b": 4.7,
+      "absorption_2200_b": 15.1
+    },
+    "74Ge": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.2,
+      "absorption_2200_b": 0.4
+    },
+    "76Ge": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.0,
+      "absorption_2200_b": 0.16
+    },
+    "As": {
+      "incoherent_b": 0.06,
+      "scattering_b": 5.5,
+      "absorption_2200_b": 4.5
+    },
+    "Se": {
+      "incoherent_b": 0.32,
+      "scattering_b": 8.3,
+      "absorption_2200_b": 11.7
+    },
+    "74Se": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.1,
+      "absorption_2200_b": 51.8
+    },
+    "76Se": {
+      "incoherent_b": 0.0,
+      "scattering_b": 18.7,
+      "absorption_2200_b": 85.0
+    },
+    "77Se": {
+      "incoherent_b": 0.05,
+      "scattering_b": 8.65,
+      "absorption_2200_b": 42.0
+    },
+    "78Se": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.5,
+      "absorption_2200_b": 0.43
+    },
+    "80Se": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.03,
+      "absorption_2200_b": 0.61
+    },
+    "82Se": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.05,
+      "absorption_2200_b": 0.044
+    },
+    "Br": {
+      "incoherent_b": 0.1,
+      "scattering_b": 5.9,
+      "absorption_2200_b": 6.9
+    },
+    "79Br": {
+      "incoherent_b": 0.15,
+      "scattering_b": 5.96,
+      "absorption_2200_b": 11.0
+    },
+    "81Br": {
+      "incoherent_b": 0.05,
+      "scattering_b": 5.84,
+      "absorption_2200_b": 2.7
+    },
+    "Kr": {
+      "incoherent_b": 0.01,
+      "scattering_b": 7.68,
+      "absorption_2200_b": 25.0
+    },
+    "84Kr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 6.6,
+      "absorption_2200_b": 0.113
+    },
+    "86Kr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.2,
+      "absorption_2200_b": 0.003
+    },
+    "Rb": {
+      "incoherent_b": 0.5,
+      "scattering_b": 6.8,
+      "absorption_2200_b": 0.38
+    },
+    "85Rb": {
+      "incoherent_b": 0.5,
+      "scattering_b": 6.7,
+      "absorption_2200_b": 0.48
+    },
+    "87Rb": {
+      "incoherent_b": 0.5,
+      "scattering_b": 7.1,
+      "absorption_2200_b": 0.12
+    },
+    "Sr": {
+      "incoherent_b": 0.06,
+      "scattering_b": 6.25,
+      "absorption_2200_b": 1.28
+    },
+    "84Sr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 6.0,
+      "absorption_2200_b": 0.87
+    },
+    "86Sr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.04,
+      "absorption_2200_b": 1.04
+    },
+    "87Sr": {
+      "incoherent_b": 0.5,
+      "scattering_b": 7.4,
+      "absorption_2200_b": 16.0
+    },
+    "88Sr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 6.42,
+      "absorption_2200_b": 0.058
+    },
+    "Y": {
+      "incoherent_b": 0.15,
+      "scattering_b": 7.7,
+      "absorption_2200_b": 1.28
+    },
+    "Zr": {
+      "incoherent_b": 0.02,
+      "scattering_b": 6.46,
+      "absorption_2200_b": 0.185
+    },
+    "90Zr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.1,
+      "absorption_2200_b": 0.011
+    },
+    "91Zr": {
+      "incoherent_b": 0.15,
+      "scattering_b": 9.7,
+      "absorption_2200_b": 1.17
+    },
+    "92Zr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 6.9,
+      "absorption_2200_b": 0.22
+    },
+    "94Zr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.4,
+      "absorption_2200_b": 0.0499
+    },
+    "96Zr": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.8,
+      "absorption_2200_b": 0.0229
+    },
+    "Nb": {
+      "incoherent_b": 0.0024,
+      "scattering_b": 6.255,
+      "absorption_2200_b": 1.15
+    },
+    "Mo": {
+      "incoherent_b": 0.04,
+      "scattering_b": 5.71,
+      "absorption_2200_b": 2.48
+    },
+    "92Mo": {
+      "incoherent_b": 0.0,
+      "scattering_b": 6.0,
+      "absorption_2200_b": 0.019
+    },
+    "94Mo": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.81,
+      "absorption_2200_b": 0.015
+    },
+    "95Mo": {
+      "incoherent_b": 0.5,
+      "scattering_b": 6.5,
+      "absorption_2200_b": 13.1
+    },
+    "96Mo": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.83,
+      "absorption_2200_b": 0.5
+    },
+    "97Mo": {
+      "incoherent_b": 0.5,
+      "scattering_b": 7.1,
+      "absorption_2200_b": 2.5
+    },
+    "98Mo": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.44,
+      "absorption_2200_b": 0.127
+    },
+    "100Mo": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.69,
+      "absorption_2200_b": 0.4
+    },
+    "Tc": {
+      "incoherent_b": 0.5,
+      "scattering_b": 6.3,
+      "absorption_2200_b": 20.0
+    },
+    "Ru": {
+      "incoherent_b": 0.4,
+      "scattering_b": 6.6,
+      "absorption_2200_b": 2.56
+    },
+    "102Ru": {
+      "incoherent_b": 0.0,
+      "scattering_b": 144.8,
+      "absorption_2200_b": 1.17
+    },
+    "104Ru": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.483,
+      "absorption_2200_b": 0.31
+    },
+    "Rh": {
+      "incoherent_b": 0.3,
+      "scattering_b": 4.6,
+      "absorption_2200_b": 144.8
+    },
+    "Pd": {
+      "incoherent_b": 0.093,
+      "scattering_b": 4.48,
+      "absorption_2200_b": 6.9
+    },
+    "102Pd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.5,
+      "absorption_2200_b": 3.4
+    },
+    "104Pd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.5,
+      "absorption_2200_b": 0.6
+    },
+    "105Pd": {
+      "incoherent_b": 0.8,
+      "scattering_b": 4.6,
+      "absorption_2200_b": 20.0
+    },
+    "106Pd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.1,
+      "absorption_2200_b": 0.304
+    },
+    "108Pd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.1,
+      "absorption_2200_b": 8.55
+    },
+    "110Pd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.5,
+      "absorption_2200_b": 0.226
+    },
+    "Ag": {
+      "incoherent_b": 0.58,
+      "scattering_b": 4.99,
+      "absorption_2200_b": 63.3
+    },
+    "107Ag": {
+      "incoherent_b": 0.13,
+      "scattering_b": 7.3,
+      "absorption_2200_b": 37.6
+    },
+    "109Ag": {
+      "incoherent_b": 0.32,
+      "scattering_b": 2.5,
+      "absorption_2200_b": 91.0
+    },
+    "Cd": {
+      "incoherent_b": 3.46,
+      "scattering_b": 6.5,
+      "absorption_2200_b": 2520.0
+    },
+    "106Cd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.1,
+      "absorption_2200_b": 1.0
+    },
+    "108Cd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.7,
+      "absorption_2200_b": 1.1
+    },
+    "110Cd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.4,
+      "absorption_2200_b": 11.0
+    },
+    "111Cd": {
+      "incoherent_b": 0.3,
+      "scattering_b": 5.6,
+      "absorption_2200_b": 24.0
+    },
+    "112Cd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.1,
+      "absorption_2200_b": 2.2
+    },
+    "113Cd": {
+      "incoherent_b": 0.3,
+      "scattering_b": 12.4,
+      "absorption_2200_b": 20600.0
+    },
+    "114Cd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.1,
+      "absorption_2200_b": 0.34
+    },
+    "116Cd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.0,
+      "absorption_2200_b": 0.075
+    },
+    "In": {
+      "incoherent_b": 0.54,
+      "scattering_b": 2.62,
+      "absorption_2200_b": 193.8
+    },
+    "113In": {
+      "incoherent_b": 3.7e-05,
+      "scattering_b": 3.65,
+      "absorption_2200_b": 12.0
+    },
+    "115In": {
+      "incoherent_b": 0.55,
+      "scattering_b": 2.57,
+      "absorption_2200_b": 202.0
+    },
+    "Sn": {
+      "incoherent_b": 0.022,
+      "scattering_b": 4.892,
+      "absorption_2200_b": 0.626
+    },
+    "112Sn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.5,
+      "absorption_2200_b": 1.0
+    },
+    "114Sn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.8,
+      "absorption_2200_b": 0.114
+    },
+    "115Sn": {
+      "incoherent_b": 0.3,
+      "scattering_b": 4.8,
+      "absorption_2200_b": 30.0
+    },
+    "116Sn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.42,
+      "absorption_2200_b": 0.14
+    },
+    "117Sn": {
+      "incoherent_b": 0.3,
+      "scattering_b": 5.6,
+      "absorption_2200_b": 2.3
+    },
+    "118Sn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.63,
+      "absorption_2200_b": 0.22
+    },
+    "119Sn": {
+      "incoherent_b": 0.3,
+      "scattering_b": 5.0,
+      "absorption_2200_b": 2.2
+    },
+    "120Sn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.29,
+      "absorption_2200_b": 0.14
+    },
+    "122Sn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.14,
+      "absorption_2200_b": 0.18
+    },
+    "124Sn": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.48,
+      "absorption_2200_b": 0.133
+    },
+    "Sb": {
+      "incoherent_b": 0.007,
+      "scattering_b": 3.9,
+      "absorption_2200_b": 4.91
+    },
+    "121Sb": {
+      "incoherent_b": 0.0003,
+      "scattering_b": 4.1,
+      "absorption_2200_b": 5.75
+    },
+    "123Sb": {
+      "incoherent_b": 0.001,
+      "scattering_b": 3.64,
+      "absorption_2200_b": 3.8
+    },
+    "Te": {
+      "incoherent_b": 0.09,
+      "scattering_b": 4.32,
+      "absorption_2200_b": 4.7
+    },
+    "120Te": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.5,
+      "absorption_2200_b": 2.3
+    },
+    "122Te": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.8,
+      "absorption_2200_b": 3.4
+    },
+    "123Te": {
+      "incoherent_b": 0.52,
+      "scattering_b": 0.52,
+      "absorption_2200_b": 418.0
+    },
+    "124Te": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.0,
+      "absorption_2200_b": 6.8
+    },
+    "125Te": {
+      "incoherent_b": 0.008,
+      "scattering_b": 3.18,
+      "absorption_2200_b": 1.55
+    },
+    "126Te": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.88,
+      "absorption_2200_b": 1.04
+    },
+    "128Te": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.36,
+      "absorption_2200_b": 0.215
+    },
+    "130Te": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.55,
+      "absorption_2200_b": 0.29
+    },
+    "I": {
+      "incoherent_b": 0.31,
+      "scattering_b": 3.81,
+      "absorption_2200_b": 6.15
+    },
+    "Cs": {
+      "incoherent_b": 0.21,
+      "scattering_b": 3.9,
+      "absorption_2200_b": 29.0
+    },
+    "Ba": {
+      "incoherent_b": 0.15,
+      "scattering_b": 3.38,
+      "absorption_2200_b": 1.1
+    },
+    "130Ba": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.6,
+      "absorption_2200_b": 30.0
+    },
+    "132Ba": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.6,
+      "absorption_2200_b": 7.0
+    },
+    "134Ba": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.08,
+      "absorption_2200_b": 2.0
+    },
+    "135Ba": {
+      "incoherent_b": 0.5,
+      "scattering_b": 3.2,
+      "absorption_2200_b": 5.8
+    },
+    "136Ba": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.03,
+      "absorption_2200_b": 0.68
+    },
+    "137Ba": {
+      "incoherent_b": 0.5,
+      "scattering_b": 6.4,
+      "absorption_2200_b": 3.6
+    },
+    "138Ba": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.94,
+      "absorption_2200_b": 0.27
+    },
+    "La": {
+      "incoherent_b": 1.13,
+      "scattering_b": 9.66,
+      "absorption_2200_b": 8.97
+    },
+    "138La": {
+      "incoherent_b": 0.5,
+      "scattering_b": 8.5,
+      "absorption_2200_b": 57.0
+    },
+    "139La": {
+      "incoherent_b": 1.13,
+      "scattering_b": 9.66,
+      "absorption_2200_b": 8.93
+    },
+    "Ce": {
+      "incoherent_b": 0.001,
+      "scattering_b": 2.94,
+      "absorption_2200_b": 0.63
+    },
+    "136Ce": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.23,
+      "absorption_2200_b": 7.3
+    },
+    "138Ce": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.64,
+      "absorption_2200_b": 1.1
+    },
+    "140Ce": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.94,
+      "absorption_2200_b": 0.57
+    },
+    "142Ce": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.84,
+      "absorption_2200_b": 0.95
+    },
+    "Pr": {
+      "incoherent_b": 0.015,
+      "scattering_b": 2.66,
+      "absorption_2200_b": 11.5
+    },
+    "Nd": {
+      "incoherent_b": 9.2,
+      "scattering_b": 16.6,
+      "absorption_2200_b": 50.5
+    },
+    "142Nd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.5,
+      "absorption_2200_b": 18.7
+    },
+    "143Nd": {
+      "incoherent_b": 55.0,
+      "scattering_b": 80.0,
+      "absorption_2200_b": 337.0
+    },
+    "144Nd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.0,
+      "absorption_2200_b": 3.6
+    },
+    "145Nd": {
+      "incoherent_b": 5.0,
+      "scattering_b": 30.0,
+      "absorption_2200_b": 42.0
+    },
+    "146Nd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 9.5,
+      "absorption_2200_b": 1.4
+    },
+    "148Nd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.1,
+      "absorption_2200_b": 2.5
+    },
+    "150Nd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.5,
+      "absorption_2200_b": 1.2
+    },
+    "Pm": {
+      "incoherent_b": 1.3,
+      "scattering_b": 21.3,
+      "absorption_2200_b": 168.4
+    },
+    "Sm": {
+      "incoherent_b": 39.0,
+      "scattering_b": 39.0,
+      "absorption_2200_b": 5922.0
+    },
+    "144Sm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.0,
+      "absorption_2200_b": 0.7
+    },
+    "147Sm": {
+      "incoherent_b": 143.0,
+      "scattering_b": 39.0,
+      "absorption_2200_b": 57.0
+    },
+    "148Sm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.0,
+      "absorption_2200_b": 2.4
+    },
+    "149Sm": {
+      "incoherent_b": 137.0,
+      "scattering_b": 200.0,
+      "absorption_2200_b": 42080.0
+    },
+    "150Sm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 25.0,
+      "absorption_2200_b": 104.0
+    },
+    "152Sm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.1,
+      "absorption_2200_b": 206.0
+    },
+    "154Sm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 11.0,
+      "absorption_2200_b": 8.4
+    },
+    "Eu": {
+      "incoherent_b": 2.5,
+      "scattering_b": 9.2,
+      "absorption_2200_b": 4530.0
+    },
+    "151Eu": {
+      "incoherent_b": 3.1,
+      "scattering_b": 8.6,
+      "absorption_2200_b": 9100.0
+    },
+    "153Eu": {
+      "incoherent_b": 1.3,
+      "scattering_b": 9.8,
+      "absorption_2200_b": 312.0
+    },
+    "Gd": {
+      "incoherent_b": 151.0,
+      "scattering_b": 180.0,
+      "absorption_2200_b": 49700.0
+    },
+    "152Gd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 13.0,
+      "absorption_2200_b": 735.0
+    },
+    "154Gd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 13.0,
+      "absorption_2200_b": 85.0
+    },
+    "155Gd": {
+      "incoherent_b": 25.0,
+      "scattering_b": 66.0,
+      "absorption_2200_b": 61100.0
+    },
+    "156Gd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.0,
+      "absorption_2200_b": 1.5
+    },
+    "157Gd": {
+      "incoherent_b": 394.0,
+      "scattering_b": 1044.0,
+      "absorption_2200_b": 259000.0
+    },
+    "158Gd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 10.0,
+      "absorption_2200_b": 2.2
+    },
+    "160Gd": {
+      "incoherent_b": 0.0,
+      "scattering_b": 10.52,
+      "absorption_2200_b": 0.77
+    },
+    "Tb": {
+      "incoherent_b": 0.004,
+      "scattering_b": 6.84,
+      "absorption_2200_b": 23.4
+    },
+    "Dy": {
+      "incoherent_b": 54.4,
+      "scattering_b": 90.3,
+      "absorption_2200_b": 994.0
+    },
+    "156Dy": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.7,
+      "absorption_2200_b": 33.0
+    },
+    "158Dy": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.0,
+      "absorption_2200_b": 43.0
+    },
+    "160Dy": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.6,
+      "absorption_2200_b": 56.0
+    },
+    "161Dy": {
+      "incoherent_b": 3.0,
+      "scattering_b": 16.0,
+      "absorption_2200_b": 600.0
+    },
+    "162Dy": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.25,
+      "absorption_2200_b": 194.0
+    },
+    "163Dy": {
+      "incoherent_b": 0.21,
+      "scattering_b": 3.3,
+      "absorption_2200_b": 124.0
+    },
+    "164Dy": {
+      "incoherent_b": 0.0,
+      "scattering_b": 307.0,
+      "absorption_2200_b": 2840.0
+    },
+    "Ho": {
+      "incoherent_b": 0.36,
+      "scattering_b": 8.42,
+      "absorption_2200_b": 64.7
+    },
+    "Er": {
+      "incoherent_b": 1.1,
+      "scattering_b": 8.7,
+      "absorption_2200_b": 159.0
+    },
+    "162Er": {
+      "incoherent_b": 0.0,
+      "scattering_b": 9.7,
+      "absorption_2200_b": 19.0
+    },
+    "164Er": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.4,
+      "absorption_2200_b": 13.0
+    },
+    "166Er": {
+      "incoherent_b": 0.0,
+      "scattering_b": 14.1,
+      "absorption_2200_b": 19.6
+    },
+    "167Er": {
+      "incoherent_b": 0.13,
+      "scattering_b": 1.2,
+      "absorption_2200_b": 659.0
+    },
+    "168Er": {
+      "incoherent_b": 0.0,
+      "scattering_b": 6.9,
+      "absorption_2200_b": 2.74
+    },
+    "170Er": {
+      "incoherent_b": 0.0,
+      "scattering_b": 11.6,
+      "absorption_2200_b": 5.8
+    },
+    "Tm": {
+      "incoherent_b": 0.1,
+      "scattering_b": 6.38,
+      "absorption_2200_b": 100.0
+    },
+    "Yb": {
+      "incoherent_b": 4.0,
+      "scattering_b": 23.4,
+      "absorption_2200_b": 34.8
+    },
+    "168Yb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 2.13,
+      "absorption_2200_b": 2230.0
+    },
+    "170Yb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.8,
+      "absorption_2200_b": 11.4
+    },
+    "171Yb": {
+      "incoherent_b": 3.9,
+      "scattering_b": 15.6,
+      "absorption_2200_b": 48.6
+    },
+    "172Yb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 11.2,
+      "absorption_2200_b": 0.8
+    },
+    "173Yb": {
+      "incoherent_b": 3.5,
+      "scattering_b": 15.0,
+      "absorption_2200_b": 17.1
+    },
+    "174Yb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 46.8,
+      "absorption_2200_b": 69.4
+    },
+    "176Yb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 9.6,
+      "absorption_2200_b": 2.85
+    },
+    "Lu": {
+      "incoherent_b": 0.7,
+      "scattering_b": 7.2,
+      "absorption_2200_b": 74.0
+    },
+    "175Lu": {
+      "incoherent_b": 0.6,
+      "scattering_b": 7.2,
+      "absorption_2200_b": 21.0
+    },
+    "176Lu": {
+      "incoherent_b": 1.2,
+      "scattering_b": 5.9,
+      "absorption_2200_b": 2065.0
+    },
+    "Hf": {
+      "incoherent_b": 2.6,
+      "scattering_b": 10.2,
+      "absorption_2200_b": 104.1
+    },
+    "174Hf": {
+      "incoherent_b": 0.0,
+      "scattering_b": 15.0,
+      "absorption_2200_b": 561.0
+    },
+    "176Hf": {
+      "incoherent_b": 0.0,
+      "scattering_b": 5.5,
+      "absorption_2200_b": 23.5
+    },
+    "177Hf": {
+      "incoherent_b": 0.1,
+      "scattering_b": 0.2,
+      "absorption_2200_b": 373.0
+    },
+    "178Hf": {
+      "incoherent_b": 0.0,
+      "scattering_b": 4.4,
+      "absorption_2200_b": 84.0
+    },
+    "179Hf": {
+      "incoherent_b": 0.14,
+      "scattering_b": 7.1,
+      "absorption_2200_b": 41.0
+    },
+    "180Hf": {
+      "incoherent_b": 0.0,
+      "scattering_b": 21.9,
+      "absorption_2200_b": 13.04
+    },
+    "Ta": {
+      "incoherent_b": 0.01,
+      "scattering_b": 6.01,
+      "absorption_2200_b": 20.6
+    },
+    "180Ta": {
+      "incoherent_b": 0.5,
+      "scattering_b": 7.0,
+      "absorption_2200_b": 563.0
+    },
+    "181Ta": {
+      "incoherent_b": 0.011,
+      "scattering_b": 6.01,
+      "absorption_2200_b": 20.5
+    },
+    "W": {
+      "incoherent_b": 1.63,
+      "scattering_b": 4.6,
+      "absorption_2200_b": 18.3
+    },
+    "180W": {
+      "incoherent_b": 0.0,
+      "scattering_b": 3.0,
+      "absorption_2200_b": 30.0
+    },
+    "182W": {
+      "incoherent_b": 0.0,
+      "scattering_b": 6.1,
+      "absorption_2200_b": 20.7
+    },
+    "183W": {
+      "incoherent_b": 0.3,
+      "scattering_b": 5.7,
+      "absorption_2200_b": 10.1
+    },
+    "184W": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.03,
+      "absorption_2200_b": 1.7
+    },
+    "186W": {
+      "incoherent_b": 0.0,
+      "scattering_b": 0.065,
+      "absorption_2200_b": 37.9
+    },
+    "Re": {
+      "incoherent_b": 0.9,
+      "scattering_b": 11.5,
+      "absorption_2200_b": 89.7
+    },
+    "185Re": {
+      "incoherent_b": 0.5,
+      "scattering_b": 10.7,
+      "absorption_2200_b": 112.0
+    },
+    "187Re": {
+      "incoherent_b": 1.0,
+      "scattering_b": 11.9,
+      "absorption_2200_b": 76.4
+    },
+    "Os": {
+      "incoherent_b": 0.3,
+      "scattering_b": 14.7,
+      "absorption_2200_b": 16.0
+    },
+    "184Os": {
+      "incoherent_b": 0.0,
+      "scattering_b": 13.0,
+      "absorption_2200_b": 3000.0
+    },
+    "186Os": {
+      "incoherent_b": 0.0,
+      "scattering_b": 17.0,
+      "absorption_2200_b": 80.0
+    },
+    "187Os": {
+      "incoherent_b": 0.3,
+      "scattering_b": 13.0,
+      "absorption_2200_b": 320.0
+    },
+    "188Os": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.3,
+      "absorption_2200_b": 4.7
+    },
+    "189Os": {
+      "incoherent_b": 0.5,
+      "scattering_b": 14.9,
+      "absorption_2200_b": 25.0
+    },
+    "190Os": {
+      "incoherent_b": 0.0,
+      "scattering_b": 15.2,
+      "absorption_2200_b": 13.1
+    },
+    "192Os": {
+      "incoherent_b": 0.0,
+      "scattering_b": 16.6,
+      "absorption_2200_b": 2.0
+    },
+    "Ir": {
+      "incoherent_b": 0.0,
+      "scattering_b": 14.0,
+      "absorption_2200_b": 425.0
+    },
+    "Pt": {
+      "incoherent_b": 0.13,
+      "scattering_b": 11.71,
+      "absorption_2200_b": 10.3
+    },
+    "190Pt": {
+      "incoherent_b": 0.0,
+      "scattering_b": 10.0,
+      "absorption_2200_b": 152.0
+    },
+    "192Pt": {
+      "incoherent_b": 0.0,
+      "scattering_b": 12.3,
+      "absorption_2200_b": 10.0
+    },
+    "194Pt": {
+      "incoherent_b": 0.0,
+      "scattering_b": 14.0,
+      "absorption_2200_b": 1.44
+    },
+    "195Pt": {
+      "incoherent_b": 0.13,
+      "scattering_b": 9.9,
+      "absorption_2200_b": 27.5
+    },
+    "196Pt": {
+      "incoherent_b": 0.0,
+      "scattering_b": 12.3,
+      "absorption_2200_b": 0.72
+    },
+    "198Pt": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.6,
+      "absorption_2200_b": 3.66
+    },
+    "Au": {
+      "incoherent_b": 0.43,
+      "scattering_b": 7.75,
+      "absorption_2200_b": 98.65
+    },
+    "Hg": {
+      "incoherent_b": 6.6,
+      "scattering_b": 26.8,
+      "absorption_2200_b": 372.3
+    },
+    "196Hg": {
+      "incoherent_b": 0.0,
+      "scattering_b": 115.0,
+      "absorption_2200_b": 3080.0
+    },
+    "199Hg": {
+      "incoherent_b": 30.0,
+      "scattering_b": 66.0,
+      "absorption_2200_b": 2150.0
+    },
+    "202Hg": {
+      "incoherent_b": 0.0,
+      "scattering_b": 9.828,
+      "absorption_2200_b": 4.89
+    },
+    "Tl": {
+      "incoherent_b": 0.21,
+      "scattering_b": 9.89,
+      "absorption_2200_b": 3.43
+    },
+    "203Tl": {
+      "incoherent_b": 0.14,
+      "scattering_b": 6.28,
+      "absorption_2200_b": 11.4
+    },
+    "205Tl": {
+      "incoherent_b": 0.007,
+      "scattering_b": 11.4,
+      "absorption_2200_b": 0.104
+    },
+    "Pb": {
+      "incoherent_b": 0.003,
+      "scattering_b": 11.118,
+      "absorption_2200_b": 0.171
+    },
+    "204Pb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 12.3,
+      "absorption_2200_b": 0.65
+    },
+    "206Pb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 10.68,
+      "absorption_2200_b": 0.03
+    },
+    "207Pb": {
+      "incoherent_b": 0.002,
+      "scattering_b": 10.82,
+      "absorption_2200_b": 0.699
+    },
+    "208Pb": {
+      "incoherent_b": 0.0,
+      "scattering_b": 11.34,
+      "absorption_2200_b": 0.00048
+    },
+    "Bi": {
+      "incoherent_b": 0.0084,
+      "scattering_b": 9.156,
+      "absorption_2200_b": 0.0338
+    },
+    "Ra": {
+      "incoherent_b": 0.0,
+      "scattering_b": 13.0,
+      "absorption_2200_b": 12.8
+    },
+    "Th": {
+      "incoherent_b": 0.0,
+      "scattering_b": 13.36,
+      "absorption_2200_b": 7.37
+    },
+    "Pa": {
+      "incoherent_b": 0.1,
+      "scattering_b": 10.5,
+      "absorption_2200_b": 200.6
+    },
+    "U": {
+      "incoherent_b": 0.005,
+      "scattering_b": 8.908,
+      "absorption_2200_b": 7.57
+    },
+    "233U": {
+      "incoherent_b": 0.1,
+      "scattering_b": 12.9,
+      "absorption_2200_b": 574.7
+    },
+    "234U": {
+      "incoherent_b": 0.0,
+      "scattering_b": 19.3,
+      "absorption_2200_b": 100.1
+    },
+    "235U": {
+      "incoherent_b": 0.2,
+      "scattering_b": 14.0,
+      "absorption_2200_b": 680.9
+    },
+    "238U": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.871,
+      "absorption_2200_b": 2.68
+    },
+    "Np": {
+      "incoherent_b": 0.5,
+      "scattering_b": 14.5,
+      "absorption_2200_b": 175.9
+    },
+    "238Pu": {
+      "incoherent_b": 0.0,
+      "scattering_b": 25.0,
+      "absorption_2200_b": 558.0
+    },
+    "239Pu": {
+      "incoherent_b": 0.2,
+      "scattering_b": 7.7,
+      "absorption_2200_b": 1017.3
+    },
+    "240Pu": {
+      "incoherent_b": 0.0,
+      "scattering_b": 1.54,
+      "absorption_2200_b": 289.6
+    },
+    "242Pu": {
+      "incoherent_b": 0.0,
+      "scattering_b": 8.2,
+      "absorption_2200_b": 18.5
+    },
+    "Am": {
+      "incoherent_b": 0.3,
+      "scattering_b": 9.0,
+      "absorption_2200_b": 75.3
+    },
+    "244Cm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 11.3,
+      "absorption_2200_b": 16.2
+    },
+    "246Cm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 10.9,
+      "absorption_2200_b": 1.36
+    },
+    "248Cm": {
+      "incoherent_b": 0.0,
+      "scattering_b": 7.5,
+      "absorption_2200_b": 3.0
+    },
+    "D": {
+      "incoherent_b": 2.05,
+      "scattering_b": 7.64,
+      "absorption_2200_b": 0.000519
+    }
+  }
+}

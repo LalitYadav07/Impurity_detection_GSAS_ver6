@@ -6,7 +6,38 @@ import io
 import hashlib
 import pickle
 import numpy as np
+from .native_peak_memo import MAXIMUM_ENTRIES as DENSE_TOF_REFLECTIONS
 _active=None
+
+
+def dense_tof_inventory(histograms, controls):
+    """Select an observed computational workload, never a scientific model.
+
+    Large TOF inventories can reuse many exact compiled peak arguments within
+    a single changing-cell profile. Smaller changing-geometry portfolios were
+    slower with memo bookkeeping. Inspect the actual native reflection lists,
+    rather than a compound name, mode count, visible host CPUs or uploaded flag.
+    Mixed/unsupported contexts keep the original changing-geometry policy.
+    The memo's existing per-driver cost probe remains active after selection.
+    """
+    if not isinstance(histograms,dict) or not isinstance(controls,dict):
+        return False
+    dense=False;found=False
+    for name,histogram in histograms.items():
+        if not isinstance(name,str) or not name.startswith('PWDR'):continue
+        found=True
+        if (not isinstance(histogram,dict) or 'hId' not in histogram
+                or controls.get(f":{histogram['hId']}:histType")!='PNT'):
+            return False
+        reflections=histogram.get('Reflection Lists')
+        if not isinstance(reflections,dict):return False
+        count=0
+        for row in reflections.values():
+            values=row.get('RefList') if isinstance(row,dict) else None
+            if not isinstance(values,np.ndarray) or values.ndim!=2:return False
+            count+=len(values)
+        dense |= count>=DENSE_TOF_REFLECTIONS
+    return found and dense
 
 
 def constraint_state_signature(maps):
@@ -24,7 +55,7 @@ def constraint_state_signature(maps):
 
 
 class NativeReducedProfile:
-    def __init__(self, filename, *, refresh_cell_reflections=False):
+    def __init__(self, filename, *, refresh_cell_reflections=False, peak_memo_bytes=None):
         numerical_cell=False
         global _active
         from GSASII import GSASIIstrMain as main, GSASIIstrIO as stio
@@ -82,6 +113,31 @@ class NativeReducedProfile:
             if np.max(abs(np.array([self.parms[k] for k in cell_keys])-base_cell))>1e-12:
                 self.cell_indices.append(j)
         self.parms.update(zip(self.vary, self.x0)); maps.Dict2Map(self.parms)
+        from .native_peak_memo import NativePeakMemo, MAXIMUM_BYTES, shared_native_peak_memo
+        # A complete ordinary changing-cell portfolio measured slower with
+        # memo bookkeeping, while a dense TOF portfolio measured faster with
+        # all native controls retained. Select by actual native work, without
+        # freezing any cell/profile freedom or changing the peak calculation.
+        changing_profile=any(len(parts)==3 and parts[1]
+            and parts[2]!='Scale' and not parts[2].startswith('Back;')
+            for parts in (name.split(':',2) for name in self.vary))
+        changing_geometry=bool(self.cell_indices or changing_profile)
+        dense_tof=changing_geometry and peak_memo_bytes is None and dense_tof_inventory(histograms,self.controls)
+        memo_bytes=(MAXIMUM_BYTES if not changing_geometry or dense_tof else 0) if peak_memo_bytes is None else peak_memo_bytes
+        self.peak_memo_workload=('explicit native control' if peak_memo_bytes is not None else
+            'fixed geometry' if not changing_geometry else
+            'dense native TOF inventory' if dense_tof else 'ordinary variable cell/profile')
+        self.peak_memo=(shared_native_peak_memo() if not changing_geometry and peak_memo_bytes is None
+            else NativePeakMemo(memo_bytes,disabled_reason=(
+            'variable-cell/profile workload uses original native rendering'
+            if changing_geometry and peak_memo_bytes is None else 'disabled native reference')))
+        from .native_axis_view import NativeUnmaskedAxisView
+        # An unmasked axis can avoid the native loop's masked temporaries.
+        # The peak memo supplies that view itself when it owns the driver.
+        # Explicit zero-byte controls keep the untouched reference path.
+        self.axis_view=NativeUnmaskedAxisView(changing_geometry and peak_memo_bytes is None)
+        from .native_reflection_memo import NativeReflectionMemo
+        self.reflection_memo=NativeReflectionMemo(enabled=bool(refresh_cell_reflections and peak_memo_bytes is None))
         self.numerical_indices = self.cell_indices.copy() if numerical_cell else []
         self.derivative_validation = None
         self.parts=[]; self.original_weights={}
@@ -104,7 +160,12 @@ class NativeReducedProfile:
         if constraint_state_signature(self.maps)!=self._constraint_signature:
             raise RuntimeError('Native global constraint maps changed outside this adapter; reconstruct it in an isolated worker')
 
-    def profile(self, values, jacobian=False):
+    def _prepare_values(self, values):
+        """Bind owned parameters and regenerate the native reflection inventory.
+
+        Shared by full rendering and scalar-only proposal collection. This
+        performs no likelihood, rendering, weight or observation update.
+        """
         self._check(); values = np.asarray(values, float)
         if values.shape!=(len(self.vary),) or not np.isfinite(values).all():
             raise ValueError('A complete finite native parameter vector is required')
@@ -126,8 +187,9 @@ class NativeReducedProfile:
                 phase['General']['Cell'][1:]=list(self.lattice.A2cell(a))+[float(self.lattice.calc_V(a))]
             # Use the native generator, including its exact range/extinction
             # rules. A fixed list loses/adds edge reflections as the cell moves.
-            self.stio.GetHistogramPhaseData(phases,histograms,Controls=self.controls,
-                                            Print=False,pFile=io.StringIO(),resetRefList=True)
+            with self.reflection_memo.evaluation(self.lattice,phases):
+                self.stio.GetHistogramPhaseData(phases,histograms,Controls=self.controls,
+                                                Print=False,pFile=io.StringIO(),resetRefList=True)
             self._reflection_cell_signature=signature
         # errRefine adds scalar summary entries to the histogram dictionary.
         for histogram_name, _ in self.parts:
@@ -144,6 +206,11 @@ class NativeReducedProfile:
                 reciprocal_d_squared = np.einsum('ni,ij,nj->n',hkl,reciprocal,hkl)
                 if np.any(reciprocal_d_squared<=0): raise ValueError('Nonpositive reflection metric')
                 reflections['RefList'][:,4] = 1/np.sqrt(reciprocal_d_squared)
+        return values
+
+    def profile(self, values, jacobian=False):
+        values = self._prepare_values(values)
+        histograms = self.histo_phases[0]
         args = (self.histo_phases, self.parms, self.histdict, self.vary, self.controls, self.pawley, None)
         # errRefine treats all-zero observations as a request to synthesize
         # random dummy data and replace weights. This adapter requests only a
@@ -156,7 +223,8 @@ class NativeReducedProfile:
                 zero_observations.append((data,data[1].copy()))
                 data[1]=np.ones_like(data[1])
         try:
-            residual = self.math.errRefine(values, *args)
+            with self.peak_memo.evaluation(self.math), self.axis_view.evaluation(self.math):
+                residual = self.math.errRefine(values, *args)
         finally:
             for data,observed in zero_observations:data[1]=observed
         if len(residual) != len(self.counts):
@@ -168,6 +236,13 @@ class NativeReducedProfile:
         derivative = np.asarray(self.math.dervRefine(values, *args), float)
         if derivative.shape != (len(values), len(mean)): raise ValueError('Unexpected native Jacobian shape')
         derivative = derivative * self.factor[None, :]
+        # errRefine's saved calculated array is zero in the native excluded
+        # region, but dervRefine retains underlying values beneath its mask.
+        # Return the derivative of this adapter's profile, including those
+        # zeroed bins, rather than exposing masked residual storage as data.
+        excluded = np.concatenate([np.ma.getmaskarray(histograms[n]['Data'][0])[sl]
+                                   for n, sl in self.parts])
+        derivative[:, excluded] = 0.
         if self.numerical_indices:
             for j in self.numerical_indices:
                 h = self._difference_step(values, j, 1e-4)

@@ -131,3 +131,86 @@ def test_analyze_uses_same_admission_and_honors_pause(tmp_path,monkeypatch):
     monkeypatch.setattr(HistoryJobAdmission,'active_jobs',active)
     result=service.submit_snapshot(snapshot)
     assert result.status==RunStatus.CANCELLED and result.galaxy_job_id is None
+
+
+def native_inputs(operation='preparation-structural-training'):
+    import base64,json
+    request=dict(schema='radar-model-native/v1',operation=operation,payload={},dispatch_key='abc')
+    return dict(action='native',dispatch_key='abc',model_request_b64=
+        base64.b64encode(json.dumps(request).encode()).decode())
+
+
+def test_training_admission_classifies_actual_inline_and_legacy_request_bytes():
+    import base64
+    from radar_pd_nova.native_job_admission import operation_from_inputs
+    inputs=native_inputs()
+    assert operation_from_inputs(service(),inputs)=='preparation-structural-training'
+    raw=base64.b64decode(inputs.pop('model_request_b64'))
+    inputs['model_request']={'dataset_id':'request-data'}
+    response=Response(None);response.iter_content=lambda chunk_size:[raw];response.close=lambda:None
+    assert operation_from_inputs(service(),inputs,fetch=lambda *a,**k:response)=='preparation-structural-training'
+    inputs['admission_operation']='inspect'  # Unused labels cannot hide a trainer.
+    assert operation_from_inputs(service(),inputs,fetch=lambda *a,**k:response)=='preparation-structural-training'
+
+
+@pytest.mark.parametrize('damage',['base64','identity','oversized','two_transports'])
+def test_invalid_request_cannot_bypass_training_admission(damage):
+    from radar_pd_nova.native_job_admission import operation_from_inputs,MAX_REQUEST_BYTES
+    inputs=native_inputs()
+    if damage=='base64':inputs['model_request_b64']='%%'
+    elif damage=='identity':inputs['dispatch_key']='different'
+    elif damage=='oversized':inputs['model_request_b64']='a'*(2*MAX_REQUEST_BYTES)
+    else:inputs['model_request']={'dataset_id':'another-request'}
+    with pytest.raises(AdmissionUnavailable):operation_from_inputs(service(),inputs)
+
+
+@pytest.mark.parametrize('active_operation,capacity',[
+    ('preparation-structural-examples',1),('inspect',1),('preparation-structural-training',0)])
+def test_cpu_training_does_not_consume_the_whole_model_family(active_operation,capacity):
+    from radar_pd_nova.preparation_limits import CPU_TRAINING_TOOL_ID,TRAINING_OPERATION
+    calls=[]
+    def fetch(url,**kwargs):
+        calls.append(url)
+        return Response([job('active')] if url.endswith('/api/jobs') else
+            dict(job('active'),params=native_inputs(active_operation)))
+    gate=HistoryJobAdmission(service(),fetch=fetch)
+    assert gate.available_capacity(CPU_TRAINING_TOOL_ID,family_limit=1,operation=TRAINING_OPERATION)==capacity
+    # An immutable job's classification is reused inside this admission pass.
+    assert gate.available_capacity(CPU_TRAINING_TOOL_ID,family_limit=1,operation=TRAINING_OPERATION)==capacity
+    assert sum(url.endswith('/active') for url in calls)==1
+    with gate.slot(CPU_TRAINING_TOOL_ID,family_limit=8):pass
+
+
+def test_saved_cuda_training_uses_the_same_training_slot_without_device_probing():
+    from radar_pd_nova.preparation_limits import CPU_TRAINING_TOOL_ID,CUDA_TRAINING_TOOL_ID,TRAINING_OPERATION
+    gate=HistoryJobAdmission(service(),fetch=lambda *a,**k:Response([job('gpu',CUDA_TRAINING_TOOL_ID)]))
+    assert gate.available_capacity(CPU_TRAINING_TOOL_ID,family_limit=1,operation=TRAINING_OPERATION)==0
+    with gate.slot(CPU_TRAINING_TOOL_ID,family_limit=8):pass
+
+
+def test_unverifiable_active_cpu_operation_blocks_training_without_a_post():
+    from radar_pd_nova.preparation_limits import CPU_TRAINING_TOOL_ID,TRAINING_OPERATION
+    gate=HistoryJobAdmission(service(),fetch=lambda url,**k:
+        Response([job('unknown')] if url.endswith('/api/jobs') else job('unknown')))
+    with pytest.raises(AdmissionUnavailable,match='verifiable operation'):
+        gate.available_capacity(CPU_TRAINING_TOOL_ID,family_limit=1,operation=TRAINING_OPERATION)
+    with gate.slot(CPU_TRAINING_TOOL_ID,family_limit=8):pass
+
+
+@pytest.mark.parametrize('operation,limit',[(None,8),('inspect',8),('preparation-structural-training',1)])
+def test_utility_admission_derives_cpu_training_limit_from_the_posted_request(tmp_path,monkeypatch,operation,limit):
+    from contextlib import contextmanager
+    from radar_pd_nova.galaxy_service import GalaxyService
+    from radar_pd_nova.preparation_limits import CPU_TRAINING_TOOL_ID
+    seen=[]
+    @contextmanager
+    def slot(self,tool_id,*,family_limit,cancel=None,operation=None):
+        seen.append((tool_id,family_limit,operation));yield
+    monkeypatch.setattr(HistoryJobAdmission,'slot',slot)
+    monkeypatch.setenv('RADAR_PD_MAX_ACTIVE_JOBS','8')
+    monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.post',lambda *a,**k:
+        SimpleNamespace(raise_for_status=lambda:None,json=lambda:dict(jobs=[dict(id='accepted')])) )
+    connected=GalaxyService('https://galaxy.invalid','test','h',output_root=tmp_path)
+    connected.submit_utility(tool_id=CPU_TRAINING_TOOL_ID,name='test',
+        inputs=native_inputs(operation) if operation else {'action':'chunk'})
+    assert seen==[(CPU_TRAINING_TOOL_ID,limit,operation)]

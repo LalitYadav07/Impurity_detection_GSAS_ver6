@@ -50,7 +50,17 @@ class ConditionalNuisance:
         return self.x.T@relative,self.x.T@(weight[:,None]*self.x),relative,weight
 
     def solve(self,initial=None,maxiter=80):
-        if initial is None:
+        if initial is not None:
+            initial=np.asarray(initial,float)
+            if initial.shape!=(2,) or not np.isfinite(initial).all():
+                raise ValueError('Two finite nuisance coefficients required')
+        # The reduced-data objective is a bounded linear least-squares
+        # problem. Solve that problem from its actual native design, rather
+        # than accepting a near-optimal screening seed at the Newton exit
+        # tolerance. Otherwise tiny start-bank differences can survive into
+        # the native objective and select a different structural trajectory.
+        # Poisson fitting retains its valid warm start and original solver.
+        if initial is None or not self.poisson:
             initial=lsq_linear(self.x,self.observed-self.fixed_units,bounds=(self.lower,self.upper),method='bvls',tol=1e-12).x
         c=np.clip(np.asarray(initial,float),self.lower,self.upper)
         if c.shape!=(2,) or not np.isfinite(c).all():raise ValueError('Two finite nuisance coefficients required')

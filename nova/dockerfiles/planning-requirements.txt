@@ -1,0 +1,10 @@
+# UI versions from the tested NOVA runtime; native numerical packages are
+# constrained separately and must not be changed by the UI installation.
+nova-trame==1.9.2
+trame==3.13.2
+trame-server==3.14.0
+trame-client==3.13.6
+trame-vuetify==3.2.5
+trame-plotly==3.1.2
+wslink==2.5.7
+plotly==6.9.0

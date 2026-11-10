@@ -6,6 +6,7 @@ on:
       - birthright-container
     paths:
       - nova/**
+      - tests/test_production_image_payload.py
       - .github/workflows/publish-nova-to-ghcr.yaml
   workflow_dispatch: {}
 
@@ -57,6 +58,13 @@ jobs:
             ${{ env.IMAGE_NAME }}:nova-${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:nova-buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:nova-buildcache,mode=max
+
+      - name: Verify production image excludes development fixtures
+        run: |
+          docker run --rm --entrypoint python \
+            -v "$PWD/tests/test_production_image_payload.py:/validation/test_production_image_payload.py:ro" \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" \
+            /validation/test_production_image_payload.py --image-kind nova
 
       - name: Smoke test packaged NOVA application
         shell: bash
@@ -175,6 +183,7 @@ jobs:
         shell: bash
         run: |
           docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
           python -m pip install --quiet pytest==8.4.2 &&
           mkdir -p /tmp/model-recovery-tests &&
@@ -186,10 +195,63 @@ jobs:
              /validation-tests/test_live_restore.py /validation-tests/test_nomad.py /validation-tests/test_snap.py \
              /validation-tests/test_powgen_controller.py /tmp/model-recovery-tests/ &&
           cd /tmp/model-recovery-tests &&
-          PYTHONPATH=/src/src python -m pytest -q test_model_preparation_retry.py test_model_runtime.py \
+          PYTHONPATH=/src/src:/scientific-test-support python -m pytest -q test_model_preparation_retry.py test_model_runtime.py \
             test_model_checkpoint_coalescing.py test_model_enrollment.py test_checkpoint_uploads.py \
             test_model_checkpoint.py test_native_job_admission.py test_restored_display_inputs.py \
             test_live_admission_guard.py test_restricted_watch_retention.py'
+
+      - name: Verify planner transport, storage and workspace navigation
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
+            -v "$PWD/scripts:/worker-test-support:ro" \
+            -e RADAR_PD_TEST_MODEL_ENTRYPOINT=/worker-test-support/ndip_model_campaign.py \
+            -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          python -m pip install --quiet pytest==8.4.2 &&
+          cd /tmp &&
+          PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
+            /validation-tests/test_workspace_navigation.py \
+            /validation-tests/test_planning_runtime.py \
+            /validation-tests/test_planning_bundle.py \
+            /validation-tests/test_planning_handoff.py \
+            /validation-tests/test_planning_handoff_reactive.py \
+            /validation-tests/test_planning_fixture_provenance.py \
+            /validation-tests/test_live_resume_context.py \
+            /validation-tests/test_live_restore_polish.py \
+            /validation-tests/test_planning_public_calibration.py \
+            /validation-tests/test_experiment_planner_integration.py \
+            /validation-tests/test_powgen_planning_controller.py \
+            /validation-tests/test_preparation_cpu_routing.py'
+
+      - name: Verify packaged experiment preparation and structural Live controls
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
+            -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
+            -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          python -m pip install --quiet pytest==8.4.2 &&
+          cd /tmp &&
+          PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
+            /validation-tests/test_preparation_registry.py \
+            /validation-tests/test_preparation_gpu_routing.py \
+            /validation-tests/test_structural_input_transport.py \
+            /validation-tests/test_native_operations.py \
+            /validation-tests/test_preparation_queue.py \
+            /validation-tests/test_preparation_training_continuation.py \
+            /validation-tests/test_preparation_batch_queue.py \
+            /validation-tests/test_preparation_history.py \
+            /validation-tests/test_preparation_workspace.py \
+            /validation-tests/test_preparation_controller.py \
+            /validation-tests/test_preparation_labels.py \
+            /validation-tests/test_preparation_training_record.py \
+            /validation-tests/test_preparation_evidence.py \
+            /validation-tests/test_structural_stream.py \
+            /validation-tests/test_structural_snapshot_transport.py \
+            /validation-tests/test_structural_snapshot_ranking.py \
+            /validation-tests/test_structural_live_ui.py'
 
       - name: Verify packaged saved-watch recovery contracts
         shell: bash
@@ -264,5 +326,7 @@ jobs:
       - name: Push immutable and release tags
         shell: bash
         run: |
-          docker push "${IMAGE_NAME}:nova-${NOVA_VERSION}"
           docker push "${IMAGE_NAME}:nova-${GITHUB_SHA}"
+          if [[ "$GITHUB_REF" == "refs/heads/birthright-container" ]]; then
+            docker push "${IMAGE_NAME}:nova-${NOVA_VERSION}"
+          fi

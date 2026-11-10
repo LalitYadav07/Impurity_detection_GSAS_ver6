@@ -1,0 +1,182 @@
+{
+  "schema": "powgen-current-effective-count-response/v5",
+  "cycle": "2026-2_11A_CAL",
+  "profile_id": "2026B_HighRes_60HzB3_CWL2p665.instprm",
+  "profile_sha256": "e4ab35b5d44069d47352a4a8b717aa5f3131b0c682cbe969eeee852bb0d1c571",
+  "wavelength_a": 2.665,
+  "reference_runs": {
+    "vanadium": 63567,
+    "blank": 63564,
+    "PAC06": 63571
+  },
+  "on_charge_uah": 3994.421642427778,
+  "off_charge_uah": 4154.356409402778,
+  "reference_proton_energy_gev": 1.3,
+  "source_manifest_sha256": "f9d6cd756f686be75b28f8e43fae1320b16d6c1c0fac6eb6f2e932cd50cb461f",
+  "sources": [
+    {
+      "role": "PAC_detector_calibration",
+      "path": "current-cycle-baseline-inputs-v1/PG3_PAC_d63561_2026-08-4.h5",
+      "bytes": 385321,
+      "sha256": "cc75eb0cfed744c78d5d0c7a3d596a100cb118b91b46dab416fe2a3f1a0e7a31",
+      "source": "provenance/29-PG3_PAC_d63561_2026-08-4.h5",
+      "archive_source": "PG3/shared/CALIBRATION/2026-2_11A_CAL/PG3_PAC_d63561_2026-08-4.h5"
+    },
+    {
+      "role": "PAC_reference_mapping_or_limits",
+      "path": "current-cycle-baseline-inputs-v1/PG3_char_2026_8-HighRes_PAC.txt",
+      "bytes": 572,
+      "sha256": "bce8bfebb0497f6cc79df786b358b420a8bf85916acd4b8321c2c70c735b8f43",
+      "source": "provenance/34-PG3_char_2026_8-HighRes_PAC.txt",
+      "archive_source": "PG3/shared/CALIBRATION/2026-2_11A_CAL/PG3_char_2026_8-HighRes_PAC.txt"
+    },
+    {
+      "role": "PAC_reference_mapping_or_limits",
+      "path": "current-cycle-baseline-inputs-v1/PG3_char_2026_8_PAC_limit.txt",
+      "bytes": 1904,
+      "sha256": "38de592778ec7ffa989864ef5bdddd54eec9c6f2455e99e62fb244edb5e55e41",
+      "source": "provenance/35-PG3_char_2026_8_PAC_limit.txt",
+      "archive_source": "PG3/shared/CALIBRATION/2026-2_11A_CAL/PG3_char_2026_8_PAC_limit.txt"
+    }
+  ],
+  "observation_sources": [
+    {
+      "role": "on",
+      "run": 63567,
+      "arrays_path": "provenance/PG3_63567-counts-v3.npz",
+      "arrays_sha256": "a2a1344c704355d81442010752d4d00ab2258e937b3c642101f46cf9fee997e2",
+      "receipt_path": "provenance/PG3_63567-counts-v3.json",
+      "receipt_sha256": "20f7809529f0fa371a44b218a1e44adf2cadb91a47299f1b97947a487baeed34",
+      "raw_sha256": "bf107105cad4746027380da7dbab9c39c566db37217dee8dfae7d9a78469d2f4",
+      "accepted_counts": 159633916
+    },
+    {
+      "role": "off",
+      "run": 63564,
+      "arrays_path": "provenance/PG3_63564-counts-v3.npz",
+      "arrays_sha256": "37a9b15ea400befe067e13d84aa3b7cd9972fe00bcfa89a91a4ad01919b8fa3f",
+      "receipt_path": "provenance/PG3_63564-counts-v3.json",
+      "receipt_sha256": "a36e1e19d4f39041c8634bfe431b4490b67bed7c78352fd4023d1bfaaed3c399",
+      "raw_sha256": "1d8ae8f4a157d57f46c678d3ecc5038e9bbf1165e8e021db1e2b8670bb737e3d",
+      "accepted_counts": 9464661
+    },
+    {
+      "role": "can",
+      "run": 63571,
+      "arrays_path": "provenance/PG3_63571-counts-v2.npz",
+      "arrays_sha256": "6341066b65d942d6061b0238445549b705cfd933e3d7ed09812948848d43d54e",
+      "receipt_path": "provenance/PG3_63571-counts-v2.json",
+      "receipt_sha256": "89d3de3133aee9af7246ffc4f68ed80473ac1ea013732fde85b86688f06767b3",
+      "raw_sha256": "9bddd940a2f5b80e886fd70c89ff845ec9ac2480e8201e0d0bf5e8569a8affb6",
+      "accepted_counts": 36127766
+    }
+  ],
+  "angular_representation": "Mean physical angle of active pixels in each 2-degree group; no event-value fitting",
+  "geometry_sha256": "7dd79eea0aca560cbeb2420e5631f0662c7d65352db9c9c0622efe46437dc7a5",
+  "aggregation": "Exact sum of each 20 adjacent fixed logarithmic d bins; terminal 2-bin cell retained.",
+  "observation_domain_a": [
+    0.1,
+    40.0
+  ],
+  "observation_grid_is_native_reduction_grid": false,
+  "observation_contract": "Unweighted integer events with captured PAC mask/DIFC, native pulse ROI, TOF/wavelength and prompt cuts; fixed 0.1\u201340 \u00c5 research grid. Native compressed reference grids are separately retained.",
+  "vanadium_assumptions": {
+    "radius_cm": 0.3175,
+    "height_cm": 7.0,
+    "density_g_cm3": 6.11,
+    "atom_mass_da": 50.9415,
+    "incoherent_b": 5.08,
+    "beam_width_cm": 1.0,
+    "beam_height_cm": 4.0,
+    "independently_verified": false
+  },
+  "experimental_accuracy_certified": false,
+  "can_reference": {
+    "run": 63571,
+    "container": "PAC06",
+    "charge_uah": 4146.786367572222,
+    "observed_counts": 36127766,
+    "source_raw_sha256": "9bddd940a2f5b80e886fd70c89ff845ec9ac2480e8201e0d0bf5e8569a8affb6",
+    "source_count_array_sha256": "6341066b65d942d6061b0238445549b705cfd933e3d7ed09812948848d43d54e",
+    "source_receipt_sha256": "89d3de3133aee9af7246ffc4f68ed80473ac1ea013732fde85b86688f06767b3",
+    "native_compression_applied": false,
+    "identical_facility_reduction_claimed": false,
+    "sample_shielding_of_can_background_modelled": false,
+    "physical_container_metrology_verified": false
+  },
+  "terminal_reduction": {
+    "scale_data": 100.0,
+    "source": "terminal-reference.json",
+    "native_replay_relative_l2": {
+      "y": 9.167366523023447e-17,
+      "e": 9.497952206977438e-17
+    },
+    "native_grid_replay_passed": true,
+    "native_replay_scope": "Full SNSPowderReduction PAC06 histogram branch, using one can acquisition as both numerical sample (local filename alias) and background, with replayed already-processed V.",
+    "original_no_background_histogram_formula_failure": {
+      "y": 0.00012562420672983487,
+      "e": 1.1750157644764932e-05
+    },
+    "native_event_branch_export_max_absolute_error": {
+      "x": 4.99923771712929e-06,
+      "y": 4.999959557494549e-09,
+      "e": 4.9989514472326135e-09
+    },
+    "no_sample_pattern_packaged": true,
+    "experimental_accuracy_certified": false
+  },
+  "monitor_screen": {
+    "source": "monitor-screen.json",
+    "severe_positive_charge_transmission_intervals_found": false,
+    "scientific_exclusion_applied": false,
+    "stationary_poisson_noise_qualified": false
+  },
+  "standard_calibration": null,
+  "assets": [
+    {
+      "name": "PG3_PAC_d63561_2026-08-4.h5",
+      "bytes": 385321,
+      "sha256": "cc75eb0cfed744c78d5d0c7a3d596a100cb118b91b46dab416fe2a3f1a0e7a31"
+    },
+    {
+      "name": "PG3_char_2026_8-HighRes_PAC.txt",
+      "bytes": 572,
+      "sha256": "bce8bfebb0497f6cc79df786b358b420a8bf85916acd4b8321c2c70c735b8f43"
+    },
+    {
+      "name": "PG3_char_2026_8_PAC_limit.txt",
+      "bytes": 1904,
+      "sha256": "38de592778ec7ffa989864ef5bdddd54eec9c6f2455e99e62fb244edb5e55e41"
+    },
+    {
+      "name": "can-reference.json",
+      "bytes": 23701,
+      "sha256": "feaf8360703f2210c85615d7f9c4e91f55da741576a39ea7d9c79bd496e7df53"
+    },
+    {
+      "name": "counts.npz",
+      "bytes": 33560,
+      "sha256": "bf6183963e70d2ec0bcaaa7fa6f5c8a24fc579319d7a38be84a824326c76c92c"
+    },
+    {
+      "name": "monitor-screen.json",
+      "bytes": 1099,
+      "sha256": "5b337949052ac9f8a96ea520602a1ff46c090e3d521eb37298e7f93bf7f3077d"
+    },
+    {
+      "name": "reduction.npz",
+      "bytes": 164084,
+      "sha256": "eff5c59472ba5bd53d9ecd913867353878ff91633b624f3959dd5c4ee19aa5ee"
+    },
+    {
+      "name": "terminal-reference.json",
+      "bytes": 3249,
+      "sha256": "043ff4b28ea45538226658f74218800fcab7187cf6602382e263cf90ac40f188"
+    }
+  ],
+  "public_metadata_provenance": {
+    "schema": "radar-public-calibration-metadata/v1",
+    "original_metadata_sha256": "6e968885a82f590f12dcb7ff21fb1265b800bf323e2d2ace4690bed619a76728",
+    "transformation": "Local paths and transport/session details removed; source content hashes and calibration values retained."
+  }
+}

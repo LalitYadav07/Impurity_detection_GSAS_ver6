@@ -62,4 +62,14 @@ def sampler_summary(post):
         text+=f"Local-move acceptance: {100*last['local_acceptance']:.1f}%; sign-reversal acceptance: {100*last['sign_acceptance']:.1f}%. Sign reversals do not explore a different powder pattern."
     else:
         text+='This archive combines local moves with global sign reversals (proposed 5% of the time). Sign reversals leave powder intensities unchanged, so acceptance near 5% may indicate very little useful movement. Local acceptance was not saved separately.'
+    health=post.get('health',{})
+    if 'predictive_agreement' in health and 'physical_second_moment_agreement' in health:
+        disagreements=[]
+        if health.get('median_discrepancy_in_interval_widths',0.)>=.5:disagreements.append('moment magnitudes')
+        if not health['predictive_agreement']['passed']:disagreements.append('calculated patterns')
+        if not health['physical_second_moment_agreement']['passed']:disagreements.append('moment directions or relative signs')
+        if disagreements:
+            text+=' Independent sampling runs disagree on '+', '.join(disagreements)+'. Sampling remains unresolved.'
+        else:text+=' Independent runs agree on the tested magnitudes, patterns and moment relationships. This does not establish a unique structure or global convergence.'
+    elif health:text+=' The saved replica comparison covered moment magnitudes only; pattern and directional agreement were not checked.'
     return text

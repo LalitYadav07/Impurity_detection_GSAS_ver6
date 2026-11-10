@@ -1,0 +1,34 @@
+{
+  "method": "Minute Q >= 5 uAh; monitor/Q outside [0.2,5] times eligible-minute median.",
+  "results": [
+    {
+      "run": 63567,
+      "source_sha256": "d654b1e0780aeea22a1fbf7e48302d0d741e650f624146f98c23430f4d25cfe3",
+      "monitor_counts": 3666423,
+      "charge_uah": 3994.4216424277597,
+      "zero_charge_minutes": 981,
+      "flagged_minutes": [],
+      "scientific_exclusion_applied": false
+    },
+    {
+      "run": 63564,
+      "source_sha256": "81bea8c258146d5062c330e62714045a5423fd08ed9970c1dd8b3bab1dff0c1c",
+      "monitor_counts": 3767622,
+      "charge_uah": 4154.356409402777,
+      "zero_charge_minutes": 0,
+      "flagged_minutes": [],
+      "scientific_exclusion_applied": false
+    },
+    {
+      "run": 63571,
+      "source_sha256": "4eb5c5b8f9237df0e222558002eb191af8dac4235882f5734bec17e10010371d",
+      "monitor_counts": 3802778,
+      "charge_uah": 4146.786367572222,
+      "zero_charge_minutes": 1,
+      "flagged_minutes": [],
+      "scientific_exclusion_applied": false
+    }
+  ],
+  "no_scientific_exclusions": true,
+  "noise_or_flux_accuracy_qualified": false
+}

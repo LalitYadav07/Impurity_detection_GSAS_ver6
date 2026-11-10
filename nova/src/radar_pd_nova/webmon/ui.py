@@ -15,6 +15,7 @@ from .processes import stop_process,wait_process,spawn_process
 from .viewdata import sampler_summary, full_posterior, moment_rows, STATUS
 from ..facility import FacilityPathError
 from .scope import WatchScope, ScopeCancellation
+from .structural_ui import StructuralLiveMixin
 from datetime import datetime
 
 def request_identity(request):
@@ -25,9 +26,10 @@ def request_identity(request):
     return hashlib.sha256(canonical(portable)).hexdigest()
 
 
-class WebmonMixin:
+class WebmonMixin(StructuralLiveMixin):
     def _init_webmon(self):
         s=self.server.state;manifest=os.environ.get('RADAR_PD_WEBMON_CONTEXT','')
+        self._init_structural_live()
         s.update(dict(webmon_checkpoints=[],webmon_checkpoint='',webmon_checkpoint_axis='d',webmon_checkpoint_summary='',webmon_width_rows=[],webmon_polished_jobs=[],webmon_polished_job=''))
         production=bool(getattr(getattr(self,'service',None),'galaxy_url',None) and getattr(self.service,'history_id',None))
         self._webmon_configured=bool(manifest) or production;self._webmon_config_error=''
@@ -50,6 +52,7 @@ class WebmonMixin:
         self._webmon_colors={};self._webmon_pattern=None;self._webmon_payloads={};self._webmon_out=None;self._webmon_plot_binding=None;self._webmon_saved_paths={};self._webmon_request={};self._webmon_last_preview=None;self._webmon_model_paths=set();self._webmon_process=None;self._webmon_cancelled=False;self._webmon_task=None;self._webmon_poll_task=None;self._webmon_binding=None;self._webmon_start_scope=None
         self._webmon_display_scope=None;self._webmon_scope_generation=0
         s.webmon_scope_notice='';s.webmon_scope_allowed=False
+        s.webmon_preparation_notice=''
         s.update(dict(webmon_follow_latest=True,webmon_stale=False,webmon_analysis_revision='',webmon_local=bool(self._webmon and self._webmon.config.get('local_replay')),webmon_runs=[],webmon_run='',webmon_target='',webmon_message='Start or restore a saved Live watch, then refresh to select a stored or current WebMON scan.',webmon_reference='',webmon_accepted=False,webmon_k='0, 0, 0',webmon_ion='',webmon_lower=.1,webmon_upper=9.,webmon_busy=False,webmon_rows=[],webmon_model='',webmon_models=[],webmon_details='',webmon_has_result=False,webmon_context_ready=False,webmon_revision='',webmon_latency='',webmon_latest='',webmon_health='No inference yet',webmon_reference_rows=[],webmon_poll_seconds=30))
         s.update(dict(webmon_table_selected=[],webmon_compared=[],webmon_axis='tof',webmon_axes=[{'title':'TOF (µs)','value':'tof'}],webmon_errors=False,webmon_band=True,webmon_ticks=True,webmon_sampler_summary="",webmon_fit_metrics=[],webmon_component=False,webmon_region='full',webmon_filter='All',webmon_search='',webmon_display_rows=[],webmon_moment_rows=[],webmon_pair_a=0,webmon_pair_b=1,webmon_site_options=[],webmon_saved=[],webmon_saved_job='',webmon_checked='Not checked',webmon_connection='Not connected',webmon_count_summary='No candidates analyzed',webmon_validity='No fit assessed',webmon_boundary='Not assessed',webmon_sampling='Not assessed',webmon_fit_caption='',webmon_lower_used=None,webmon_upper_used=None))
         s.change('powgen_processing_scope','powgen_processing_sample_ids','powgen_bank_scope',
@@ -108,6 +111,8 @@ class WebmonMixin:
         s=self.server.state
         self._webmon_scope_generation=getattr(self,'_webmon_scope_generation',0)+1
         self.webmon_pause_stream()
+        self._clear_structural_live()
+        self._webmon_kind_headers={}
         cancel=getattr(self,'_webmon_remote_cancel',None)
         if cancel:cancel.set()  # Stops pending admission/waiting, never deletes an accepted job.
         self._webmon_binding=None;self._webmon_reviewed_mapping=None;self._webmon_last_preview=None
@@ -250,7 +255,7 @@ class WebmonMixin:
             with html.Div(classes='wm-top'):
                 with html.Div():
                     html.H2('Live acquisition')
-                    html.P('POWGEN WebMON source · inspect provisional patterns and conditional magnetic fits.')
+                    html.P('POWGEN WebMON source · inspect provisional patterns and reviewed magnetic or structural models.')
                 v.VChip('Archived-data replay',v_if='webmon_local',size='small',variant='outlined')
             with html.Div(classes='wm-status',raw_attrs=['role="status"']):
                 v.VChip(text=("webmon_follow_latest ? 'Following latest scan' : 'Pinned to scan ' + (webmon_run || 'none')",),
@@ -274,29 +279,22 @@ class WebmonMixin:
                 for label,value,extra in [('Calculation','{{ webmon_busy ? "Running" : webmon_calculation_status }}',''),('Scientific use','{{ webmon_validity }}','wm-warning'),('Candidate settings','{{ webmon_count_summary }}',''),('Counting decision','Unavailable · calibration required','wm-warning')]:
                     with html.Div(classes='wm-stat '+extra):html.Span(label);html.Strong(value)
             html.P('{{ webmon_message }}')
+            v.VSelect(label='Live analysis',v_model=('webmon_analysis_kind',),
+                items=([dict(title='Magnetic models',value='magnetic'),dict(title='Structural distortion models',value='structural')],),
+                update_modelValue=(self.webmon_analysis_kind_changed,'[$event]'),disabled=('webmon_busy',),density='compact')
             with v.VExpansionPanels(variant='accordion'):
-                with v.VExpansionPanel(title='Review nuclear reference & magnetic assumptions'):
+                with v.VExpansionPanel(title='Review nuclear reference & magnetic assumptions',v_if="webmon_analysis_kind === 'magnetic'"):
                     with v.VExpansionPanelText():
+                        html.P('{{ webmon_preparation_notice }}',v_if='webmon_preparation_notice',classes='text-body-2')
+                        v.VBtn('Choose or prepare calculations',click=self.open_preparation_workspace,
+                            disabled=('webmon_busy',),variant='text')
                         with html.Div(v_if='!webmon_local && !webmon_context_ready'):
-                            v.VBtn('Load published GPX sources',click=self.webmon_load_published_sources,disabled=('webmon_busy',),variant='outlined')
-                            v.VSelect(label='Published source GPX',v_model=('webmon_published_source',),items=('webmon_published_sources',),update_modelValue=(self.webmon_published_source_changed,'[$event]'),density='compact')
-                            html.P('{{ webmon_source_notice }}')
-                            v.VBtn('Inspect selected GPX in Refinement',click=self.webmon_open_published_source,disabled=('!webmon_published_source || webmon_busy',),variant='text')
+                            self._webmon_reference_controls()
                             v.VBtn('Set magnetic models in Refinement',click=self.webmon_open_model_setup,disabled=('!webmon_published_source || webmon_busy',),variant='outlined')
                             html.P('Use the existing Model exploration setup or Luna assistant to inspect the selected parent, select sites/k and discover candidates. Return here after discovery; this does not start the completed-scan campaign.')
                             v.VCheckbox(label='Refit existing scales/background during snapshot preparation',v_model=('webmon_refine_transfer',),density='compact')
                             v.VCheckbox(label='I reviewed the current Model exploration parent, sites, k and candidate set for this live run',v_model=('webmon_prepare_accepted',),density='compact')
                             v.VBtn('Prepare reviewed live models in Galaxy',click=self.webmon_prepare_from_models,disabled=('!webmon_prepare_accepted || !webmon_published_source || webmon_busy',),variant='outlined')
-                            with html.Details():
-                                html.Summary('Reviewed producer mapping')
-                                html.P('Use this only after checking the live producer calibration. The GPX instrument DIFC is not evidence for the live export conversion. Saving records your mapping; native preparation and model review are still required.')
-                                v.VTextField(label='Physical bank',v_model=('webmon_mapping_bank',),density='compact')
-                                v.VTextField(label='Export TOF/d factor (µs/Å)',v_model=('webmon_mapping_factor',),density='compact')
-                                v.VTextField(label='Normalization convention',v_model=('webmon_mapping_normalization',),density='compact')
-                                v.VTextField(label='Producer configuration SHA-256',v_model=('webmon_mapping_producer',),density='compact')
-                                v.VTextField(label='Where this mapping was verified',v_model=('webmon_mapping_evidence',),density='compact')
-                                v.VCheckbox(label='I checked this bank, conversion and normalization against the producer configuration',v_model=('webmon_mapping_accepted',),density='compact')
-                                v.VBtn('Save reviewed mapping',click=self.webmon_save_mapping,disabled=('!webmon_published_source || !webmon_mapping_accepted || webmon_busy',),variant='outlined')
                         v.VSelect(label='Starting nuclear checkpoint',v_model=('webmon_checkpoint',),items=('webmon_checkpoints',),update_modelValue=(self.webmon_checkpoint_changed,'[$event]'),disabled=('webmon_busy',),density='compact')
                         html.P('{{ webmon_reference }}')
                         v.VDataTable(headers=("[{title:'Input',key:'label'},{title:'Reviewed value',key:'value'}]",),items=('webmon_reference_rows',),items_per_page=-1,hide_default_footer=True,density='compact')
@@ -327,7 +325,7 @@ class WebmonMixin:
                         v.VBtn('Analyze updates for this run',click=self.webmon_enable_stream,disabled=('!webmon_scope_allowed || webmon_busy || webmon_stream_active || !webmon_accepted',),variant='outlined')
                         v.VBtn('Pause automatic analysis',click=self.webmon_pause_stream,disabled=('!webmon_stream_active',),variant='text')
                     html.P('{{ webmon_stream_message }}')
-                with v.VExpansionPanel(title='Review completed analyses in this workspace'):
+                with v.VExpansionPanel(title='Review completed magnetic analyses in this workspace',v_if="webmon_analysis_kind === 'magnetic'"):
                     with v.VExpansionPanelText():
                         html.P('Galaxy retains the result bundles and published GPXs after this container closes. This list shows analyses indexed in the current workspace.')
                         html.P('Reload a completed analysis of this exact scan and reviewed reference without rerunning inference.')
@@ -337,7 +335,8 @@ class WebmonMixin:
                 html.H3('Scan preview',classes='mt-4')
                 html.P('Stored reduced density. Exposure is unverified. Review inputs above or load a saved analysis.')
                 with html.Div(classes='wm-smallplot'):self._webmon_observed=plotly.Figure(display_mode_bar=True)
-            with html.Div(v_show='webmon_has_result',classes='mt-4'):
+            self._structural_live_ui()
+            with html.Div(v_show="webmon_has_result && webmon_analysis_kind === 'magnetic'",classes='mt-4'):
                 with html.Div(classes='wm-main'):
                     with html.Div(classes='wm-card'):
                         html.H3('Compare diffraction fits')
@@ -422,6 +421,7 @@ class WebmonMixin:
             if self.server.state.powgen_monitoring:self.webmon_refresh(quiet=True)
             if self.server.state.powgen_monitoring and getattr(self,'_webmon_stream',None):self.webmon_stream_tick()
     def webmon_refresh(self,quiet=False,**_):
+        self.server.state.webmon_preparation_notice=getattr(self,'_prepared_selection_caption',lambda:'')()
         s=self.server.state;owner=None
         try:
             if not self._webmon:raise ValueError('No source/checkpoint adapter configured for this server')
@@ -638,6 +638,9 @@ class WebmonMixin:
 
     def webmon_published_source_changed(self,value,**_):
         s=self.server.state;s.webmon_published_source=value
+        plan=getattr(self,'_webmon_structural_plan',None)
+        if plan and plan['source_record']['id']!=value:
+            self.webmon_pause_stream();self._clear_structural_live()
         source=getattr(self,'_webmon_published_catalog',{}).get(value)
         if source:
             try:
@@ -769,7 +772,11 @@ class WebmonMixin:
             name=hashlib.sha256(json.dumps(mapping,sort_keys=True).encode()).hexdigest()
             path=Path(self._webmon.config['jobs'])/'mappings'/(name+'.json');atomic_json(path,mapping)
             self._webmon_reviewed_mapping=mapping
-            s.webmon_source_notice='Reviewed producer mapping saved. Native source preparation and a reviewed magnetic catalogue are still required; no fit or counting decision was launched.'
+            plan=getattr(self,'_webmon_structural_plan',None)
+            if plan and plan['templates'][0]['mapping']!=mapping:
+                self.webmon_pause_stream();s.webmon_structural_ready=False
+                s.webmon_structural_message='Producer mapping changed. Use the approved structural plan again before fitting; existing results retain their original mapping.'
+            s.webmon_source_notice='Reviewed producer mapping saved. Native source preparation and reviewed model settings are still required; no fit or counting decision was launched.'
         except Exception as exc:s.webmon_source_notice=str(exc)
         s.flush()
 
@@ -923,6 +930,10 @@ class WebmonMixin:
         s.flush()
 
     def webmon_pause_stream(self,**_):
+        stream=getattr(self,'_webmon_stream',None);queue=getattr(self,'_webmon_queue',None)
+        plan=getattr(self,'_webmon_structural_plan',None)
+        if getattr(stream,'kind',None)=='structural' and queue and queue.pending and plan and plan.get('stream') is stream:
+            plan['paused_pending']=queue.pending
         if getattr(self,'_webmon_queue',None):self._webmon_queue.close()
         self._webmon_stream=None
         self.server.state.webmon_stream_active=False
@@ -978,12 +989,16 @@ class WebmonMixin:
             if queue.pending and not s.webmon_busy and (not self._webmon_task or self._webmon_task.done()):
                 self._webmon_cancelled=False
                 async def execute(update):
-                    await self._webmon_execute(dict(sealed=(update['binding'],update['request']),webmon_run=stream.run,scope_owner=owner))
+                    if getattr(stream,'kind','magnetic')=='structural':
+                        await self._webmon_execute_structural(update,stream,self._webmon_structural_plan)
+                    else:
+                        await self._webmon_execute(dict(sealed=(update['binding'],update['request']),webmon_run=stream.run,scope_owner=owner))
                     if owner is not None and not self._webmon_can_publish(owner):return
                     if queue.closed or self._webmon_stream is not stream:return
-                    if s.webmon_calculation_status!='Completed':raise RuntimeError(s.webmon_message)
+                    if s.webmon_calculation_status!='Completed':
+                        raise RuntimeError(s.webmon_structural_message if getattr(stream,'kind','magnetic')=='structural' else s.webmon_message)
                     lag=time.monotonic()-update['captured_monotonic']
-                    s.webmon_stream_message=f'Run {stream.run}: latest completed analysis took {lag:.1f} s from capture. {queue.state["coalesced"]} superseded queued snapshots skipped. Fixed response; counting advice unavailable.'
+                    s.webmon_stream_message=f'Run {stream.run}: latest completed analysis took {lag:.1f} s from capture. {queue.state["coalesced"]} superseded queued snapshots skipped. Counting advice unavailable.'
                     s.webmon_stale=bool(queue.pending) or str(s.webmon_run)!=stream.run;s.flush()
                 async def drain():
                     try:await queue.drain(execute)
@@ -995,6 +1010,7 @@ class WebmonMixin:
         except ReviewRequired as exc:
             if owner is not None and not self._webmon_can_publish(owner):return
             self.webmon_pause_stream();s.webmon_stream_message=str(exc);s.webmon_accepted=False;s.webmon_stale=True
+            if getattr(stream,'kind','magnetic')=='structural':s.webmon_structural_ready=False
         except (ValueError,OSError,RuntimeError) as exc:
             if owner is not None and not self._webmon_can_publish(owner):return
             if queue.closed or self._webmon_stream is not stream:return
@@ -1101,6 +1117,7 @@ class WebmonMixin:
             service=owner['service'] if owner is not None else self.service
             factory=getattr(service,'staging_client',None)
             runtime=GalaxyLiveRuntime(root,factory() if factory else service)
+            runtime.preparation_provider=getattr(self,'_capture_prepared_inputs',None)
             self._webmon_remote_cancel=ScopeCancellation(current)
             self._webmon_pending_binding=b;self._webmon_pending_request=req
             s.webmon_busy=True;s.webmon_stale=bool(s.webmon_has_result)

@@ -1,8 +1,11 @@
-# Verified NDIP-test runtime from the 0.4.0 release. Application source below
-# replaces the prior package; builds do not require Savannah availability.
+# Keep interactive orchestration separate from native scientific workers.
+# Planner calculations use managed Galaxy jobs; this image remains responsive.
+# The cached NDIP runtime keeps builds independent of Savannah availability.
 FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6:nova-78f2dcedcd5eed1db1c0885a47dc47cac18d63e0@sha256:9bd0abb274eec3bfe4a55a01b4beccecf55660afa920be7d4be6e1ef46aa0a5e
 
 USER root
+# The cached image can predate build-context exclusions; remove inherited tests.
+RUN rm -rf /opt/radar-pd/nova/tests /opt/radar-pd/tests /opt/radar-symmetry/tests /src/tests
 
 # Hide NOVA developer-resource links in the deployed scientific workspace.
 ENV PIXI_ENVIRONMENT_NAME=production \

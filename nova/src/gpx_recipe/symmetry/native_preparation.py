@@ -1,12 +1,19 @@
 """Lossless native bookkeeping normalization on a private project copy."""
 import copy
 
+# GSASIIstrIO.GetSampleParms reads these powder fields as [value, flag].
+# Other sample lists are numerical data: e.g. Contrast contains normal and
+# anomalous scattering contrasts, not a refinement switch.
+SAMPLE_REFINEMENT_FIELDS=frozenset({'Scale','Shift','Transparency','SurfRoughA','SurfRoughB',
+    'Absorption','DisplaceX','DisplaceY'})
+
 
 def parameter_flags(parameters,index):
     result=copy.deepcopy(parameters)
     for name,value in result.items():
         if hasattr(value,'tolist'):value=value.tolist();result[name]=value
-        if isinstance(value,list) and len(value)>index and type(value[index]) in {int,float,bool} and value[index] in {0,1}:
+        is_flag=index!=1 or name in SAMPLE_REFINEMENT_FIELDS
+        if is_flag and isinstance(value,list) and len(value)>index and type(value[index]) in {int,float,bool} and value[index] in {0,1}:
             value[index]=bool(value[index])
     return result
 
@@ -22,7 +29,8 @@ def normalize_flags(project):
             values=h.data[family][0] if family=='Instrument Parameters' else h.data[family]
             new=parameter_flags(values,index)
             for name,value in values.items():
-                if isinstance(value,list) and len(value)>index and type(value[index]) is int and value[index] in {0,1}:
+                is_flag=index!=1 or name in SAMPLE_REFINEMENT_FIELDS
+                if is_flag and isinstance(value,list) and len(value)>index and type(value[index]) is int and value[index] in {0,1}:
                     rows.append(dict(histogram=h.name,family=family,parameter=name,flag_integer=value[index]))
             values.clear();values.update(new)
         background=h.data.get('Background',[])

@@ -1,0 +1,48 @@
+# Offline development image only. Production NOVA uses Dockerfile and sends
+# native calculations to managed Galaxy jobs. This image deliberately includes
+# the pinned science runtime for explicit localhost-only simulation tests.
+FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6@sha256:a15733e48e99280bdcdcfbf0fd3f8ec20d73f51cbbb11eb2cd6f91edd0cd23b4
+USER root
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx supervisor gettext-base wget hdf5-tools tzdata \
+    && rm -rf /var/lib/apt/lists/*
+COPY dockerfiles/planning-requirements.txt dockerfiles/planning-constraints.txt /opt/planner-build/
+RUN python -m pip install --no-cache-dir \
+        -c /opt/planner-build/planning-constraints.txt \
+        -r /opt/planner-build/planning-requirements.txt
+COPY dockerfiles/planner-integration-requirements.txt /opt/planner-build/
+RUN python -m pip install --no-cache-dir \
+        -c /opt/planner-build/planning-constraints.txt \
+        -r /opt/planner-build/planner-integration-requirements.txt
+COPY pyproject.toml README.md /opt/ndip/
+COPY src /opt/ndip/src
+ENV PYTHONPATH=/opt/ndip/src \
+    PYTHONDONTWRITEBYTECODE=1 PIXI_ENVIRONMENT_NAME=production \
+    RADAR_PD_PLANNING_ROOT=/work/powgen-planning \
+    RADAR_PD_LOCAL_EXPERIMENTAL_BACKEND=1 \
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MPLBACKEND=Agg
+RUN python -m pip install --no-cache-dir --no-deps /opt/ndip \
+    && python -m pip check \
+    && python -c "from gpx_recipe.live.validated_backend import backend_identity; assert backend_identity()['native_sources']['GSASIIstrMath.py']=='6fea6023fa33a2585d091b04a479194c37f6efac4336ee29c7bef7af31e930af'" \
+    && python -c 'from nova.galaxy import Connection; from radar_pd_nova.unet_core.production import FocusTransitionPredictor; FocusTransitionPredictor()._load(); from radar_pd_nova.unet_core.full_q_production import FullQTransitionPredictor; FullQTransitionPredictor()._load()' \
+    && python -m compileall -q /opt/ndip/src \
+    && mkdir -p /work && chown radar:radar /work
+COPY help /app/www-content/user-guide/
+COPY tools/check_powgen_planner_release.py /opt/ndip/check_release.py
+COPY scripts/run_trame.sh scripts/run_nginx.sh /
+COPY dockerfiles/supervisord.conf /etc/supervisord.conf
+COPY dockerfiles/nginx.conf.template /etc/nginx/nginx.conf.template
+RUN sed 's|${EP_PATH}|/__radar_pd_root__|g' /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf \
+    && mkdir -p /tmp/radar-pd-nginx/client-body /tmp/radar-pd-nginx/proxy /tmp/radar-pd-nginx/fastcgi /tmp/radar-pd-nginx/uwsgi /tmp/radar-pd-nginx/scgi \
+    && chown -R radar:radar /tmp/radar-pd-nginx
+USER radar
+WORKDIR /work
+EXPOSE 8080 8081
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/index.html', timeout=4).read(1)"
+ENTRYPOINT []
+CMD ["supervisord", "-c", "/etc/supervisord.conf"]
+ARG SOURCE_REVISION=uncommitted
+LABEL org.opencontainers.image.title="RADAR-PD offline planner development" \
+      org.opencontainers.image.version="0.7.0-local" \
+      org.opencontainers.image.revision=$SOURCE_REVISION

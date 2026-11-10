@@ -8,7 +8,7 @@ native executor until native-oracle and campaign integration checks pass.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import numpy as np
 from scipy.optimize import minimize,nnls
 
@@ -33,6 +33,8 @@ class StartingPoint:
     curvature_eigenvalues: np.ndarray
     bound_active: bool
     optimizer_objective_scale: float
+    descent_restarts: int = 0
+    descent_probe_evaluations: int = 0
 
 
 class ProfiledMagneticObjective:
@@ -93,11 +95,27 @@ class ProfiledMagneticObjective:
         self.projected_offset=self._project(self.offset)
         self.projected_nuclear=self._project(self.nuclear)
         self.projected_quadratic=self._project(self.qphysical.reshape(n,-1)).reshape(self.qphysical.shape)
+        from .profiled_reduction import MagneticResidualReduction
+        self.reduction,self.reduction_diagnostics=MagneticResidualReduction.build(
+            self.projected_offset,self.projected_nuclear,self.projected_quadratic)
+        self.reduction_evaluations=0
+        self.full_evaluations=0
 
     def _project(self,array):
         return array-self.background_q@(self.background_q.T@array)
 
     def _evaluate(self,physical):
+        z=np.asarray(physical,dtype=float)
+        if self.reduction is not None:
+            result=self.reduction.evaluate(z,self.fixed_scale)
+            if result is not None:
+                self.reduction_evaluations+=1
+                return result
+        return self._evaluate_full(z)
+
+    def _evaluate_full(self,physical):
+        """Original weighted arrays; independent of the QR representation."""
+        self.full_evaluations+=1
         z=np.asarray(physical,dtype=float)
         curve=self.projected_nuclear+np.einsum('i,nij,j->n',z,self.projected_quadratic,z)
         denominator=float(curve@curve)
@@ -115,6 +133,10 @@ class ProfiledMagneticObjective:
         cost,gradient,_=self._evaluate(physical)
         return cost/self.normalization,gradient/self.normalization
 
+    def _full_value_gradient(self,physical):
+        cost,gradient,_=self._evaluate_full(physical)
+        return cost/self.normalization,gradient/self.normalization
+
     def _constraint(self,z):
         moments=np.einsum('aki,i->ak',self.physical_maps,z)
         return self.maximum_moment**2-np.einsum('ak,ak->a',moments,moments)
@@ -123,10 +145,11 @@ class ProfiledMagneticObjective:
         return -2*np.einsum('aki,ak->ai',self.physical_maps,
             np.einsum('aki,i->ak',self.physical_maps,z))
 
-    def _hessian(self, z):
+    def _hessian(self, z, *, direct=False):
         step=1e-4*max(1.,float(np.linalg.norm(z)))
-        hessian=np.column_stack([(self.value_gradient(z+np.eye(self.dimension)[j]*step)[1]-
-                                  self.value_gradient(z-np.eye(self.dimension)[j]*step)[1])/(2*step)
+        evaluate=self._full_value_gradient if direct else self.value_gradient
+        hessian=np.column_stack([(evaluate(z+np.eye(self.dimension)[j]*step)[1]-
+                                  evaluate(z-np.eye(self.dimension)[j]*step)[1])/(2*step)
                                  for j in range(self.dimension)])
         return (hessian+hessian.T)/2
 
@@ -151,14 +174,56 @@ class ProfiledMagneticObjective:
         def optimizer_objective(point):
             value,gradient=self.value_gradient(point)
             return value*optimizer_scale,gradient*optimizer_scale
-        result=minimize(optimizer_objective,z,method='SLSQP',jac=True,
-            constraints=[dict(type='ineq',fun=self._constraint,jac=self._constraint_jacobian)],
-            bounds=[(-self.maximum_moment,self.maximum_moment)]*self.dimension,
-            options=dict(maxiter=max_iterations,ftol=objective_ftol),callback=callback)
-        return self._assess(result.x,optimizer_success=bool(result.success),
-            optimizer_status=int(result.status),message=str(result.message),
-            iterations=int(result.nit),evaluations=int(result.nfev),
-            objective_ftol=objective_ftol,optimizer_scale=optimizer_scale)
+        iterations=evaluations=restarts=probe_evaluations=0
+        while True:
+            result=minimize(optimizer_objective,z,method='SLSQP',jac=True,
+                constraints=[dict(type='ineq',fun=self._constraint,jac=self._constraint_jacobian)],
+                bounds=[(-self.maximum_moment,self.maximum_moment)]*self.dimension,
+                options=dict(maxiter=max_iterations-iterations,ftol=objective_ftol),callback=callback)
+            # A restart uses the remaining original budget, not a fresh copy
+            # of it. Count zero-iteration terminations as one admission.
+            iterations+=max(1,int(result.nit))
+            evaluations+=int(result.nfev)
+            fit=self._assess(result.x,optimizer_success=bool(result.success),
+                optimizer_status=int(result.status),message=str(result.message),
+                iterations=iterations,evaluations=evaluations,
+                objective_ftol=objective_ftol,optimizer_scale=optimizer_scale)
+            fit=replace(fit,descent_restarts=restarts,descent_probe_evaluations=probe_evaluations)
+            if (fit.success or not fit.optimizer_success or not fit.local_descent_found
+                    or iterations>=max_iterations or restarts>=3):
+                return fit
+            if callback is not None:
+                callback(result.x)
+            proposal,checked=self._descent_restart(result.x)
+            probe_evaluations+=checked
+            if proposal is None:
+                return replace(fit,descent_probe_evaluations=probe_evaluations)
+            z=proposal
+            restarts+=1
+
+    def _descent_restart(self,point):
+        """A deterministic feasible escape only after measured local descent.
+
+        Every proposed step is tested against the unchanged weighted cost.
+        This does not replace the declared multistart portfolio or certify a
+        global minimum. If no better feasible point is found, keep unresolved.
+        """
+        cost=self._evaluate_full(point)[0]
+        _,directions=np.linalg.eigh(self._hessian(point,direct=True))
+        length=max(1.,float(np.linalg.norm(point)))
+        best=None;best_cost=cost;checked=0
+        for relative in (1e-3,1e-2,5e-2):
+            for direction in directions.T:
+                for sign in (-1.,1.):
+                    probe=point+sign*relative*length*direction
+                    maximum=float(np.max(np.linalg.norm(self.physical_maps@probe,axis=1)))
+                    if maximum>self.maximum_moment:
+                        probe*=self.maximum_moment/maximum
+                    probe_cost=self._evaluate_full(probe)[0];checked+=1
+                    roundoff=64*np.finfo(float).eps*max(abs(cost),abs(probe_cost),np.finfo(float).tiny)
+                    if probe_cost<best_cost-roundoff:
+                        best,best_cost=probe.copy(),probe_cost
+        return best,checked
 
     def reassess(self,fit):
         """Recheck a screened solution on this independently loaded objective.
@@ -170,14 +235,18 @@ class ProfiledMagneticObjective:
         coefficients=np.asarray(fit.coefficients,float)
         if coefficients.shape!=(self.dimension,) or not np.isfinite(coefficients).all():
             raise ValueError('Screened solution has the wrong independent moment basis')
-        return self._assess(self.to_physical@coefficients,
+        result=self._assess(self.to_physical@coefficients,
             optimizer_success=fit.optimizer_success,optimizer_status=fit.optimizer_status,
             message=fit.message,iterations=fit.iterations,evaluations=fit.evaluations,
             objective_ftol=fit.objective_ftol,optimizer_scale=fit.optimizer_objective_scale)
+        return replace(result,descent_restarts=getattr(fit,'descent_restarts',0),
+            descent_probe_evaluations=getattr(fit,'descent_probe_evaluations',0))
 
     def _assess(self,point,*,optimizer_success,optimizer_status,message,
                 iterations,evaluations,objective_ftol,optimizer_scale):
-        cost,gradient,scale=self._evaluate(point)
+        # Accept a state only on the original complete weighted profile.
+        # Numerical reduction changes neither convergence nor descent guards.
+        cost,gradient,scale=self._evaluate_full(point)
         coefficients=self.to_native@point
         full=self.offset+scale*(self.nuclear+np.einsum('i,nij,j->n',coefficients,self.quadratic,coefficients))
         background=np.linalg.lstsq(self.background,-full,rcond=None)[0] if self.background.shape[1] else np.empty(0)
@@ -195,14 +264,19 @@ class ProfiledMagneticObjective:
         # Quadratic intensities have zero first derivatives at zero moments.
         # A native or SciPy "success" at a maximum is not a useful start.
         step=1e-4*max(1.,float(np.linalg.norm(point)))
-        curvature,directions=np.linalg.eigh(self._hessian(point))
+        curvature,directions=np.linalg.eigh(self._hessian(point,direct=True))
         local_descent=False
         for direction in directions.T:
             for sign in [-1.,1.]:
                 probe=point+sign*step*direction
                 probe_max=float(np.max(np.linalg.norm(self.physical_maps@probe,axis=1)))
                 if probe_max>self.maximum_moment:probe*=self.maximum_moment/probe_max
-                if self.value_gradient(probe)[0]<cost/self.normalization-1e-12:
+                # Compare the weighted residual costs, not a decrement in
+                # Rwp-normalized cost. An arbitrarily large nuclear signal
+                # can otherwise hide real magnetic descent at zero moments.
+                probe_cost=self._evaluate_full(probe)[0]
+                roundoff=64*np.finfo(float).eps*max(abs(cost),abs(probe_cost),np.finfo(float).tiny)
+                if probe_cost<cost-roundoff:
                     local_descent=True
         return StartingPoint(coefficients=coefficients,scale=float(scale),background=background,
             weighted_cost=cost,success=bool(optimizer_success and physical and scale>0 and stationarity<=1e-7 and not local_descent),

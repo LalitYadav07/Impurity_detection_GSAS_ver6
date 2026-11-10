@@ -1,16 +1,23 @@
 # Preserve the validated GSAS-II/native/BNS stack used by reviewed refinement.
 FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6@sha256:ece507037db561bb2738e8d002fa3c0aa4eb50192e776967ee908137717d3687
 USER root
+# Keep inherited developer fixtures out of the production worker.
+RUN rm -rf /opt/radar-pd/nova/tests /opt/radar-pd/tests /opt/radar-symmetry/tests /src/tests
 COPY nova/src/gpx_recipe /opt/radar-symmetry/gpx_recipe
+# The forward planner resolves reviewed profiles beside the scientific package.
+COPY nova/src/radar_pd_nova/data/powgen_calibrations /opt/radar-symmetry/radar_pd_nova/data/powgen_calibrations
 COPY scripts/ndip_symmetry.py /opt/radar-symmetry/ndip_symmetry.py
 COPY scripts/ndip_model_campaign.py /opt/radar-symmetry/ndip_model_campaign.py
 COPY scripts/ndip_runtime.py /opt/radar-symmetry/ndip_runtime.py
+COPY nova/tools/check_powgen_planner_release.py /opt/radar-symmetry/check_planner_installation.py
 COPY tests/gpx_recipe/kernel_geometry_control.py /opt/radar-symmetry/kernel_geometry_control.py
 COPY tests/gpx_recipe/nuclear_powder_control.py /opt/radar-symmetry/nuclear_powder_control.py
 ENV PYTHONPATH=/opt/radar-symmetry:/opt/radar-symmetry/gpx_recipe/symmetry/adapters:/opt/radar-pd/scripts:/opt/radar-pd/GSAS-II
 # Only the pure-Python point generator is added. Never resolve/upgrade the
 # installed numerical dependencies as a side effect of a symmetry release.
-RUN python -m pip install --no-cache-dir --no-deps 'seekpath==2.2.1' \
+RUN mkdir -p /opt/radar-native/gpx_recipe/live \
+    && python -m gpx_recipe.live.native_peak_batch --build \
+    && python -m pip install --no-cache-dir --no-deps 'seekpath==2.2.1' \
     && python /opt/radar-symmetry/kernel_geometry_control.py \
         --kernel-patch /opt/radar-symmetry/gpx_recipe/symmetry/kernel_patch.py \
         > /opt/radar-symmetry/kernel-geometry-validation.log \

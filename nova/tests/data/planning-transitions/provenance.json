@@ -1,0 +1,36 @@
+{
+  "schema": "radar-planning-fixture-provenance/v1",
+  "scope": "Test fixture inventory. Hashes bind reviewed contents; they do not establish public redistribution authorization.",
+  "files": {
+    "magnetic-parent.cif": {
+      "sha256": "37fb87b47f851f81f3516fa5e3a12587c72306e82741dd7ae1fbb5f87439bc95",
+      "source_type": "synthetic",
+      "description": "Arbitrary SG 113 regression geometry; not a measured or published Er2Be2GeO7 model.",
+      "construction": "Cell a=b=8 A, c=5.4 A; independent rational fractional sites listed in README.md; unit occupancy and Uiso=0.003 A^2. Element labels retain the Er magnetic-ion test path."
+    },
+    "structural-parent.cif": {
+      "sha256": "395596b8ce6afc6f98d4136237ae7ba3b9297127db7bea8e5c8c4f2eb9c4fabc",
+      "source_type": "public",
+      "description": "YMnO3 1303 K geometry transcribed from Table II, with full occupancy assumed and anisotropic ADPs omitted. Standard SG 194 operators use Hall setting -P 6c 2c.",
+      "citations": [
+        "https://arxiv.org/abs/1008.3042v1",
+        "https://doi.org/10.1103/PhysRevB.83.094111",
+        "https://www.crystallography.net/cod/9008496.html"
+      ]
+    },
+    "structural-child.cif": {
+      "sha256": "366b6690ab3c08fb5766b225db2d4a1cd91c5f784a8d226c66728eb84547280c",
+      "source_type": "generated",
+      "description": "Constructed K1 P1(a,0) SG 193 child at k=(1/3,1/3,0), for native mode controls; not an observed transition claim.",
+      "generator": "ISODISTORT 6.12.2",
+      "citations": [
+        "https://iso.byu.edu/iso/isodistort.php",
+        "https://doi.org/10.1107/S0021889806014075"
+      ],
+      "parent": {
+        "file": "structural-parent.cif",
+        "sha256": "395596b8ce6afc6f98d4136237ae7ba3b9297127db7bea8e5c8c4f2eb9c4fabc"
+      }
+    }
+  }
+}

@@ -75,9 +75,13 @@ def _validate(request):
         from .prepare_source import validate_preparation
         validate_preparation(request)
     else:validate_request(request)
+    if request.get('prepared_scattering') is not None:
+        from ..preparation.hints import validate,live_context
+        catalog=json.loads(Path(request['catalog']).read_text())
+        validate(request['prepared_scattering'],live_context(request,catalog))
 
 
-def create_packet(request,destination):
+def create_packet(request,destination,*,prepared_root=None):
     portable=dict(request);payload={};hashes={}
     for field,name in INPUTS.items():
         if request.get(field):
@@ -86,6 +90,21 @@ def create_packet(request,destination):
                 raise ValueError('Live input exceeds its file budget: '+field)
             payload[name]=path;hashes[name]=file_hash(path);portable[field]=name
     _validate(request)
+    if request.get('prepared_scattering') is not None:
+        from ..preparation.hints import MANIFEST,MAX_BYTES as PREPARED_LIMIT,entry_assets
+        from ..preparation.library import confined
+        document=request['prepared_scattering'];payload[MANIFEST]=canonical(document)
+        hashes[MANIFEST]=hashlib.sha256(payload[MANIFEST]).hexdigest()
+        total=0
+        # Optional hints never crowd scientific inputs out of the packet.
+        for row in (asset for row in document['entries'] for asset in entry_assets(row)):
+            name=row['path']
+            if name in payload or prepared_root is None or len(payload)>=MAX_FILES-2:continue
+            try:
+                path=confined(prepared_root,name);size=path.stat().st_size
+                if total+size>PREPARED_LIMIT or file_hash(path)!=row['sha256']:continue
+                payload[name]=path;hashes[name]=row['sha256'];total+=size
+            except (OSError,ValueError):continue
     metadata=canonical(portable)
     if len(metadata)>MAX_JSON_BYTES:raise ValueError('Live request exceeds metadata limit')
     payload['request.json']=metadata;hashes['request.json']=hashlib.sha256(metadata).hexdigest()
@@ -93,6 +112,22 @@ def create_packet(request,destination):
     packet_id=hashlib.sha256(canonical(manifest)).hexdigest()
     payload['manifest.json']=canonical(manifest);_zip(destination,payload,hashes)
     return packet_id
+
+
+def scientific_packet_identity(archive):
+    """Exact scientific binding, independent of optional acceleration bytes.
+
+    Recovery still verifies the original complete packet ID on the returned
+    job. This identity permits recovering that job after disposable hints are
+    lost, without treating a changed observation or recipe as equivalent.
+    """
+    with zipfile.ZipFile(archive) as z:
+        _entries(z);manifest=_read_json(z,'manifest.json');request=_read_json(z,'request.json')
+    request.pop('prepared_scattering',None)
+    files={name:value for name,value in manifest['files'].items()
+        if name in INPUTS.values()}
+    files['request.json']=hashlib.sha256(canonical(request)).hexdigest()
+    return hashlib.sha256(canonical(dict(schema=SCHEMA,files=files))).hexdigest()
 
 
 def _copy_entry(archive,name,target,checksum):
@@ -117,8 +152,18 @@ def unpack_packet(archive,directory):
         files=manifest.get('files')
         if not isinstance(files,dict) or set(files)|{'manifest.json'}!={v.filename for v in entries}:
             raise ValueError('Live packet is not completely enumerated')
-        if set(files)-({'request.json'}|set(INPUTS.values())):raise ValueError('Unexpected live-packet input')
         portable=_read_json(z,'request.json')
+        extras=set()
+        if portable.get('prepared_scattering') is not None:
+            from ..preparation.hints import MANIFEST,MAX_BYTES as PREPARED_LIMIT,validate,live_context,entry_assets
+            document=portable['prepared_scattering']
+            validate(document,live_context(portable,_read_json(z,INPUTS['catalog'])))
+            extras={MANIFEST}|{asset['path'] for row in document['entries'] for asset in entry_assets(row)}
+            if MANIFEST not in files or _read_json(z,MANIFEST)!=document:
+                raise ValueError('Live packet preparation differs from its captured selection')
+            if sum(v.file_size for v in entries if v.filename in extras-{MANIFEST})>PREPARED_LIMIT:
+                raise ValueError('Live preparation exceeds its byte budget')
+        if set(files)-({'request.json'}|set(INPUTS.values())|extras):raise ValueError('Unexpected live-packet input')
         for field,name in INPUTS.items():
             if portable.get(field) and (portable[field]!=name or name not in files):
                 raise ValueError('Live packet contains an unbound input path')

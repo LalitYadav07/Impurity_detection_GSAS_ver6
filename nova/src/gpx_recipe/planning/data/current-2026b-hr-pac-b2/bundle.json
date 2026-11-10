@@ -1,0 +1,204 @@
+{
+  "schema": "powgen-current-effective-count-response/v4",
+  "cycle": "2026-2_11A_CAL",
+  "profile_id": "2026B_HighRes_60HzB2_CWL1p5.instprm",
+  "profile_sha256": "851ca0f2bc2eed0ca6ddc38a48736ccccb1a7fcf7133e297950355d77c8dae19",
+  "reference_runs": {
+    "vanadium": 63566,
+    "blank": 63563,
+    "PAC06": 63570
+  },
+  "on_charge_uah": 4149.436513422222,
+  "off_charge_uah": 4154.454115694444,
+  "reference_proton_energy_gev": 1.3,
+  "source_manifest_sha256": "ed1cd330d39c039ba749342ed4056612e38982e2a8a44a9a12baaf71f8ec1894",
+  "raw_count_product_sha256": "1e3d3961a130acb3ac254e39b45f74f741873b56293a246711a3a686624c906f",
+  "sources": [
+    {
+      "role": "PAC_detector_calibration",
+      "path": "current-cycle-baseline-inputs-v1/PG3_PAC_d63561_2026-08-4.h5",
+      "bytes": 385321,
+      "sha256": "cc75eb0cfed744c78d5d0c7a3d596a100cb118b91b46dab416fe2a3f1a0e7a31",
+      "source": "provenance/29-PG3_PAC_d63561_2026-08-4.h5",
+      "archive_source": "PG3/shared/CALIBRATION/2026-2_11A_CAL/PG3_PAC_d63561_2026-08-4.h5"
+    },
+    {
+      "role": "PAC_reference_mapping_or_limits",
+      "path": "current-cycle-baseline-inputs-v1/PG3_char_2026_8-HighRes_PAC.txt",
+      "bytes": 572,
+      "sha256": "bce8bfebb0497f6cc79df786b358b420a8bf85916acd4b8321c2c70c735b8f43",
+      "source": "provenance/34-PG3_char_2026_8-HighRes_PAC.txt",
+      "archive_source": "PG3/shared/CALIBRATION/2026-2_11A_CAL/PG3_char_2026_8-HighRes_PAC.txt"
+    },
+    {
+      "role": "PAC_reference_mapping_or_limits",
+      "path": "current-cycle-baseline-inputs-v1/PG3_char_2026_8_PAC_limit.txt",
+      "bytes": 1904,
+      "sha256": "38de592778ec7ffa989864ef5bdddd54eec9c6f2455e99e62fb244edb5e55e41",
+      "source": "provenance/35-PG3_char_2026_8_PAC_limit.txt",
+      "archive_source": "PG3/shared/CALIBRATION/2026-2_11A_CAL/PG3_char_2026_8_PAC_limit.txt"
+    },
+    {
+      "role": "empirical_peak_profile",
+      "path": "current-cycle-baseline-inputs-v1/2026B_HighRes_60HzB1_CWL0p8.instprm",
+      "bytes": 441,
+      "sha256": "396e12327b46e94cbbc0b2015aea5afb5fbecff2dd7b21bea0b904b26ac42456",
+      "source": "provenance/2026B_HighRes_60HzB1_CWL0p8.instprm",
+      "archive_source": null
+    },
+    {
+      "role": "empirical_peak_profile",
+      "path": "current-cycle-baseline-inputs-v1/2026B_HighRes_60HzB2_CWL1p5.instprm",
+      "bytes": 351,
+      "sha256": "851ca0f2bc2eed0ca6ddc38a48736ccccb1a7fcf7133e297950355d77c8dae19",
+      "source": "provenance/2026B_HighRes_60HzB2_CWL1p5.instprm",
+      "archive_source": null
+    },
+    {
+      "role": "empirical_peak_profile",
+      "path": "current-cycle-baseline-inputs-v1/2026B_HighRes_60HzB3_CWL2p665.instprm",
+      "bytes": 334,
+      "sha256": "e4ab35b5d44069d47352a4a8b717aa5f3131b0c682cbe969eeee852bb0d1c571",
+      "source": "provenance/2026B_HighRes_60HzB3_CWL2p665.instprm",
+      "archive_source": null
+    },
+    {
+      "role": "measured_effective_response_observations",
+      "path": "current-cycle-baseline-inputs-v1/band2-unweighted-V-and-blank-counts.npz",
+      "bytes": 1892488,
+      "sha256": "1e3d3961a130acb3ac254e39b45f74f741873b56293a246711a3a686624c906f",
+      "source": "provenance/counts.npz",
+      "archive_source": null
+    },
+    {
+      "role": "count_observation_provenance",
+      "path": "current-cycle-baseline-inputs-v1/band2-native-count-observation-request.json",
+      "bytes": 18998,
+      "sha256": "fd56e5b79dfca0798120639b940cdf5e8c6bbe1c0ad00e4e6efa55e6c8d45ea4",
+      "source": "provenance/request.json",
+      "archive_source": null
+    },
+    {
+      "role": "count_and_charge_arithmetic_controls",
+      "path": "current-cycle-baseline-inputs-v1/band2-native-count-observation-result.json",
+      "bytes": 1627,
+      "sha256": "3131806e7dfbade92dfe7f1b71c39ebd8dae1c6ffdb7b5e6d788133ffdb63ebc",
+      "source": "provenance/result.json",
+      "archive_source": null
+    }
+  ],
+  "angular_representation": "Mean physical angle of active pixels in each 2-degree group; no event-value fitting",
+  "aggregation": "Exact sum of each 20 adjacent native d bins; terminal 10-bin cell retained",
+  "vanadium_assumptions": {
+    "radius_cm": 0.3175,
+    "height_cm": 7.0,
+    "density_g_cm3": 6.11,
+    "atom_mass_da": 50.9415,
+    "incoherent_b": 5.08,
+    "beam_width_cm": 1.0,
+    "beam_height_cm": 4.0,
+    "independently_verified": false
+  },
+  "experimental_accuracy_certified": false,
+  "assets": [
+    {
+      "name": "counts.npz",
+      "bytes": 43842,
+      "sha256": "cc8f8b680abc49bb229fb2a59e9fc3a27b8b07c03165d0dbe8de6184befa29b7"
+    },
+    {
+      "name": "PG3_PAC_d63561_2026-08-4.h5",
+      "bytes": 385321,
+      "sha256": "cc75eb0cfed744c78d5d0c7a3d596a100cb118b91b46dab416fe2a3f1a0e7a31"
+    },
+    {
+      "name": "PG3_char_2026_8-HighRes_PAC.txt",
+      "bytes": 572,
+      "sha256": "bce8bfebb0497f6cc79df786b358b420a8bf85916acd4b8321c2c70c735b8f43"
+    },
+    {
+      "name": "PG3_char_2026_8_PAC_limit.txt",
+      "bytes": 1904,
+      "sha256": "38de592778ec7ffa989864ef5bdddd54eec9c6f2455e99e62fb244edb5e55e41"
+    },
+    {
+      "name": "can-reference.json",
+      "bytes": 18008,
+      "sha256": "09efbf23528b490bc68deb69fff1e201e43d6d055aed6fd5a3ac39b0ec997b87"
+    },
+    {
+      "name": "reduction.npz",
+      "bytes": 176251,
+      "sha256": "b6e87c585614d8dafb650d015a9cdc8a905ff7817ec967a9e25e9d2e5cd2605f"
+    },
+    {
+      "name": "terminal-reference.json",
+      "bytes": 4009,
+      "sha256": "19e9ec678200ad4c894015e75e4be736cc1599365de74e2e1088a65aae6b7e05"
+    },
+    {
+      "name": "standard-calibration.npz",
+      "bytes": 24574,
+      "sha256": "ae229db00283fe7bc5834064e29af0fcc812bbcb1c2b272df5d6253aca095f96"
+    },
+    {
+      "name": "standard-calibration.json",
+      "bytes": 3431,
+      "sha256": "4818f9894bd269ece28aa4b4566d49202ff739dbb4c3fed82dffdf4705bd70fa"
+    }
+  ],
+  "can_reference": {
+    "run": 63570,
+    "container": "PAC06",
+    "charge_uah": 4124.913502030556,
+    "observed_counts": 29887204,
+    "source_raw_sha256": "d3d805bf50f22c20bea2692f1552457679dc1b79eb735735584e2f8f8beabf90",
+    "source_count_array_sha256": "2cea9a7085414547161a3d47dfca8f22bac0e7483f19448369e145bacdc43336",
+    "source_receipt_sha256": "75f275e6a64541138c596bd36253bc60d8517da645045fc974356ffe680508b1",
+    "count_extraction": "Current PAC mask/calibration, pulse/TOF/prompt/band filters and native d grid; local unweighted event histograms.",
+    "native_compression_applied": false,
+    "identical_facility_reduction_claimed": false,
+    "sample_shielding_of_can_background_modelled": false,
+    "physical_container_metrology_verified": false
+  },
+  "terminal_reduction": {
+    "scale_data": 100.0,
+    "source": "terminal-reference.json",
+    "native_replay_relative_l2": {
+      "y": 0.0,
+      "e": 0.0
+    },
+    "native_grid_replay_passed": true,
+    "no_sample_pattern_packaged": true,
+    "experimental_accuracy_certified": false
+  },
+  "standard_calibration": {
+    "id": "silicon_63584",
+    "run": 63584,
+    "standard_assumptions": {
+      "mass_g": 0.95,
+      "radius_cm": 0.295,
+      "packing_fraction": 0.3730165664701342,
+      "beam_width_cm": 1.0,
+      "beam_height_cm": 4.0,
+      "inner_radius_cm": 0.0,
+      "wall_thickness_cm": 0.0
+    },
+    "physical_mass_and_fill_independently_verified": false,
+    "reference_regions": 31,
+    "original_model_only_peak_regions": 12,
+    "standard_charge_uah": 3463.626379894444,
+    "can_charge_uah": 4124.913502030556,
+    "reference_denominator_cv": 0.00040533327085161313,
+    "mean_gain": 1.1694639603310644,
+    "calibration_role": "Si63584, previously opened development, now explicit scale calibration",
+    "prediction": "S * A_sample*s/(a_standard*s) plus shared background. Positive exact nonlinear sampling; first-order V-ratio moments with exact S/B and Dirichlet moments.",
+    "experimental_accuracy_certified": false,
+    "source": "standard-calibration.json"
+  },
+  "public_metadata_provenance": {
+    "schema": "radar-public-calibration-metadata/v1",
+    "original_metadata_sha256": "825e8074b60a71e4d4ca7caf9ecd83d94d9a833864f3ebd13a27468efea5c8d7",
+    "transformation": "Local paths and transport/session details removed; source content hashes and calibration values retained."
+  }
+}

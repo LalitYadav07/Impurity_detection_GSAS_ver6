@@ -1,0 +1,5706 @@
+{
+  "schema": "radar-symmetry-catalog/v1",
+  "parent_setting_sha256": "cc8248f388c5b7ee9cc0bc83c89f2f9b557ef8dfd99a3b1462ef47768836ebd8",
+  "k": [
+    "0",
+    "0",
+    "0"
+  ],
+  "candidates": [
+    {
+      "magnetic_space_group": "P63/m'c'm'",
+      "bns_number": "193.261",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:abe1c8cec04ec42f8c21",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63/mc'm'",
+      "bns_number": "193.260",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f6eb32ffd27fe619f538",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'/m'cm'",
+      "bns_number": "193.259",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:00af4ac05aa4580250fa",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'/m'c'm",
+      "bns_number": "193.258",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:606e6fbeb4fb8dab415e",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'/mcm'",
+      "bns_number": "193.257",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:86c3f04a3fde74f0804f",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'/mc'm",
+      "bns_number": "193.256",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ba6898c37a3c3e10e891",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63/m'cm",
+      "bns_number": "193.255",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:df462f988cdb919f5c23",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63/mcm",
+      "bns_number": "193.253",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e3109abd65ebdd38876a",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-62'm'",
+      "bns_number": "189.225",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a0ed85d7d0570b46dff9",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6'2m'",
+      "bns_number": "189.224",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ca5980e4e00e9de8e966",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6'2'm",
+      "bns_number": "189.223",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:d8963662deecb0bee6ed",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P-62m",
+      "bns_number": "189.221",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3049acb870e655140aff",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6c'2'",
+      "bns_number": "188.219",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:5f14df5708ce79e58764",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6'c2'",
+      "bns_number": "188.218",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:d3e3a0809ef4aa5031b8",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6'c'2",
+      "bns_number": "188.217",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:9226cb5ec2dcbe56c48b",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6c2",
+      "bns_number": "188.215",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:216e0a506fc5fbea6065",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63c'm'",
+      "bns_number": "185.201",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:39ced57ae2f25124da76",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'cm'",
+      "bns_number": "185.200",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b4943049355628e2ddc5",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'c'm",
+      "bns_number": "185.199",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3fd833d395e615d91da1",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63cm",
+      "bns_number": "185.197",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:047723ba96d3d67b33d0",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P632'2'",
+      "bns_number": "182.183",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:d449dd25d16380822af6",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'22'",
+      "bns_number": "182.182",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:6f1f373ef801618bf29a",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'2'2",
+      "bns_number": "182.181",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:53e0a43719667d7da7d4",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P6322",
+      "bns_number": "182.179",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c36b22a3731574256170",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'/m'",
+      "bns_number": "176.147",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e05dc845b4d4feecf9a4",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63/m'",
+      "bns_number": "176.146",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:6f0d8ceeb0c159ddfb03",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'/m",
+      "bns_number": "176.145",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:1cc0a79571e7710f7fc4",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63/m",
+      "bns_number": "176.143",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3327df126b11e74ff822",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6'",
+      "bns_number": "174.135",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:6ba9b2daf16d8539af27",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P-6",
+      "bns_number": "174.133",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b00cc3fa1b125dfb21a5",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P63'",
+      "bns_number": "173.131",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:5c9157ffe6ee09779f4d",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P63",
+      "bns_number": "173.129",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:44f7dc914ccd6bf90d96",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3c'1",
+      "bns_number": "165.95",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:9fd992f27bd78bfa40df",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3'c'1",
+      "bns_number": "165.94",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ea8279ca3428bbb31fa1",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3'c1",
+      "bns_number": "165.93",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c62a3db8377a6f10a424",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3c1",
+      "bns_number": "165.91",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:af699bed68d35e291d3c",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-31m'",
+      "bns_number": "162.77",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b831fdf7d30d8a18505c",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3'1m'",
+      "bns_number": "162.76",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:784191c76d7a0e34e40a",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3'1m",
+      "bns_number": "162.75",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:65aebd3f4c81aa742b5d",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-31m",
+      "bns_number": "162.73",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:823943e8189371edbfeb",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P3c'1",
+      "bns_number": "158.59",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c6bbd88507de5549429c",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P3c1",
+      "bns_number": "158.57",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:eac282cf598bd5f47f20",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P31m'",
+      "bns_number": "157.55",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c729c4e51fdd4d084159",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P31m",
+      "bns_number": "157.53",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:eb6a735e647a4746c771",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P32'1",
+      "bns_number": "150.27",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:706d0b0067f105b25e2f",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P321",
+      "bns_number": "150.25",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:936281ad329519ae5cd9",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P312'",
+      "bns_number": "149.23",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:aafc4ac37dfb108716b3",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P312",
+      "bns_number": "149.21",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e9dde13c68eae07a81cf",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3'",
+      "bns_number": "147.15",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b646b83296ce2b9f8a88",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-3",
+      "bns_number": "147.13",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:61ea38e53742742e22b8",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P3",
+      "bns_number": "143.1",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b9f89188536a6bd6d8ab",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'm'",
+      "bns_number": "63.465",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a7e0bdb6a3677bfec0b7",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'm'",
+      "bns_number": "63.465",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:632133d200138269e085",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'm'",
+      "bns_number": "63.465",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:377aa51f9a3e7a3aa2aa",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'cm'",
+      "bns_number": "63.464",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b7a87e94639720c6ac15",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'cm'",
+      "bns_number": "63.464",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:d497e9e5648ce0320275",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'cm'",
+      "bns_number": "63.464",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:59f1eca374e717c1d2c9",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'm'",
+      "bns_number": "63.463",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:08de78f468aabcf95c9a",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'm'",
+      "bns_number": "63.463",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:02dc3ee5386c3ea4a1a2",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'm'",
+      "bns_number": "63.463",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3187030e1fff256b3cf6",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'm",
+      "bns_number": "63.462",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a55434d3d0815373ee80",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'm",
+      "bns_number": "63.462",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:2f7c4134350e72f37c6e",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'm",
+      "bns_number": "63.462",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3d417b29549baac444e7",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmcm'",
+      "bns_number": "63.461",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:590ebe816909ecf9d99c",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmcm'",
+      "bns_number": "63.461",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f08ae9503b56654aa1b9",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmcm'",
+      "bns_number": "63.461",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ca44f4de6633bf2baf5c",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'm",
+      "bns_number": "63.460",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3c28be7d37de3f43d822",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'm",
+      "bns_number": "63.460",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:de048acc71ce52a8eed3",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'm",
+      "bns_number": "63.460",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:4a74bc3c06e65bbaf758",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'cm",
+      "bns_number": "63.459",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:37a7bafe96e0f1ffa956",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'cm",
+      "bns_number": "63.459",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:45422200b7924945f85b",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'cm",
+      "bns_number": "63.459",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:d771202e621a493eeb0b",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmcm",
+      "bns_number": "63.457",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:56f11b7fb291ae17a5c7",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmcm",
+      "bns_number": "63.457",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:1f83bbd14daf4472bb8c",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmcm",
+      "bns_number": "63.457",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a687ecee6140abfc3208",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'a'2",
+      "bns_number": "40.207",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b0a5d0a0532b6e3ca42e",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'a'2",
+      "bns_number": "40.207",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:fb76f7a1214a466b5265",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -1.0,
+          -2.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'a'2",
+      "bns_number": "40.207",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:019c67baa81bc9c45706",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Ama'2'",
+      "bns_number": "40.206",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ec8e5f01ac4c009582da",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Ama'2'",
+      "bns_number": "40.206",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:703d88be65d3b0a90682",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -1.0,
+          -2.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Ama'2'",
+      "bns_number": "40.206",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:017bf2a8c83b8a75735c",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'a2'",
+      "bns_number": "40.205",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:be7f35a239a47590a4ff",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'a2'",
+      "bns_number": "40.205",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a5b96c353b6720983b1c",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'a2'",
+      "bns_number": "40.205",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:0b8e2f81baeedd5a95cc",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -1.0,
+          -2.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Ama2",
+      "bns_number": "40.203",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:2b9ffcad3c71dc5b3a99",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Ama2",
+      "bns_number": "40.203",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:5ed2c7f7d7c820fabf29",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -1.0,
+          -2.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Ama2",
+      "bns_number": "40.203",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ac60e6d9047fd6733009",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'm'2",
+      "bns_number": "38.191",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:54755341e1c75cab2b3c",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'm'2",
+      "bns_number": "38.191",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e16ac859c148332b7917",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'm'2",
+      "bns_number": "38.191",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:2a0e2bcb9026bde04990",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Amm'2'",
+      "bns_number": "38.190",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:14d22085c3fe568a1a17",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Amm'2'",
+      "bns_number": "38.190",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:73dc023fc260a7d64641",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Amm'2'",
+      "bns_number": "38.190",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:06607474d5c3823fa9e2",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'm2'",
+      "bns_number": "38.189",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:2316cfbb89f5e3fdf3fb",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'm2'",
+      "bns_number": "38.189",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ec876d15389e143a30a3",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Am'm2'",
+      "bns_number": "38.189",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:8470dcc5b4c8a3cfab90",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Amm2",
+      "bns_number": "38.187",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:70f4e8fd12fc3f21ef21",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Amm2",
+      "bns_number": "38.187",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f93432e70b18a1d1375f",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Amm2",
+      "bns_number": "38.187",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:264b9601232c6cc08737",
+      "transformation_matrix": [
+        [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'21",
+      "bns_number": "36.176",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:01488c73c18f0d9cf4fb",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'21",
+      "bns_number": "36.176",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c251af79b39ca48b98f6",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c'21",
+      "bns_number": "36.176",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b104d5096069be003acf",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'21'",
+      "bns_number": "36.175",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:08fd5c805b492eeab124",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'21'",
+      "bns_number": "36.175",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:9e94a36c28a9c00acd5d",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc'21'",
+      "bns_number": "36.175",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:bfd1c86c9d9657cf2e54",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c21'",
+      "bns_number": "36.174",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:d7a4e82c36d8f51a4aee",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c21'",
+      "bns_number": "36.174",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:17ccb64bfff84ae0ae08",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'c21'",
+      "bns_number": "36.174",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ac74d2c9502b15c0cf56",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc21",
+      "bns_number": "36.172",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:32e2ca36a747b013e32e",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc21",
+      "bns_number": "36.172",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:12623b6d5499c723c400",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cmc21",
+      "bns_number": "36.172",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:850215ddefe51d067a24",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C22'21'",
+      "bns_number": "20.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:0bd1835bc60cf4e70497",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C22'21'",
+      "bns_number": "20.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f948a32ea51899509234",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C22'21'",
+      "bns_number": "20.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c6ba98942031216fd482",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C22'21'",
+      "bns_number": "20.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e1aeddcd96c28ff3225a",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C22'21'",
+      "bns_number": "20.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:31a6ab6d16056cef8480",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C22'21'",
+      "bns_number": "20.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:bb45ec79414477b7079d",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'2'21",
+      "bns_number": "20.33",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f05eb0c6f570f647c764",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'2'21",
+      "bns_number": "20.33",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:97d79a00ed15b36492e9",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'2'21",
+      "bns_number": "20.33",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:2d0d746521028271050e",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2221",
+      "bns_number": "20.31",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:8c88c2860e5a77831ea7",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2221",
+      "bns_number": "20.31",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:46fed2b48b1bb8b136fa",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2221",
+      "bns_number": "20.31",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:cbebc5ca8737788834a3",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/c'",
+      "bns_number": "15.89",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:9db5ac604771fc686203",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/c'",
+      "bns_number": "15.89",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:56972c322931f0184518",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/c'",
+      "bns_number": "15.89",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:63fd23e91a332a8f778c",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/c'",
+      "bns_number": "15.88",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b9a2a4bf6f479acda346",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/c'",
+      "bns_number": "15.88",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e88bd18aad6622f34634",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/c'",
+      "bns_number": "15.88",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b7a1487d01c56c46a2a7",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/c",
+      "bns_number": "15.87",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c6a8b4f5561a219c0edb",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/c",
+      "bns_number": "15.87",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:1ec1d5a82b36b80ac1d1",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/c",
+      "bns_number": "15.87",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:de58cdbb86278dfae619",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/c",
+      "bns_number": "15.85",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:338bce9ea73c5b173a55",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/c",
+      "bns_number": "15.85",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b1b5346bc177b3beda2c",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/c",
+      "bns_number": "15.85",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:9a09d6cc6a79dcd2dfdd",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/m'",
+      "bns_number": "12.62",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:0001a277eb1914cdbb25",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/m'",
+      "bns_number": "12.62",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:dad499047a4e43fed6a8",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/m'",
+      "bns_number": "12.62",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a3fb58317d82cdb63d28",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/m'",
+      "bns_number": "12.61",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f97bfc75b038f556b594",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/m'",
+      "bns_number": "12.61",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e21c412fc11025d6ef70",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/m'",
+      "bns_number": "12.61",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:355c094bea9681bd21ca",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/m",
+      "bns_number": "12.60",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:50d4893d1c7f407c9fd8",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/m",
+      "bns_number": "12.60",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:58f4d90227b340120713",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'/m",
+      "bns_number": "12.60",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3941910709c02912bc9b",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/m",
+      "bns_number": "12.58",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:500e1a502379a7564fbb",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/m",
+      "bns_number": "12.58",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:86d870be87f9dc092335",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2/m",
+      "bns_number": "12.58",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:147f8a9838ce9bea7652",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P21'/m'",
+      "bns_number": "11.54",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:30eae25fdbd0614ef829",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P21/m'",
+      "bns_number": "11.53",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:8ff7130fdd4d048f6610",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P21'/m",
+      "bns_number": "11.52",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:9cce6e264bac0cff545c",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P21/m",
+      "bns_number": "11.50",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f8c8ceaca232a98aa5d8",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cc'",
+      "bns_number": "9.39",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:f2e58642e93154569a71",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cc'",
+      "bns_number": "9.39",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3cbdfad6f96a681eeb23",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cc'",
+      "bns_number": "9.39",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:14efd57eac5bffc72336",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cc",
+      "bns_number": "9.37",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:4407077e70a347065fbe",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cc",
+      "bns_number": "9.37",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:cfe0054429e936220a5b",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cc",
+      "bns_number": "9.37",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:e28e5e4414f2fb92177a",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'",
+      "bns_number": "8.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a1438c724fe29a9a4faf",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'",
+      "bns_number": "8.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:ebc1681eb50e183b042a",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm'",
+      "bns_number": "8.34",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:8fea824e3e48197fbebd",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm",
+      "bns_number": "8.32",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b02e0cf45bc8116b5c48",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm",
+      "bns_number": "8.32",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:deec601b4746dab7ba27",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Cm",
+      "bns_number": "8.32",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:55abce50eefb1cf73a72",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "Pm'",
+      "bns_number": "6.20",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:fb2887a9163d3d85f5b8",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "Pm",
+      "bns_number": "6.18",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:33403043ddd0bb167451",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'",
+      "bns_number": "5.15",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:2893b3722b12e441f34b",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'",
+      "bns_number": "5.15",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:bcfe56f0adfeb1ca7843",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'",
+      "bns_number": "5.15",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:35982ca8ea6e603134c1",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'",
+      "bns_number": "5.15",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b615a6cb335fb97b75cf",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'",
+      "bns_number": "5.15",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:b9ca9057628637572243",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2'",
+      "bns_number": "5.15",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:8787c456620027cc7cc3",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2",
+      "bns_number": "5.13",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c4f5732c37b3eb567b15",
+      "transformation_matrix": [
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2",
+      "bns_number": "5.13",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:3a35d3bc0d5d58def1ec",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2",
+      "bns_number": "5.13",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:258d727fdbc02945cb80",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "C2",
+      "bns_number": "5.13",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:45139de594b1066718e1",
+      "transformation_matrix": [
+        [
+          2.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2",
+      "bns_number": "5.13",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:2de39b825fb76f79ed89",
+      "transformation_matrix": [
+        [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "C2",
+      "bns_number": "5.13",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:10bf6ca994fc4749bc44",
+      "transformation_matrix": [
+        [
+          1.0,
+          2.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.25
+      ]
+    },
+    {
+      "magnetic_space_group": "P21'",
+      "bns_number": "4.9",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:a0749715af953624a680",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P21",
+      "bns_number": "4.7",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:cd5f405a2db3842e3bd3",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-1'",
+      "bns_number": "2.6",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:c48b334d55e47f607258",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-1",
+      "bns_number": "2.4",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:55b51bd8a0f6bc0dd9ef",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P1",
+      "bns_number": "1.1",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:fc661a325414888786b7",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "coverage": {
+    "discovery_complete": true,
+    "constructed_count": 182,
+    "scope": "single declared propagation vector; selected star policy"
+  },
+  "provenance": {
+    "service": "Bilbao kSUBGROUPSMAG_GSAS",
+    "output_sha256": "ad6efd0b8a087b082a4a9cf0bec9c134d00c9e56720d5f39e3157e11b85bc32f",
+    "request": {
+      "tool": "kSUBGROUPSMAG_GSAS",
+      "inputs": {
+        "generators": [
+          "x,y,z",
+          "x-y,x,z+1/2",
+          "-y,x-y,z",
+          "-x,-y,z+1/2",
+          "-x+y,-x,z",
+          "y,-x+y,z+1/2",
+          "-x+y,y,z+1/2",
+          "-x,-x+y,z",
+          "-y,-x,z+1/2",
+          "x-y,-y,z",
+          "x,x-y,z+1/2",
+          "y,x,z",
+          "-x,-y,-z",
+          "-x+y,-x,-z+1/2",
+          "y,-x+y,-z",
+          "x,y,-z+1/2",
+          "x-y,x,-z",
+          "-y,x-y,-z+1/2",
+          "x-y,-y,-z+1/2",
+          "x,x-y,-z",
+          "y,x,-z+1/2",
+          "-x+y,y,-z",
+          "-x,-x+y,-z+1/2",
+          "-y,-x,-z"
+        ],
+        "starmagnetica": "no",
+        "celtodas": "yes",
+        "landau": "no",
+        "limite": "spgroup",
+        "pointgroup": "1",
+        "crystalsystem": "1",
+        "centrosymmetry": "0",
+        "polarity": "0",
+        "listado": "lista",
+        "sub": "1.1",
+        "km1x": "0",
+        "km1y": "0",
+        "km1z": "0"
+      }
+    }
+  }
+}

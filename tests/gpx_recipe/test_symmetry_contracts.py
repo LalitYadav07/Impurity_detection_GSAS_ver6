@@ -31,6 +31,20 @@ def test_approved_job_moves_without_the_original_source_directory(tmp_path,monke
     assert str(tmp_path) not in (moved/'worker.py').read_text()
 
 
+def test_installed_native_bundle_has_identical_identity_without_copied_executable_code(tmp_path,monkeypatch):
+    from gpx_recipe.symmetry.compiler import compile_native_bundle
+    p=make_protocol(tmp_path/'input')
+    monkeypatch.setattr('gpx_recipe.symmetry.compiler.package_signature',lambda:'c'*64)
+    standalone=compile_bundle(p,tmp_path/'input',tmp_path/'standalone',candidate_id='mag:fixture',seed_id='x',approved_hash=digest(p))
+    native=compile_native_bundle(p,tmp_path/'input',tmp_path/'native',candidate_id='mag:fixture',seed_id='x',approved_hash=digest(p))
+    assert native==standalone
+    assert {f.name for f in (tmp_path/'native').iterdir()}=={'job.json','source.gpx','catalog.json'}
+    assert (tmp_path/'standalone/worker.py').is_file() and (tmp_path/'standalone/runtime').is_dir()
+    verify_inputs(p,tmp_path/'native')
+    (tmp_path/'native/source.gpx').write_bytes(b'changed')
+    with pytest.raises(ValueError,match='sealed input'):verify_inputs(p,tmp_path/'native')
+
+
 def test_candidate_id_does_not_authorize_a_different_embedding(tmp_path,monkeypatch):
     p=make_protocol(tmp_path/'input');p['candidates'][0]['origin_shift']=[.25,0.,0.]
     with pytest.raises(ValueError,match='differs'):verify_inputs(p,tmp_path/'input')

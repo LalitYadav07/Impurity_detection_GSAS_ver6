@@ -15,6 +15,7 @@ from pathlib import Path
 from contextlib import contextmanager
 import numpy as np
 from .profiled_magnetic import ProfiledMagneticObjective
+from ..live.native_profile import constraint_state_signature
 
 _active=None
 
@@ -40,7 +41,9 @@ class NativeMagneticStartingPoint:
         from GSASII import GSASIIstrMain as main,GSASIIstrIO as stio
         from GSASII import GSASIIstrMath as math,GSASIImapvars as maps
         from GSASII import GSASIImpsubs as mp,GSASIIlattice as lattice
-        self.math,self.maps=math,maps
+        self.math,self.maps,self.lattice=math,maps,lattice
+        from ..live.native_peak_memo import shared_native_peak_memo
+        self.peak_memo=shared_native_peak_memo()
         self.deadline=deadline
         _active=self
         mp.InitMP();main.ptx.pyqlmninit();maps.InitVars();log=io.StringIO()
@@ -76,6 +79,7 @@ class NativeMagneticStartingPoint:
         error,warning,_,_=maps.GenerateConstraints(self.vary,constraints,fixed,self.parms)
         if error:raise ValueError(error)
         maps.normParms(self.parms);maps.Map2Dict(self.parms,self.vary);maps.Dict2Map(self.parms)
+        self._constraint_signature=constraint_state_signature(maps)
         self.initial=np.asarray([self.parms[key] for key in self.vary],float)
         self.scale_index=self.vary.index(self.scale_name) if self.scale_name in self.vary else None
         if bool(self.scale_index is not None)!=bool(refine_scale):
@@ -98,47 +102,19 @@ class NativeMagneticStartingPoint:
         if len(moment_names)>24:raise ValueError('The declared independent magnetic basis exceeds this bounded adapter')
         self.args=([histograms,phases,restraints,rigid],self.parms,histdict,self.vary,controls,pawley,None)
         self.phases=phases;self.calls=0;self.derivative_calls=0;self.residual_mask=None
-        self.atoms=[];unit_matrices=[]
-        for name,phase in phases.items():
-            general=phase['General']
-            if general['Type']!='magnetic':continue
-            if general.get('Modulated'):raise ValueError('Modulated magnetic profiles need a different adapter')
-            cell=np.asarray(general['Cell'][1:7],float)
-            unit=lattice.cell2AB(cell)[0]/cell[:3][None,:]
-            for index,atom in enumerate(phase['Atoms']):
-                keys=[f"{phase['pId']}::AM{axis}:{index}" for axis in 'xyz']
-                self.atoms.append((name,index,keys));unit_matrices.append(unit)
-        if not self.atoms:raise ValueError('The source has no native magnetic atoms')
-        zero=self.initial.copy();zero[self.moment_indices]=0.
-        self._map(zero)
-        zero_moments=self._all_moments()
-        if not np.allclose(zero_moments,0.,rtol=0,atol=1e-10):
-            raise ValueError('Fixed nonzero magnetic moments are outside the homogeneous starting-point adapter')
-        fixed_keys=[key for key in self.parms if not any(key in row[2] for row in self.atoms) and key not in nuisance and key not in moment_names]
-        fixed_values={key:self.parms[key] for key in fixed_keys}
-        matrix=[]
-        for j in range(len(self.moment_indices)):
-            vector=zero.copy();vector[self.moment_indices[j]]=1.;self._map(vector)
-            if any(not self._same(self.parms[key],value) for key,value in fixed_values.items()):
-                raise ValueError('An independent moment variable also changes a fixed parameter')
-            matrix.append(self._all_moments())
-        self.component_maps=np.stack(matrix,axis=-1)
-        self.cartesian_maps=np.einsum('aij,ajk->aik',np.asarray(unit_matrices),self.component_maps)
-        self._map(self.initial)
-        predicted=np.einsum('aij,j->ai',self.component_maps,self.initial[self.moment_indices])
-        if not np.allclose(predicted,self._all_moments(),rtol=1e-9,atol=1e-10):
-            raise ValueError('The native magnetic constraints are not the checked homogeneous linear map')
+        from ..live.moment_basis import derive
+        basis=derive(phases,self.parms,self.vary,self.initial,self.moment_indices,
+            map_values=self._map,lattice=lattice,nuisance=nuisance)
+        self.moment_basis=basis
+        self.atoms=list(basis.atoms);self.component_maps=basis.components;self.cartesian_maps=basis.cartesian
         self.maximum_moment=maximum_moment
         self.fixed_scale=None if refine_scale else self.source_scale
-
-    @staticmethod
-    def _same(a,b):
-        try:return bool(np.allclose(a,b,rtol=0,atol=1e-10,equal_nan=True))
-        except (TypeError,ValueError):return a==b
 
     def _check(self):
         if self.deadline is not None and time.monotonic()>self.deadline:raise TimeoutError('The declared profiled optimizer time budget expired')
         if _active is not self:raise RuntimeError('The native process-global constraint map was replaced')
+        if constraint_state_signature(self.maps)!=self._constraint_signature:
+            raise RuntimeError('The native process-global constraint maps changed outside this adapter')
 
     def _map(self,vector):
         self._check();self.parms.update(zip(self.vary,vector));self.maps.Dict2Map(self.parms)
@@ -151,7 +127,8 @@ class NativeMagneticStartingPoint:
         vector[self.background_indices]=background
         if self.scale_index is not None:vector[self.scale_index]=scale
         self.parms[self.scale_name]=scale
-        result=np.ma.asarray(self.math.errRefine(vector,*self.args),dtype=float)
+        with self.peak_memo.evaluation(self.math):
+            result=np.ma.asarray(self.math.errRefine(vector,*self.args),dtype=float)
         mask=np.ma.getmaskarray(result)
         if self.residual_mask is None:self.residual_mask=mask.copy()
         elif not np.array_equal(mask,self.residual_mask):
@@ -207,7 +184,9 @@ class NativeMagneticStartingPoint:
         finally:
             fcntl.flock(stream,fcntl.LOCK_UN);stream.close()
 
-    def build(self,*,heldouts=4,cache_path=None,cache_identity=None):
+    def build(self,*,heldouts=4,cache_path=None,cache_identity=None,factor_cache=None):
+        if type(heldouts) is not int or not 1<=heldouts<=64:
+            raise ValueError('One to sixty-four independent native probes are required')
         if cache_path is not None and cache_identity:
             # Immutable, checked cache readers may validate native holdouts
             # concurrently. Only a rebuild needs the exclusive writer lock.
@@ -215,15 +194,16 @@ class NativeMagneticStartingPoint:
                 with self._cache_lock(cache_path,shared=True):
                     try:
                         return self._build(heldouts=heldouts,cache_path=cache_path,
-                            cache_identity=cache_identity,cache_only=True)
+                            cache_identity=cache_identity,cache_only=True,factor_cache=factor_cache)
                     except _CacheMiss:
                         pass
             with self._cache_lock(cache_path):
-                return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity)
-        return self._build(heldouts=heldouts)
+                return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity,
+                    factor_cache=factor_cache)
+        return self._build(heldouts=heldouts,factor_cache=factor_cache)
 
     def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False,
-               use_derivative=None,compiler_note='',cache_only=False):
+               use_derivative=None,compiler_note='',cache_only=False,factor_cache=None,background_basis=True):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
@@ -249,9 +229,34 @@ class NativeMagneticStartingPoint:
         if cached is None and cache_only:
             raise _CacheMiss
         compilation=None;compiler='transported_cache' if cached is not None else 'native_profiles'
+        if cached is None and use_derivative is None:
+            try:
+                from ..live.native_reflection import compile_reflection_quadratic
+                self.residual(anchor,1.,zero_bg)
+                physical,proof=compile_reflection_quadratic(math=self.math,lattice=self.lattice,
+                    histogram=self.histogram,phases=self.phases,histdict=self.args[2],
+                    parameters=self.parms,controls=self.args[4],basis=self.moment_basis,
+                    check=self._check,histogram_name=self.histogram_name,factor_cache=factor_cache)
+                begin,end=proof['fit_slice'];weights=np.asarray(np.ma.getdata(self.histogram['Data'][2]),float)[begin:end]
+                factor=float(self.args[4].get(f':{self.histogram_id}:wtFactor',1.))
+                if (self.residual_mask is None or self.residual_mask.shape!=(len(physical),)
+                        or not np.isfinite(factor) or factor<=0
+                        or not np.isfinite(weights[~self.residual_mask]).all()
+                        or np.any(weights[~self.residual_mask]<=0)):
+                    raise ValueError('Native reflection weights/masks differ from the measured residual')
+                quadratic=physical[~self.residual_mask]*np.sqrt(weights[~self.residual_mask]*factor)[:,None,None]
+                f0=self.residual(anchor,1.,zero_bg)-offset
+                nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
+                linear=self.magnetic_jacobian(anchor,1.,zero_bg).T
+                linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
+                if not np.isfinite(linear_error) or linear_error>1e-8:
+                    raise ValueError('Native reflection response fails the independent derivative check')
+                compiler='native_reflection_amplitudes';compilation=proof
+            except (ValueError,FloatingPointError,np.linalg.LinAlgError) as exc:
+                compiler_note=str(exc)
         # Derivative cost is amortized only by larger bases. Measured cold
         # controls favor forward evaluations for the smaller spin spaces.
-        if cached is None and (use_derivative is True or (use_derivative is None and dimension>=12)):
+        if cached is None and compilation is None and (use_derivative is True or (use_derivative is None and dimension>=12)):
             try:
                 from ..live.native_kernel_policy import compile_native_magnetic_kernel
                 compiled=compile_native_magnetic_kernel(_CompilerObjective(self,zero_bg),anchor,
@@ -278,9 +283,29 @@ class NativeMagneticStartingPoint:
                     quadratic[:,i,j]=quadratic[:,j,i]=(value-plus[i]-plus[j]+f0)/2
             nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
             linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
+        background_proof=dict(method='transported cache' if cached is not None else 'native full powder',columns=nb)
         if cached is None:
-            columns=[self.residual(anchor,0.,np.eye(nb)[i])-offset for i in range(nb)]
-            background=np.column_stack(columns) if columns else np.empty((len(f0),0))
+            background=None
+            if nb and background_basis:
+                from ..live.native_background import compile_columns,BackgroundCompilerUnavailable
+                try:
+                    lower,upper=self.args[4][f':{self.histogram_id}:Limits']
+                    x=self.histogram['Data'][0]
+                    sl=slice(int(np.searchsorted(x,lower)),int(np.searchsorted(x,upper))+1)
+                    columns,background_proof=compile_columns(math=self.math,histogram=self.histogram,
+                        parameters=self.parms,controls=self.args[4],axis=x[sl],
+                        names=[self.vary[i] for i in self.background_indices])
+                    weights=np.asarray(np.ma.getdata(self.histogram['Data'][2]),float)[sl]
+                    factor=float(self.args[4][f':{self.histogram_id}:wtFactor'])
+                    if (self.residual_mask is None or columns.shape[0]!=len(self.residual_mask)
+                            or not np.isfinite(factor) or factor<=0):
+                        raise BackgroundCompilerUnavailable('Native background residual domain changed')
+                    background=columns[~self.residual_mask]*np.sqrt(weights[~self.residual_mask]*factor)[:,None]
+                except BackgroundCompilerUnavailable as error:
+                    background_proof=dict(method='native full powder',columns=nb,fallback_reason=str(error))
+            if background is None:
+                columns=[self.residual(anchor,0.,np.eye(nb)[i])-offset for i in range(nb)]
+                background=np.column_stack(columns) if columns else np.empty((len(f0),0))
         else:
             nuclear,quadratic,background=(cached[k] for k in ('nuclear','quadratic','background'))
             linear_error=float(cached['linear_error'])
@@ -288,8 +313,16 @@ class NativeMagneticStartingPoint:
         model=ProfiledMagneticObjective(offset=offset,nuclear=nuclear,quadratic=quadratic,
             background=background,moment_maps=self.cartesian_maps,maximum_moment=self.maximum_moment,
             normalization=normalization,fixed_scale=self.fixed_scale)
+        from . import profiled_qualification
+        qualification_key=profiled_qualification.identity(self,model)
+        owned_origin=profiled_qualification.prior(qualification_key,1) if cached is not None else None
+        prior_checks=owned_origin if owned_origin is not None and len(owned_origin)>=heldouts else None
         rng=np.random.default_rng(18019);errors=[]
-        for _ in range(heldouts):
+        # The same complete coefficient model has already passed all probes
+        # in this process. Keep a fresh nonzero native context probe rather
+        # than repeat identical compilation work for every representative.
+        current_checks=1 if prior_checks is not None else heldouts
+        for _ in range(current_checks):
             moments=rng.normal(size=dimension)
             maximum=np.max(np.linalg.norm(self.cartesian_maps@moments,axis=1))
             moments*=.6*self.maximum_moment/maximum
@@ -298,19 +331,31 @@ class NativeMagneticStartingPoint:
             native=self.residual(moments,scale,bg)
             errors.append(model.heldout_error(moments,scale,bg,native))
         if not errors or max(errors+[linear_error])>1e-8:
+            profiled_qualification.forget(qualification_key)
+            if background_proof['method']=='unchanged native background function':
+                return self._build(heldouts=heldouts,cache_path=cache_path,cache_identity=cache_identity,
+                    skip_cache=True,use_derivative=use_derivative,factor_cache=factor_cache,background_basis=False,
+                    compiler_note='Native background-only compilation failed the full residual identity check; original powder columns used')
             if cached is not None:
                 if cache_only:
                     raise _CacheMiss
                 # A hint can never turn a recoverable cache mismatch into a
                 # rejected scientific model. Rebuild once from native calls.
                 return self._build(heldouts=heldouts,cache_path=cache_path,
-                                   cache_identity=cache_identity,skip_cache=True)
-            if compiler=='native_derivatives':
+                                   cache_identity=cache_identity,skip_cache=True,factor_cache=factor_cache,background_basis=background_basis)
+            if compiler in {'native_derivatives','native_reflection_amplitudes'}:
                 return self._build(heldouts=heldouts,cache_path=cache_path,
                     cache_identity=cache_identity,skip_cache=True,use_derivative=False,
-                    compiler_note='Analytic compilation failed the stricter native residual identity check')
+                    compiler_note='Accelerated compilation failed the stricter native residual identity check',
+                    factor_cache=factor_cache,background_basis=background_basis)
             raise ValueError('The native profile failed held-out quadratic identity checks: '+
                 str(dict(heldouts=errors,linear_identity_error=linear_error)))
+        # Matching a few imported-array probes does not establish that this
+        # process constructed/qualified every coefficient. Only a native
+        # compilation (or stronger checks on an already owned compilation)
+        # can create or strengthen an owned qualification entry.
+        if prior_checks is None and (cached is None or owned_origin is not None):
+            profiled_qualification.remember(qualification_key,errors)
         if cached is None and cache_path is not None and cache_identity:
             target=Path(cache_path);temporary=target.with_name(target.name+'.'+uuid.uuid4().hex)
             try:
@@ -326,9 +371,17 @@ class NativeMagneticStartingPoint:
             independent_variables=self.moment_names,magnetic_atoms=len(self.atoms),
             free_background_coefficients=nb,common_scale_free=self.fixed_scale is None,
             native_calls=self.calls,native_derivative_calls=self.derivative_calls,
+            exact_native_peak_reuse=self.peak_memo.diagnostics(),
             compiler=compiler,compiler_note=compiler_note,compiler_diagnostics=compilation,
+            background_compiler=background_proof,
             heldout_relative_errors=errors,linear_identity_error=linear_error,
+            qualification_reuse=dict(owned_process=prior_checks is not None,
+                complete_prior_native_probes=len(prior_checks or []),
+                current_native_probes=len(errors),requested_native_probes=heldouts,
+                imported_qualification_accepted=False,qualification_persisted=False,
+                unavailable_reason=getattr(self,'qualification_reuse_note','')),
             cache_hit=cached is not None,cache_identity=cache_identity,cache_note=cache_note,
+            residual_reduction=dict(model.reduction_diagnostics),
             interpolation_anchor_seed=77831,
             seconds=time.monotonic()-started,weighted_residual_points=len(offset),
             native_convergence_declared=False,covariance_supplied=False)

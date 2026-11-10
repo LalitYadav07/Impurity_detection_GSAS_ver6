@@ -8,7 +8,25 @@ import zipfile
 import pytest
 
 from gpx_recipe.symmetry.compiler import file_sha, package_signature
-from gpx_recipe.symmetry.native_protocol import validate_native_payload
+from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout,native_timeout_limit
+
+
+def test_only_offline_training_and_complete_simulation_units_have_long_deadlines():
+    assert native_timeout_limit('preparation-structural-training')==7200
+    assert validate_native_timeout('preparation-structural-training',7200)==7200
+    assert native_timeout_limit('preparation-structural-examples')==3600
+    assert validate_native_timeout('preparation-structural-examples',3600)==3600
+    for operation in ('inspect','k-portfolio','preparation-batch','structural-snapshot'):
+        assert native_timeout_limit(operation)==600
+        with pytest.raises(ValueError,match='deadline'):validate_native_timeout(operation,601)
+    with pytest.raises(ValueError,match='deadline'):
+        validate_native_timeout('preparation-structural-examples',3601)
+
+
+@pytest.mark.parametrize('value',[True,False,0,-1,7201,float('nan'),float('inf'),'7200'])
+def test_invalid_offline_training_deadlines_are_rejected(value):
+    with pytest.raises(ValueError,match='deadline'):
+        validate_native_timeout('preparation-structural-training',value)
 
 
 @pytest.mark.parametrize('moment_model', [None, 'collinear', 'symmetry_allowed'])
@@ -27,7 +45,7 @@ def test_inventory_reaches_native_worker_with_its_requested_geometry(tmp_path, m
         input_hashes={'source.gpx':file_sha(source)},dispatch_key='b'*24,timeout=120)
     path=tmp_path/'request.json';path.write_text(json.dumps(request))
     monkeypatch.setattr(module,'require_adapters',lambda:None)
-    monkeypatch.setattr(module,'scientific_environment',lambda:{'PYTHONPATH':''})
+    monkeypatch.setattr('gpx_recipe.symmetry.compiler.native_environment',lambda:{'PYTHONPATH':''})
     observed=[]
     def run(command,**kwargs):
         captured=json.loads(Path(command[-2]).read_text());observed.append(captured)

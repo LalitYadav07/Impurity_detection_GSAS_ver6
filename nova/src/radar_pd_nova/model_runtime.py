@@ -90,6 +90,7 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         self.max_active_jobs=max_active_jobs
         self._lock=threading.RLock();self._event_lock=threading.Lock();self._events=set();self._cancelled_roots=set();self._verified_jobs=set()
         self._preparation_retry_permits=set()
+        self.preparation_provider=None
         self.state_path=self.root/'model-dispatches.json'
         self.state=json.loads(self.state_path.read_text()) if self.state_path.exists() else {'assets':{},'dispatches':{}}
 
@@ -141,19 +142,24 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         return UtilityActionRecord(uid='model-'+key,tool_id=self.tool_id,name='Recovered model '+key,
             galaxy_job_id=str(job['id']),status=normalize_status(job.get('state')),outputs=self.service._job_output_ids(job))
 
+    def available_capacity(self):
+        """One bounded read of this producer's current History queue."""
+        import requests
+        response=requests.get(self.service.galaxy_url+'/api/jobs',headers=self.service._headers,
+            params={'history_id':self.service.history_id,'tool_id':self.tool_id,
+                'state':['new','waiting','queued','running','resubmitted','paused'],'limit':self.max_active_jobs},
+            timeout=30,allow_redirects=False)
+        response.raise_for_status();jobs=response.json()
+        if not isinstance(jobs,list) or len(jobs)>self.max_active_jobs:
+            raise RuntimeUnavailable('Galaxy did not report the model resource queue')
+        return self.max_active_jobs-len(jobs)
+
     def wait_capacity(self,cancel=None):
         """A bounded per-History queue; Galaxy still owns site-wide admission."""
-        import requests
         started=time.monotonic()
         while True:
             if cancel and cancel.is_set():raise RuntimeUnavailable('Model submission paused before dispatch')
-            response=requests.get(self.service.galaxy_url+'/api/jobs',headers=self.service._headers,
-                params={'history_id':self.service.history_id,'tool_id':self.tool_id,
-                    'state':['new','waiting','queued','running','resubmitted','paused'],'limit':self.max_active_jobs},timeout=30)
-            response.raise_for_status()
-            jobs=response.json()
-            if not isinstance(jobs,list):raise RuntimeUnavailable('Galaxy did not report the model resource queue')
-            if len(jobs)<self.max_active_jobs:return
+            if self.available_capacity():return
             if time.monotonic()-started>self.timeout:raise RuntimeUnavailable('Waiting for the existing model job to release its resource slot')
             if cancel:cancel.wait(self.poll_seconds)
             else:time.sleep(self.poll_seconds)
@@ -169,6 +175,10 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
 
     def packet(self,root,paths,*,source_sha256=None):
         root=Path(root).resolve()
+        from gpx_recipe.symmetry.bundle import MAX_BYTES
+        unique=set(paths)
+        if len(unique)>10000 or sum(confined(root,p).stat().st_size for p in unique)>MAX_BYTES:
+            raise ValueError('Model inputs exceed the worker packet byte/file budget')
         paths=[p for p in paths if not (source_sha256 and Path(p).suffix.lower()=='.gpx'
                                       and file_sha(confined(root,p))==source_sha256)]
         hashes={p:file_sha(confined(root,p)) for p in sorted(set(paths))}
@@ -177,6 +187,16 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             # inspection still needs a valid packet, without duplicating GPX.
             hashes={EMPTY_PACKET_NAME:EMPTY_PACKET_SHA256}
         signature=digest(hashes)
+        def produce(archive):
+            pack(root,archive,paths)
+            if not paths:
+                import zipfile
+                with zipfile.ZipFile(archive,'a',compression=zipfile.ZIP_DEFLATED) as packet:
+                    packet.writestr(EMPTY_PACKET_NAME,EMPTY_PACKET_BYTES)
+        return self._packet_dataset(signature,produce)
+
+    def _packet_dataset(self,signature,produce):
+        """One content-addressed upload/recovery path for every model ZIP."""
         with self._lock:
             cached=self.state['assets'].get(signature)
             if cached and self._packet_available(cached):return cached
@@ -186,17 +206,37 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                    if document_label(r.get('name'))==label and self._packet_available(r['id'])]
             if found:
                 self.state['assets'][signature]=found[0]['id'];self._save();return found[0]['id']
-            archive=self.root/(signature+'.zip');pack(root,archive,paths)
-            if not paths:
-                import zipfile
-                with zipfile.ZipFile(archive,'a',compression=zipfile.ZIP_DEFLATED) as packet:
-                    packet.writestr(EMPTY_PACKET_NAME,EMPTY_PACKET_BYTES)
-            try:identifier=self.service.upload_document(archive,label='RADAR-PD Model inputs '+signature,wait_ready=False)
+            archive=self.root/(signature+'.zip')
+            try:
+                produce(archive)
+                identifier=self.service.upload_document(archive,label='RADAR-PD Model inputs '+signature,wait_ready=False)
             finally:archive.unlink(missing_ok=True)
             self.state['assets'][signature]=identifier;self._save()
             return identifier
 
+    def training_packet(self,root,files,request):
+        from gpx_recipe.preparation.structural_jobs import MAX_INPUT_BYTES
+        if sum(confined(root,name).stat().st_size for name in set(files))<=MAX_INPUT_BYTES:
+            return self.packet(root,files,source_sha256=request['expected_source_sha256'])
+        from gpx_recipe.preparation.structural_input_parts import prepare
+        capability=getattr(self.service,'tool_has_input',None)
+        if not capability or not capability(self.tool_id,'model_asset_parts'):
+            raise RuntimeUnavailable('The installed Model Campaign wrapper needs multipart training inputs before this complete cohort can run. No examples were dropped or job submitted.')
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='training-inputs-',dir=self.root) as workspace:
+            def publish(signature,path):
+                return self._packet_dataset(signature,lambda target:shutil.copyfile(path,target))
+            return prepare(root,request,workspace,publish)
+
     def _submit(self,action,source,request,asset_id,key,*,cancel=None):
+        from gpx_recipe.preparation.structural_input_parts import references,OPERATION
+        primary,parts=references(asset_id)
+        if parts:
+            if action!='native' or request.get('operation')!=OPERATION:
+                raise ValueError('Multipart inputs only support structural training')
+            capability=getattr(self.service,'tool_has_input',None)
+            if not capability or not capability(self.tool_id,'model_asset_parts'):
+                raise RuntimeUnavailable('The installed Model Campaign wrapper does not support captured training input parts')
         began=time.monotonic()
         with self._lock:
             entry=self.state['dispatches'].setdefault(key,{'pending':False})
@@ -228,7 +268,11 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             # ambiguous acknowledgement requiring remote job recovery.
             source_dataset=self.dataset_id(source)
             inputs={'action':action,'dispatch_key':key,'source_gpx':{'dataset_id':source_dataset},
-                    'model_assets':{'dataset_id':asset_id}}
+                    'model_assets':{'dataset_id':primary}}
+            if parts:inputs['model_asset_parts']=[{'dataset_id':part} for part in parts]
+            from .preparation_evidence import input_ids
+            evidence_ids=input_ids(self,request)
+            if evidence_ids:inputs['preparation_evidence']=[{'dataset_id':v} for v in evidence_ids]
             if inline:inputs['model_request_b64']=encoded
             else:inputs['model_request']={'dataset_id':request_id}
             entry.update(pending=True,request_id=request_id,request_sha256=digest(request),
@@ -340,87 +384,63 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         unpack(archive,directory/'unpacked')
         return directory/'unpacked'
 
+    def submit_native(self,operation,payload,root,*,source,timeout=120,cancel=None,
+                      preparation_attempt=None,before_submit=None,preparation_guard=None,on_intent=None):
+        """Capture a durable native job handle without waiting for completion."""
+        from .native_operations import submit
+        root=Path(root).resolve();event=cancel or threading.Event();token=(event,str(root))
+        with self._event_lock:
+            if str(root) in self._cancelled_roots:raise RuntimeUnavailable('This model preparation was cancelled')
+            self._events.add(token)
+        try:
+            return submit(self,operation,payload,root,source=source,timeout=timeout,cancel=event,
+                preparation_attempt=preparation_attempt,before_submit=before_submit,
+                preparation_guard=preparation_guard,on_intent=on_intent)
+        finally:
+            with self._event_lock:self._events.discard(token)
+
+    def poll_native(self,handle):
+        """Recover or poll this exact attempt; this method never submits work."""
+        from .native_operations import poll
+        return poll(self,handle)
+
+    def collect_native(self,handle,root,*,immutable=True):
+        from .native_operations import collect
+        return collect(self,handle,root,immutable=immutable)
+
+    def restore_native_inputs(self,handle,root):
+        from .native_operations import restore_inputs
+        return restore_inputs(self,handle,root)
+
+    def cancel_native(self,handle):
+        from .native_operations import recover_job
+        job=recover_job(self,handle)
+        if job is None:raise RuntimeUnavailable('Recover the unresolved native job before cancelling it')
+        self.service.refresh_utility(job)
+        if job.status not in {RunStatus.OK,RunStatus.ERROR,RunStatus.CANCELLED}:
+            self.cancel_job(job,handle['key'])
+        return self.poll_native(handle)
+
     def native(self,operation,payload,root,*,source,timeout=120,cancel=None,
                preparation_attempt=None,before_submit=None,preparation_guard=None):
-        """Only named scientific files are staged, never backend environments."""
-        from gpx_recipe.symmetry.native_protocol import validate_native_payload
-        validate_native_payload(operation,payload)
-        started=time.monotonic();root=Path(root).resolve();root.mkdir(parents=True,exist_ok=True)
+        """Blocking compatibility wrapper over the shared durable transport."""
+        from .native_operations import submit,recover_job
+        started=time.monotonic();root=Path(root).resolve()
         event=cancel or threading.Event();token=(event,str(root))
         with self._event_lock:
             if str(root) in self._cancelled_roots:raise RuntimeUnavailable('This model preparation was cancelled')
             self._events.add(token)
         try:
-            payload=copy.deepcopy(payload);files=[]
-            for field in ['source','child']:
-                if field in payload:
-                    path=Path(payload[field]).resolve();relative=str(path.relative_to(root))
-                    files.append(relative);payload[field]=relative
-            if 'children' in payload:
-                children=[str(Path(p).resolve().relative_to(root)) for p in payload['children']]
-                payload['children']=children;files.extend(children)
-            for field in ['destination','temporary']:
-                if field in payload:payload[field]=str(Path(payload[field]).resolve().relative_to(root))
-            directories=payload.get('directories') or ([str(Path(payload['directory']).resolve().relative_to(root))] if 'directory' in payload else [])
-            if 'directory' in payload:payload['directory']=directories[0]
-            for relative in directories:
-                directory=confined(root,relative);job=json.loads((directory/'job.json').read_text())
-                files.append(str((directory/'job.json').relative_to(root)))
-                for asset in assets(job['protocol']):files.append(str(confined(directory,asset['path']).relative_to(root)))
-            if not files:
-                # Data-only packet, including a marker for content-only k-form matching.
-                write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
-                files=['packet.json']
-            source=self.resolve(source)
-            request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,
-                implementation_sha256=package_signature(),expected_source_sha256=source['source_sha256'],
-                input_hashes={p:file_sha(confined(root,p)) for p in files},
-                timeout=min(600,max(1,float(timeout))))
-            if all(Path(p).suffix.lower()=='.gpx' and sha==source['source_sha256']
-                   for p,sha in request['input_hashes'].items()):
-                # The marker is a real captured transport input. Hashing it in
-                # the request also separates fixed inspections from failed
-                # zero-member-packet dispatches, without retrying those jobs.
-                request['input_hashes'][EMPTY_PACKET_NAME]=EMPTY_PACKET_SHA256
-            key=digest([self.service.history_id,source['id'],request])[:24]
-            if preparation_attempt is not None:
-                from .model_preparation_retry import inspection_request,validate_attempt
-                if operation!='inspect' or request!=inspection_request(source):
-                    raise RuntimeUnavailable('Preparation retries only support the unchanged captured source inspection')
-                validate_attempt(self,source,request,preparation_attempt)
-                key=preparation_attempt['dispatch_key']
-            request['dispatch_key']=key
-            asset_id=self.packet(root,files,source_sha256=source['source_sha256'])
-            if event.is_set():raise RuntimeUnavailable('Model preparation cancelled before dispatch')
-            if preparation_attempt is not None:
-                from .model_preparation_retry import submit_attempt
-                job=submit_attempt(self,source,request,asset_id,preparation_attempt,before_submit,event,preparation_guard)
-            else:
-                job=self._submit('native',source,request,asset_id,key,cancel=event)
-            self.wait_job(job,key=key,cancel=event)
-            received=self.result(job,self.root/'native-results'/(key+'-'+uuid.uuid4().hex))
-            response=json.loads((received/'response.json').read_text())
-            if response.get('schema')!='radar-model-native-result/v1' or response.get('dispatch_key')!=key or response.get('request_sha256')!=digest(request) or response.get('source_sha256')!=source['source_sha256']:
-                raise ValueError('Native model result belongs to another request/source revision')
-            for relative,sha in response['files'].items():
-                path=confined(received,relative)
-                if file_sha(path)!=sha:raise ValueError('A native model output changed')
-                # Worker packet and output roots map back to the caller's confined root.
-                parts=Path(relative).parts
-                if parts[0] not in {'native','inputs-packet'}:raise ValueError('Unexpected native output location')
-                target=confined(root,str(Path(*parts[1:])),exists=False)
-                target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
-            def relocate(value):
-                if isinstance(value,list):return [relocate(v) for v in value]
-                if isinstance(value,dict):return {k:relocate(v) for k,v in value.items()}
-                if isinstance(value,str):
-                    for prefix in [response['worker_root'],response['input_root']]:
-                        if value==prefix or value.startswith(prefix+'/'):return str(root)+value[len(prefix):]
-                return value
-            result=relocate(response['result'])
-            # A k-survey can exclude Galaxy queue/transfer time from its scientific budget.
-            wait=max(0,time.monotonic()-started-float(response.get('native_seconds',0)))
-            return result,wait
+            handle=submit(self,operation,payload,root,source=source,timeout=timeout,cancel=event,
+                preparation_attempt=preparation_attempt,before_submit=before_submit,
+                preparation_guard=preparation_guard)
+            job=recover_job(self,handle)
+            if job is None:raise RuntimeUnavailable('Native submission has an unresolved acknowledgment; recover its existing dispatch')
+            self.wait_job(job,key=handle['key'],cancel=event)
+            # Legacy native clients may intentionally replace working files;
+            # preparation clients use collect_native's immutable default.
+            result,seconds=self.collect_native(handle,root,immutable=False)
+            return result,max(0,time.monotonic()-started-seconds)
         finally:
             with self._event_lock:self._events.discard(token)
 
@@ -568,11 +588,38 @@ class GalaxyChunkTransport:
         from gpx_recipe.symmetry.compiler import prepare_shared_inputs
         sha=digest(protocol)
         captured=prepare_shared_inputs(protocol,root,self.campaign.root)
-        packet=self.runtime.packet(captured,['protocol.json']+[a['path'] for a in assets(protocol)],
+        _,prepared_paths=self._prepared_inputs(protocol,captured,capture_new=True)
+        packet=self.runtime.packet(captured,['protocol.json']+[a['path'] for a in assets(protocol)]+prepared_paths,
                                    source_sha256=protocol['source']['sha256'])
         with self._state_lock:
             self.state['inputs'][sha]=packet
             self.bind_source(sha,source)
+
+    def _prepared_inputs(self,protocol,root,*,capture_new=False):
+        from gpx_recipe.preparation.hints import read,packet_paths
+        from .native_operations import intent_lock
+        sha=digest(protocol)
+        try:
+            if capture_new:
+                with intent_lock(root/'prepared-input-intent.json'):
+                    provider=getattr(self.runtime,'preparation_provider',None)
+                    if callable(provider):provider(protocol,root)
+            document=read(root,protocol)
+            if document is None:return None,[]
+            paths=packet_paths(root,protocol)
+        except (OSError,ValueError) as error:
+            with self._state_lock:
+                self.state.setdefault('prepared_inputs',{})[sha]=dict(status='unavailable',
+                    message='Prepared inputs could not be attached. Current physics will be rebuilt.',
+                    error_type=type(error).__name__)
+            return None,[]
+        with self._state_lock:
+            self.state.setdefault('prepared_inputs',{})[sha]=dict(status='attached',
+                library_id=document['library_id'],library_name=document['library_name'],
+                snapshot_sha256=document['snapshot_sha256'],attached_entries=len(document['entries']),
+                eligible_entries=document['eligible_entries'],omitted_entries=document['omitted_entries'],
+                native_qualification_required=True)
+        return document,paths
 
     def checkpoint(self,*,force=False,dispatch_intent=False):
         with self._checkpoint_lock:
@@ -655,13 +702,16 @@ class GalaxyChunkTransport:
                 raise RuntimeUnavailable('The previous model chunk acknowledgment is still ambiguous')
         key=digest([self.campaign.root.name,sha,ids,len(self.state['chunks'])])[:24]
         input_root=job_inputs(entries[0][1],first)
+        prepared,extra_paths=self._prepared_inputs(protocol,input_root)
         if sha not in self.state['inputs']:
-            packet=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)],source_sha256=protocol['source']['sha256'])
+            packet=self.runtime.packet(input_root,['protocol.json']+[a['path'] for a in assets(protocol)]+extra_paths,source_sha256=protocol['source']['sha256'])
             with self._state_lock:self.state['inputs'][sha]=packet
         request=dict(schema='radar-model-chunk/v1',protocol=protocol,protocol_sha256=sha,trials=ids,
             workers=workers,dispatch_key=key,
             seconds=1800 if protocol.get('policy',{}).get('grouped_surrogate') else 240)
         asset_id=self.state['inputs'][sha]
+        if prepared is not None:
+            request['prepared_scattering']=prepared
         if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
             # Every batch of this exact protocol can share one immutable input
             # packet. Candidate-specific subsets otherwise create a separate
@@ -678,7 +728,7 @@ class GalaxyChunkTransport:
             cached['entries']=bounded
             if cached['entries']:
                 request['profiled_cache']=cached
-                paths=['protocol.json']+[a['path'] for a in assets(protocol)]+[r['path'] for r in cached['entries']]
+                paths=['protocol.json']+[a['path'] for a in assets(protocol)]+extra_paths+[r['path'] for r in cached['entries']]
                 asset_id=self.runtime.packet(input_root,paths,source_sha256=protocol['source']['sha256'])
         if protocol.get('template_sha256'):
             template=self.campaign.setting('template');source=self.state['sources'][sha]
@@ -686,6 +736,16 @@ class GalaxyChunkTransport:
                 for k in ['id','experiment','sample_key','bank','source_sha256']})
         chunk=dict(key=key,members=ids,protocol=sha,request=request,asset_id=asset_id,job=None,pending=True)
         with self._state_lock:
+            if (protocol.get('kind')=='structural' and prepared is not None
+                    and prepared.get('ranking_models',{}).get('entries')):
+                saved=self.campaign.setting('structural_rankings',{}).get(sha)
+                if saved is not None:
+                    from gpx_recipe.preparation.structural_ranking_result import validate as validate_ranking
+                    try:validate_ranking(saved,protocol,snapshot=prepared['snapshot_sha256'])
+                    except (ValueError,TypeError,KeyError):saved=None
+                owner=any(c['protocol']==sha and c.get('request',{}).get('rank_structural')
+                    and not c.get('complete') and not c.get('not_dispatched') for c in self.state['chunks'].values())
+                request['rank_structural']=saved is None and not owner
             self.state['chunks'][key]=chunk
             self.state['members'].update({uid:key for uid in ids});self.save()
             if self._dispatch_wave is not None:
@@ -787,6 +847,19 @@ class GalaxyChunkTransport:
                 terminal={r['id']:r for r in response['trials']};pending=response['pending']
                 if len(terminal)!=len(response['trials']) or len(set(pending))!=len(pending) or set(terminal)|set(pending)!=set(chunk['members']) or set(terminal)&set(pending):raise ValueError('Model chunk coverage changed')
                 verify_archived_receipts(self.state,terminal,received)
+                if 'structural_ranking' in response:
+                    protocol=json.loads((self.campaign.root/'inputs'/chunk['protocol']/'protocol.json').read_text())
+                    from gpx_recipe.preparation.structural_ranking_result import validate as validate_ranking
+                    try:
+                        if not chunk['request'].get('rank_structural'):raise ValueError('This chunk did not own advisory ranking')
+                        ranking=validate_ranking(response['structural_ranking'],protocol,
+                            snapshot=chunk['request']['prepared_scattering']['snapshot_sha256'])
+                    except (ValueError,TypeError,KeyError):
+                        self.campaign.set_setting('structural_ranking_notice','Prepared ranking receipt was not accepted; complete native search retained.')
+                    else:
+                        rankings=self.campaign.setting('structural_rankings',{})
+                        rankings[chunk['protocol']]=ranking
+                        self.campaign.set_setting('structural_rankings',rankings)
                 if response.get('profiled_cache'):
                     protocol=json.loads((self.campaign.root/'inputs'/chunk['protocol']/'protocol.json').read_text())
                     self._collect_profiled_cache(protocol,received,response,dispatch)

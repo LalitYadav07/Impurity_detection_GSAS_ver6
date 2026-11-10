@@ -514,9 +514,15 @@ def test_reverting_order_while_recompute_is_queued_keeps_current_report():
 def test_long_series_map_uses_bounded_window_around_selected_scan():
     app = RadarPdNovaApp()
     pattern = sequence()[0]
+    # Moving the window can move selection and render the complete comparison.
+    # Supply the same required record fields as UnetTransitionEngine.evaluate;
+    # a map-only partial record cannot exercise that redraw path.
     rows = [{"run_id": f"long-{index}",
              "previous": f"long-{index-1}" if index else None,
-             "events": []} for index in range(55)]
+             "status": "valid" if index else "initial",
+             "attention": "no" if index else "uncertain",
+             "reason": "" if index else "First measured pattern in this ordering",
+             "comparison": None, "events": []} for index in range(55)]
     app._unet_transition_scans = {
         row["run_id"]: {"run_id": row["run_id"], "run_number": index,
                         "instrument": "POWGEN", "bank": 1, "metadata": {}}
@@ -543,6 +549,15 @@ def test_long_series_map_uses_bounded_window_around_selected_scan():
     assert app._unet_transition_map_ids == [row["run_id"] for row in rows[:30]]
     assert state.unet_transition_map_scroll_label == "Rows 1–30 of 55"
     assert state.unet_transition_map_scroll_compact == "1–30 / 55"
+    assert state.unet_transition_selected == rows[29]["run_id"]
+    assert state.unet_transition_map_scan_position == 30
+    assert (state.unet_transition_map_scan_min, state.unet_transition_map_scan_max) == (1, 30)
+    assert not state.unet_transition_follow
+    app.next_unet_transition_map_page()
+    assert app._unet_transition_map_ids == [row["run_id"] for row in rows[25:]]
+    assert state.unet_transition_selected == rows[29]["run_id"]
+    assert state.unet_transition_map_scan_position == 30
+    assert (state.unet_transition_map_scan_min, state.unet_transition_map_scan_max) == (26, 55)
 
 
 def test_app_computes_unet_only_when_optional_view_is_visible(monkeypatch):

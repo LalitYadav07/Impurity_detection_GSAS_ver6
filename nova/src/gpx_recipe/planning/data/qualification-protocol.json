@@ -1,0 +1,38 @@
+{
+  "schema": "powgen-planning-qualification-protocol/v1",
+  "status": "not_qualified",
+  "validated_response_mappings": [],
+  "principle": "A plausible plot, successful import, fitted scale or replay of calibration data cannot qualify a beamtime predictor.",
+  "required_evidence": [
+    {"gate": "traceable_inputs", "requires": ["Exact instrument cycle, guide, chopper frequency, wavelength band and grouping", "Immutable raw/reduced hashes and Mantid reduction recipe/version", "Specimen identity reviewed independently of reusable acquisition sample IDs", "Authoritative structure, composition/isotopes, temperature and phase fractions", "Mass, packing/fill geometry, illumination and environment documented with units", "Proton charge, proton energy, beam power and monitor provenance"]},
+    {"gate": "instrument_response", "requires": ["Measured incident wavelength spectrum and detector-angle/efficiency coverage", "Resolution kernels checked against standards on each supported configuration", "Vanadium/reference, empty-can and environment contributions propagated", "Source-energy yield changes calibrated rather than inferred from MW alone", "Absorption, resonances, multiple scattering and texture validated over declared sample domain"]},
+    {"gate": "independent_prediction", "requires": ["Freeze models, masks, thresholds and exclusions before confirmatory outcomes are read", "Whole-specimen/material-family and proposal separation with uncertainty in identity resolved", "Independent standards/materials spanning masses, absorption, incoherent scattering, environments and instrument modes", "No target-specific fitted scale, background, profile or structural parameters in absolute prediction scores", "Report all eligible and failed cases, plus uncertainty clustered by physical specimen"]},
+    {"gate": "count_statistics", "requires": ["Correct exposure dependence of means, peak-integrated variances and joint covariance", "Finite shared vanadium, background and monitor-reference uncertainty", "Signed and zero-count observations retained under the stated likelihood", "Repeated independent acquisitions compared with raw-event or matched-reduction predictions", "Validate cumulative-count dependence and any proposed stopping rule on independent acquisitions", "Predeclared interval coverage and beamtime-error targets assessed per stratum, not pooled bins"]},
+    {"gate": "transitions_and_isotopes", "requires": ["Zero moments reproduce parent and doubled moments multiply magnetic intensity by four", "Independent coordinates map exactly to saved allowed site moments in each embedding", "Zero displacement modes reproduce parent, including supercell density, ADPs and profile broadening", "Nonzero modes and symmetry-preserving lattice strain reproduce independently established structural transitions", "Measured magnetic and structural standards span nonzero k, supercells, domains, form factors and moment directions", "Isotope scattering, absorption, density and mass checked against independently documented enriched specimens"]},
+    {"gate": "release", "requires": ["Run the complete declared acceptance suite in the deployed native runtime", "Independent review of physical reference provenance and acceptance thresholds", "Publish per-configuration validity domain and measured errors", "Do not enable validated beamtime recommendations until all relevant gates pass"]}
+  ],
+  "current_known_gaps": [
+    "No independent absolute-intensity qualification corpus with verified structures and illumination",
+    "No experimentally qualified current-cycle count response",
+    "Observed regional repeat variance exceeds the independent-bin approximation",
+    "2011B and 2013A legacy PAB lookup tables are unavailable",
+    "Structural discovery constructs a bounded highest-symmetry-per-irrep tier and records deferred branches",
+    "Incommensurate/modulated phases and anisotropic parent-ADP transfer are unsupported",
+    "Declared crystalline mass-fraction mixtures are implemented and have a native 80/20 installation control, but experimental mixture transfer, specimen homogeneity and phase fractions remain unqualified",
+    "Native transition controls are implementation checks; measured transition prediction remains unqualified"
+  ],
+  "capability_status_revision": {
+    "date": "2026-11-09",
+    "reason": "Correct the obsolete statement that all multiphase nuclear samples are unsupported; distinguish implemented controls from experimental qualification.",
+    "native_control": "crystalline-mixture",
+    "native_control_runtime_commit": "a04533d5ce8b2d39aef3341d2d1b4c51f85bdbd7",
+    "native_control_result_sha256": "f55e5778c24d2142d2aacc740533b92610e0f8eabf9e212a2ea1e346fb0968e5",
+    "qualification_status_changed": false,
+    "numerical_model_changed": false
+  },
+  "primary_sources": [
+    "https://neutrons-user-facilities.ornl.gov/instruments/powgen/",
+    "https://powder.ornl.gov/general_aspects/calibration/pd_calib_principles.html",
+    "https://powder.ornl.gov/bragg_diffraction/data_reduction/powgen.html"
+  ]
+}

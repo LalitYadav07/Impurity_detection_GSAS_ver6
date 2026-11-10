@@ -11,7 +11,7 @@ from radar_pd_nova.galaxy_service import GalaxyService
 from radar_pd_nova.models import AnalysisMode, ResultStatus, RunRecord, RunStatus
 
 
-@pytest.mark.parametrize('workspace', ['refinement', 'battery', 'experiment'])
+@pytest.mark.parametrize('workspace', ['refinement', 'battery', 'experiment', 'preparation'])
 def test_selected_status_updates_without_taking_over_another_workspace(workspace):
     app = RadarPdNovaApp()
     app._sync_runs = lambda: None
@@ -34,6 +34,16 @@ def test_selected_status_updates_without_taking_over_another_workspace(workspace
     assert app.server.state.selected_run_progress == 100
     assert app.server.state.selected_run_stage == 'Analysis complete; loading results'
     assert app.server.state.result_owner_uid != completed.uid
+
+
+@pytest.mark.parametrize('workspace',['battery','preparation'])
+@pytest.mark.parametrize('mode',[AnalysisMode.FULL,AnalysisMode.RAPID])
+def test_analysis_tab_refresh_preserves_global_preparation_workspaces(workspace,mode):
+    app=SimpleNamespace(server=SimpleNamespace(state=SimpleNamespace(workspace_view=workspace)),
+        _powgen_controller=None)
+    RadarPdNovaApp._sync_workspace_options(app,mode)
+    assert app.server.state.workspace_view==workspace
+    assert workspace not in {r['value'] for r in app.server.state.workspace_options}
 
 
 def test_return_to_monitor_uses_current_record_without_download():

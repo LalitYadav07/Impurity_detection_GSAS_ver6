@@ -10,12 +10,17 @@ from .contracts import validate_request,seal_posterior,verify_posterior
 
 def _read_code_identity():
     import inspect
-    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
+    from ..symmetry.compiler import package_signature
+    result={name:sha(Path(__file__).parent/name) for name in ["statistics.py","native_profile.py","native_peak_memo.py","validated_backend.py","native_quadratic.py","native_kernel_policy.py","native_reflection.py","reflection_factors.py","quadratic_qualification.py","moment_basis.py","central_quadratic.py","gpx_index.py","native_validation.py","contracts.py","worker.py","observations.py","gpx_export.py","resources.py"]}
     import importlib.util
-    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution']:
+    for name in ['gsas_magnetic_preflight','gpx_recipe.symmetry.native_magnetic','gpx_recipe.symmetry.native_preparation','gpx_recipe.symmetry.worker','gpx_recipe.execution','gpx_recipe.preparation.identity','gpx_recipe.preparation.hints','gpx_recipe.structural_live.optimization.native_profile_capture']:
         spec=importlib.util.find_spec(name)
         result[name]=sha(Path(spec.origin)) if spec and spec.origin else 'unavailable'
     result.update({fn.__name__:hashlib.sha256(inspect.getsource(fn).encode()).hexdigest() for fn in [compile_candidate,infer]})
+    # The explicit inventory is useful diagnostics but does not cover every
+    # imported scientific helper or policy table. Bind the complete package
+    # too, so a shared construction/helper change cannot retain an old kernel.
+    result['gpx_recipe_package_sha256']=package_signature()
     return result
 
 def code_identity():return dict(_CODE_IDENTITY)
@@ -24,7 +29,7 @@ def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def write(path,value):
     path=Path(path);tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(value,indent=2,allow_nan=False));tmp.replace(path)
 
-def compile_candidate(source,candidate,k,sites,out,*,particles=256):
+def compile_candidate(source,candidate,k,sites,out,*,particles=256,factor_cache=None):
     from GSASII import GSASIIscriptable as G,GSASIIlattice as L
     from gpx_recipe.symmetry.native_magnetic import simulate
     from gpx_recipe.symmetry.worker import Artifacts
@@ -47,18 +52,14 @@ def compile_candidate(source,candidate,k,sites,out,*,particles=256):
     memory_budget=kernel_budget(n,len(native.counts),particles)
     # The native candidate constructor freezes all nonmagnetic parameters.
     from .native_kernel_policy import compile_native_magnetic_kernel
-    compiled=compile_native_magnetic_kernel(native,np.zeros(n),list(range(n)),checks=5)
+    compiled=compile_native_magnetic_kernel(native,np.zeros(n),list(range(n)),checks=5,
+        factor_cache=factor_cache)
     zero=np.zeros(n);base=compiled['base'];q=compiled['quadratic']
-    histograms,phases=native.histo_phases[:2];forms=[];labels=[]
-    for phase in phases.values():
-        if phase['General']['Type']!='magnetic':continue
-        pre=f"{phase['pId']}::";cell=phase['General']['Cell'][1:7];a=L.cell2AB(cell)[0];metric=(a/np.asarray(cell[:3])).T@(a/np.asarray(cell[:3]))
-        for atom,record in enumerate(phase['Atoms']):
-            b=np.zeros((3,n))
-            for j in range(n):
-                p=zero.copy();p[j]=1.;native.parms.update(zip(native.vary,p));native.maps.Dict2Map(native.parms)
-                b[:,j]=[native.parms[pre+f'AM{axis}:{atom}'] for axis in 'xyz']
-            forms.append(b.T@metric@b);labels.append(str(record[0]))
+    histograms,phases=native.histo_phases[:2]
+    from .moment_basis import from_native
+    basis=from_native(native,zero,list(range(n)))
+    forms=np.einsum('aki,akj->aij',basis.cartesian,basis.cartesian)
+    labels=[str(phases[name]['Atoms'][atom][0]) for name,atom,_ in basis.atoms]
     arrays=[histograms[name]['Data'] for name,sl in native.parts]
     x=np.concatenate([histograms[name]['Data'][0][sl] for name,sl in native.parts]);y=np.concatenate([histograms[name]['Data'][1][sl] for name,sl in native.parts]);weight=np.concatenate([native.original_weights[name][sl] for name,sl in native.parts])
     mask=np.isfinite(x)&np.isfinite(y)&np.isfinite(weight)&(weight>0)
@@ -69,7 +70,7 @@ def compile_candidate(source,candidate,k,sites,out,*,particles=256):
         if e>1e-7:raise ValueError('Independent native kernel validation failed')
     np.savez_compressed(out/'kernel.npz',base=base[mask],quadratic=q[:,:,mask],forms=np.array(forms),x=x[mask],y=y[mask],sigma=1/np.sqrt(weight[mask]),labels=np.array(labels))
     from .validated_backend import active_identity
-    meta=dict(native_gpx_sha256=sha(project),kernel_sha256=sha(out/'kernel.npz'),compiler=compiled['diagnostics'],code_identity=code_identity(),backend=active_identity(),id=candidate['id'],name=candidate['magnetic_space_group'],dimensions=n,bin_count=len(native.counts),memory_budget=memory_budget,labels=labels,source_sha256=sha(source),candidate=candidate,k=k,sites=sites,native_errors=errors,validated=True,fixed_nuclear=True)
+    meta=dict(native_gpx_sha256=sha(project),kernel_sha256=sha(out/'kernel.npz'),compiler=compiled['diagnostics'],exact_native_peak_reuse=native.peak_memo.diagnostics(),code_identity=code_identity(),backend=active_identity(),id=candidate['id'],name=candidate['magnetic_space_group'],dimensions=n,bin_count=len(native.counts),memory_budget=memory_budget,labels=labels,source_sha256=sha(source),candidate=candidate,k=k,sites=sites,native_errors=errors,validated=True,fixed_nuclear=True)
     write(out/'kernel.json',meta);return meta
 
 def infer(kernel,destination,*,lower,upper,particles=256,seconds=45.,seed=0):
@@ -90,7 +91,9 @@ def infer(kernel,destination,*,lower,upper,particles=256,seconds=45.,seed=0):
     result=dict(prior_moment_draws=prior_moments[::max(1,len(prior_moments)//256)].tolist(),relative_half_width=((intervals[:,2]-intervals[:,0])/(2*np.maximum(intervals[:,1],1e-12))).tolist(),prior_edge_mass=float(np.mean(np.any((moments<lower+.01*(upper-lower))|(moments>upper-.01*(upper-lower)),axis=1))),status='conditional_posterior' if health['screen_passed'] else 'sampling_unresolved',rwp=float(rwp),reduced_chi2=float(-2*ll.max()/max(1,len(data['y'])-model.dimension)),health=health,
       seconds=a['seconds']+b['seconds'],intervals=intervals.tolist(),labels=data['labels'].tolist(),x=data['x'][take].tolist(),y=data['y'][take].tolist(),sigma=data['sigma'][take].tolist(),fit=calc[take].tolist(),
       mean_band=np.quantile(draws,[.025,.5,.975],axis=0)[:,take].tolist(),ensemble=draws[:8,take].tolist(),moment_draws=moments[::max(1,len(moments)//256)].tolist(),parameter_draws=samples[::max(1,len(samples)//256)].tolist(),
-      sampler_history=a['history'],sampler_histories=[a['history'],b['history']],particles=particles,exclusion_authorized=False,forecast_enabled=False,scope='Conditional on fixed nuclear baseline and supplied diagonal reduced variances; reference/cross-bin covariance unqualified')
+      sampler_history=a['history'],sampler_histories=[a['history'],b['history']],
+      prior_diagnostics=[a['prior_diagnostics'],b['prior_diagnostics']],
+      particles=particles,exclusion_authorized=False,forecast_enabled=False,scope='Conditional on fixed nuclear baseline and supplied diagonal reduced variances; reference/cross-bin covariance unqualified')
     write(Path(destination)/'posterior.json',result);return result
 
 def execute(request_path,candidate_id=None):
@@ -121,13 +124,22 @@ def execute(request_path,candidate_id=None):
             if meta and (meta.get('backend')!=active_identity() or meta.get('sites')!=req['sites'] or meta.get('k')!=req['k']):meta=None
             cache_hit=not (meta is None or not (dest/'magnetic-refinement.gpx').is_file() or meta.get('native_gpx_sha256')!=sha(dest/'magnetic-refinement.gpx') or meta.get('code_identity')!=code_identity() or meta['source_sha256']!=sha(source) or meta['candidate']!=c or meta.get('kernel_sha256')!=sha(dest/'kernel.npz'))
             if not cache_hit:
-                meta=compile_candidate(source,c,req['k'],req['sites'],dest,particles=req['particles'])
+                factor_cache=None;prepared_scattering=None
+                if req.get('prepared_scattering') is not None:
+                    from ..preparation.hints import cache_for,live_context
+                    factor_cache,prepared_scattering=cache_for(Path(req['catalog']).parent.parent,
+                        live_context(req,catalog),candidate=c['id'])
+                meta=compile_candidate(source,c,req['k'],req['sites'],dest,particles=req['particles'],
+                    factor_cache=factor_cache)
+                if prepared_scattering is not None:
+                    meta['prepared_scattering']=prepared_scattering;write(dest/'kernel.json',meta)
             from .resources import kernel_budget
             kernel_budget(meta['dimensions'],meta['bin_count'],req['particles'])
             from .observations import replace_observations
             if replace_observations(dest/'kernel.npz',req):
                 meta['kernel_sha256']=sha(dest/'kernel.npz');meta['observation_revision']=req['source_revision'];write(dest/'kernel.json',meta)
             r.update(status='sampling',dimensions=meta['dimensions'],native_errors=meta['native_errors'],preparation_seconds=time.monotonic()-preparation_started,response_cache_hit=cache_hit);write(report_dir/'result.json',report)
+            if meta.get('prepared_scattering') is not None:r['prepared_scattering']=meta['prepared_scattering']
             inference_key=dict(lower=req['lower'],upper=req['upper'],particles=req['particles'],code_identity=code_identity(),kernel_sha256=sha(dest/'kernel.npz'))
             existing_key=json.loads((dest/'inference-request.json').read_text()) if (dest/'inference-request.json').exists() else None
             if (dest/'posterior.json').exists() and existing_key==inference_key:
@@ -159,6 +171,13 @@ def execute(request_path,candidate_id=None):
                 r['reflection_warning']=f'Native ticks unavailable: {type(exc).__name__}: {exc}'
             r['artifacts']=seal_posterior(dest)
             r.update({k:post[k] for k in ['status','rwp','reduced_chi2','health','seconds','intervals','labels']});r['posterior']=str(dest/'posterior.json')
+        except TimeoutError as exc:
+            if r.get('status')!='sampling':
+                r.update(status='numerical_failure',reason=type(exc).__name__+': '+str(exc)[:600])
+                (report_dir/'failures.log').open('a').write(traceback.format_exc()+'\n')
+            else:
+                r.update(status='sampling_unresolved',sampling_incomplete=True,
+                    reason=str(exc)[:600],kernel_retained=True)
         except Exception as exc:
             r.update(status='numerical_failure',reason=type(exc).__name__+': '+str(exc)[:600]);(report_dir/'failures.log').open('a').write(traceback.format_exc()+'\n')
         finally:

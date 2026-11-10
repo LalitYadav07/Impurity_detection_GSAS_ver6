@@ -1,0 +1,38 @@
+{
+  "schema": "virtual-powder-response-calibration/v1",
+  "kind": "PNT",
+  "source_bank": 1,
+  "guide": "HighRes",
+  "frequency_hz": 60,
+  "run": 53998,
+  "profile_sha256": "8e28e7231b34c825e55b19c995c6ee98f80d881bd634722c7d9cbf8467da3140",
+  "profile": "2022B_Dec_HighRes_60HzB1_CWL0p8.instprm",
+  "source": "PG3/IPTS-2767/nexus/PG3_53998.nxs.h5",
+  "source_reduced_sha256": "e0a5bcb3525d4010a268f357fca24cde7653273d388413a1638b568add49c9c8",
+  "arrays": "response.npz",
+  "gsas_scale": 23093.37625069607,
+  "illuminated_unit_cells": 2.546212402086449e+21,
+  "sample": {
+    "mass_g": 0.95,
+    "radius_cm": 0.29500000000000004,
+    "packing_fraction": 0.37301656647013404,
+    "beam_height_cm": 4.0,
+    "beam_width_cm": 0.5900000000000001
+  },
+  "duration_seconds": 13359.5546875,
+  "proton_charge_uah": 4168.186597091666,
+  "fit_chi2_per_dof": 36.45569831631995,
+  "rwp_percent": 17.55014827951854,
+  "status": "effective_reduced_variance_only_not_raw_count_calibration",
+  "limitations": [
+    "Si structure fixed, not a certified parameter refinement",
+    "Finite vanadium/reference covariance is not separated from sample variance",
+    "Transfer between cycles is not validated",
+    "Sample absorption is approximated by an angular kernel; sample can background is not independently measured"
+  ],
+  "public_metadata_provenance": {
+    "schema": "radar-public-calibration-metadata/v1",
+    "original_metadata_sha256": "6e68545ff96e7e4a8e020cfa63b911cbb6c51238a988d25d143fbd1c2caea600",
+    "transformation": "Local paths and transport/session details removed; source content hashes and calibration values retained."
+  }
+}

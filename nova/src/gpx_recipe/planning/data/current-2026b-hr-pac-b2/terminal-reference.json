@@ -1,0 +1,95 @@
+{
+  "schema": "powgen-observed-terminal-reference/v1",
+  "mantid_version": "6.16.1",
+  "native_algorithm_source_sha256": "0eeca3c9a3e0454a4e50b5ce18bb579eac0cf833b756d7f57dba7cbdf304916c",
+  "extraction_source_sha256": "5009bf2249afb34509c5f91cd4847b9eaabbe8ab805f11e56e16ca6f6923f47c",
+  "extraction_inputs_sha256": "63c42952c7870fd332591f94f0c65704e6fc8df8ed58910c426df9f80ecaa9b1",
+  "source_components_sha256": "e986a72385ac72ab2564b92b1c52c1f01c2297f44414d9ce49c06047d9051761",
+  "source_result_sha256": "08fffe33701d4fbf61362a88340b7db4cf2c75592a30f600bdf52ddd9a27e7b6",
+  "native_defaults": {
+    "LorentzCorrection": "0",
+    "TypeOfCorrection": "None",
+    "VanadiumFWHM": "7",
+    "VanadiumPeakTol": "0.050000000000000003",
+    "VanadiumSmoothParams": "20,2",
+    "CompressTOFTolerance": "0.01",
+    "CompressBinningMode": "Default"
+  },
+  "processed_reference_sources": {
+    "empty": {
+      "charge_uah": 4124.913502030556,
+      "event_records": 5226417,
+      "sum_y": 29887239.0,
+      "sum_e2": 29887239.0,
+      "source_unchanged": true
+    },
+    "vanadium": {
+      "charge_uah": 4149.436513422222,
+      "event_records": 8672958,
+      "sum_y": 179666523.56145847,
+      "sum_e2": 204011984.1289581,
+      "source_unchanged": true
+    },
+    "vanadium_blank": {
+      "charge_uah": 4154.454115694444,
+      "event_records": 2663190,
+      "sum_y": 8525761.937425852,
+      "sum_e2": 9681025.240445018,
+      "source_unchanged": true
+    }
+  },
+  "processed_reference_cache_inputs": {
+    "empty": {
+      "name": "PG3_63570_5c5eba1f470f2bec157631706ea21138d14f228d.nxs",
+      "source": "provenance/PG3_63570_5c5eba1f470f2bec157631706ea21138d14f228d.nxs",
+      "bytes": 161439028,
+      "sha256": "ab5de69ce2e270e21adec225fece1a113fc67932ee0f2c117132defcd7ea79fc"
+    },
+    "vanadium": {
+      "name": "PG3_63566_ba4cfadb5f83151983852554cca3f345c7bef810.nxs",
+      "source": "provenance/PG3_63566_ba4cfadb5f83151983852554cca3f345c7bef810.nxs",
+      "bytes": 216599652,
+      "sha256": "c5e2f7b7318ccae96ee24b41fbc0f065a11b999b6b4cac2960290141a78db218"
+    },
+    "vanadium_blank": {
+      "name": "PG3_63563_ba4cfadb5f83151983852554cca3f345c7bef810.nxs",
+      "source": "provenance/PG3_63563_ba4cfadb5f83151983852554cca3f345c7bef810.nxs",
+      "bytes": 120498736,
+      "sha256": "da3339306e6f996764b9fb81a9112f2723b3584c5ac9b48986348c66b0a92e58"
+    }
+  },
+  "geometry": {
+    "primary_flight_path_m": 60.0,
+    "secondary_flight_path_m": 3.18,
+    "two_theta_deg": 90.0
+  },
+  "scale_data": 100.0,
+  "background_smooth_params": "5, 2",
+  "operations": [
+    "V weighted pixel absorption and Carpenter multiple-scattering correction already applied in focused cache",
+    "Recalculate filtered proton charge and normalize each cache",
+    "Subtract V blank as weighted events; native CompressEvents 0.01 us before histogram conversion",
+    "Convert to d; StripVanadiumPeaks; convert to TOF; FFTSmooth; reset conventional V errors",
+    "FFTSmooth empty PAC06; subtract from charge-normalized sample; divide by processed V; ScaleData=100"
+  ],
+  "sample_lorentz_correction": false,
+  "sample_absorption_correction_in_reduction": false,
+  "numerical_closure": {
+    "reference": "Fresh local native SNSPowderReduction of previously opened Si63584",
+    "relative_l2": {
+      "y": 0.0,
+      "e": 0.0
+    },
+    "tolerance": 1e-12,
+    "passed": true,
+    "sample_pattern_packaged": false,
+    "new_independent_experimental_validation": false
+  },
+  "uncertainty": "Native E reset is a saved-file convention, not zero physical reference uncertainty. Predictive simulation retains reference posterior covariance.",
+  "experimental_accuracy_certified": false,
+  "public_metadata_provenance": {
+    "schema": "radar-public-calibration-metadata/v1",
+    "original_metadata_sha256": "bd93fc7ebe0acc97ebe909bda29b5a4f2d7e0276e4a7a854fa90e2ec9daf708c",
+    "transformation": "Local paths and transport/session details removed; source content hashes and calibration values retained."
+  }
+}

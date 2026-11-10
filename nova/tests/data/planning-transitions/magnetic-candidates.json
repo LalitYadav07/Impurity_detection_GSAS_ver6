@@ -1,0 +1,143 @@
+{
+  "schema": "radar-symmetry-catalog/v1",
+  "parent_setting_sha256": "d023df43f3804b050aa865a782e1fc898125166977e21a1475382d6983e8ec02",
+  "k": [
+    "0",
+    "0",
+    "0"
+  ],
+  "candidates": [
+    {
+      "magnetic_space_group": "P-421'm'",
+      "bns_number": "113.271",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:936f56369891784436d7",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P-4'21'm",
+      "bns_number": "113.269",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:7513d0a31d3c86b7efe0",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P2121'2'",
+      "bns_number": "18.19",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:dc4c24fbb1d96aa48f57",
+      "transformation_matrix": [
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "magnetic_space_group": "P21'",
+      "bns_number": "4.9",
+      "bns_lattice": "",
+      "child": null,
+      "modes": [],
+      "irrep": null,
+      "id": "mag:cfadd66312b49050ef6e",
+      "transformation_matrix": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "origin_shift": [
+        0.25,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "coverage": {
+    "discovery_complete": false,
+    "scope": "Four previously prepared reference candidates; not an exhaustive service response"
+  },
+  "provenance": {
+    "source": "virtual-powder-beamline/benchmarks/live-magnetic-constraints/models/catalog.json",
+    "sha256": "5d78a4f6b9d338b583c52349037e20921b43ecc777fa2ccd403ba5cd4e412a9f"
+  }
+}

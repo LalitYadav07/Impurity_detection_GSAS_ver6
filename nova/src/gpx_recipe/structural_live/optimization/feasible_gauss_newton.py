@@ -32,8 +32,17 @@ def screen_curve(source,cache,point,anchor,native):
         return cache.evaluate(np.asarray(point)*source.radii),True
     return native(point),False
 
-def select_ensemble_starts(warm,prior,starts,dimensions):
-    """Reserve independent restarts; rank the reserved set by current data."""
+def select_ensemble_starts(warm,prior,starts,dimensions,*,mode_dimensions=None):
+    """Reserve independent restarts, including a feasible displacement seed.
+
+    Parent-like cell-only guesses can rank above every displaced guess when
+    an emergent reflection has zero first derivative at the parent. A declared
+    multistart search must not lose all displacement exploration in that rank
+    filter. The best initial point remains; at most the worst other seed is
+    replaced. All final coordinates stay free. This is no global certificate.
+    """
+    if mode_dimensions is not None and (type(mode_dimensions)is not int or not 0<=mode_dimensions<=dimensions):
+        raise ValueError('Mode dimensions must identify the complete displacement block')
     if starts==1:
         ranked=sorted(warm+prior,key=lambda row:row[0])
         return [ranked[0][1]] if ranked else []
@@ -47,7 +56,16 @@ def select_ensemble_starts(warm,prior,starts,dimensions):
     if starts>1 and warm:add(warm,min(2,starts-1))
     add(prior,max(starts-len(selected),1))
     if len(selected)<starts:add(warm+prior,starts-len(selected))
-    return [point for _,point in sorted(selected,key=lambda row:row[0])[:starts]]
+    selected=sorted(selected,key=lambda row:row[0])[:starts]
+    if mode_dimensions and starts>1 and selected:
+        displaced=lambda point:np.linalg.norm(point[:mode_dimensions])>.2
+        if not any(displaced(point) for _,point in selected):
+            retained=selected if len(selected)<starts else selected[:-1]
+            alternatives=[row for row in sorted(prior,key=lambda row:row[0])
+                if displaced(row[1]) and all(np.linalg.norm(row[1][:dimensions]-p[:dimensions])>.2 for _,p in retained)]
+            if alternatives:
+                selected=retained+[alternatives[0]]
+    return [point for _,point in sorted(selected,key=lambda row:row[0])]
 
 def fit_feasible_gn(source,table,observation,*,warm=None,warm_pool=None,seconds=90.,starts=4,maxiter=70,adaptive_cells=False,multiscale=False,recycle_cells=False,box_steps=False,offline_bank=None,balanced_restarts=False,precomputed_proposal_steps=False,aggregation_width=1,mode_substeps=0,force_native_mode_derivatives=False,stationarity_polls=0,screening_seed=82519,native_pool=None,screening_exclusions=None):
     if not np.isfinite(seconds) or seconds<=0 or type(starts)is not int or starts<1 or type(maxiter)is not int or maxiter<1:
@@ -134,7 +152,7 @@ def fit_feasible_gn(source,table,observation,*,warm=None,warm_pool=None,seconds=
             excluded_prior_starts=len(prior_ranked)-len(retained)
             prior_ranked=retained
         ranked=sorted(warm_ranked+prior_ranked,key=lambda r:r[0]);selected=[]
-        if warm_pool is not None:selected=select_ensemble_starts(warm_ranked,prior_ranked,starts,d)
+        if warm_pool is not None:selected=select_ensemble_starts(warm_ranked,prior_ranked,starts,d,mode_dimensions=source.mode_dimensions)
         else:
             for _,z in ranked:
                 if all(np.linalg.norm(z[:d]-v[:d])>.2 for v in selected):selected.append(z)
@@ -202,9 +220,13 @@ def fit_feasible_gn(source,table,observation,*,warm=None,warm_pool=None,seconds=
                     norm=max(np.max(abs(step)),1e-30)
                     if not box_steps and norm>.5:step*=.5/norm
                     step=np.clip(step,lo-z,hi-z);gradient=jac.T@residual
-                    if box_steps and np.max(abs(step))<1e-9:reason='bounded_local_step_small';break
+                    if box_steps and np.max(abs(step))<1e-9:
+                        if recycle_cells and obj.last_reused:obj.invalidate_cell_approximation();continue
+                        reason='bounded_local_step_small';break
                     descent=float(gradient@step)
-                    if descent>=0:damping*=10.;continue
+                    if descent>=0:
+                        if recycle_cells and obj.last_reused:obj.invalidate_cell_approximation();continue
+                        damping*=10.;continue
                     found=False
                     for reduction in range(16):
                         alpha=.5**reduction;proposal=np.clip(z+alpha*step,lo,hi)

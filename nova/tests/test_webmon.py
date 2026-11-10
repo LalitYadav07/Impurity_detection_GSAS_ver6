@@ -43,6 +43,14 @@ def test_exact_density_integrals_and_masks():
     assert t['weights'][1]==0
 
 
+@pytest.mark.parametrize('error,factor',[(1e-200,100.),(1e200,100.),(2.,1e-300),(2.,1e300)])
+def test_unrepresentable_variances_are_rejected_instead_of_becoming_unmeasured_bins(error,factor):
+    raw=f'# X , Y , E Distribution=true\n0\n1,10,{error}\n2,20,{error}\n3,30,{error}\n'.encode()
+    pattern=parse_live_ascii(raw)
+    with pytest.raises(ValueError,match='cannot represent'):
+        density_to_tof(pattern,d_edges=[.5,1.5,2.5,3.5],export_difc=factor)
+
+
 def test_scope_and_other_run_not_inherits_checkpoint(tmp_path):
     manifest=tmp_path/'context.json';manifest.write_text(json.dumps(dict(facility_root=str(tmp_path/'inputs'),archive=str(tmp_path/'archive'))))
     s=WebmonSession(manifest)
@@ -104,3 +112,18 @@ def test_worker_identity_is_bound_at_import():
     assert all(v=='unavailable' or len(v)==64 for v in identity.values())
     identity['infer']='changed'
     assert code_identity()['infer']!='changed'
+
+
+def test_worker_cache_identity_detects_a_transitive_scientific_helper_change(tmp_path,monkeypatch):
+    from gpx_recipe.live import worker
+    from gpx_recipe.symmetry import compiler
+    root=tmp_path/'gpx_recipe/symmetry';root.mkdir(parents=True)
+    entry=root/'compiler.py';entry.write_text('# isolated source inventory\n')
+    helper=root/'displacements.py';helper.write_text('# earlier construction semantics\n')
+    monkeypatch.setattr(compiler,'__file__',str(entry))
+    before=worker._read_code_identity()
+    helper.write_text('# revised construction semantics\n')
+    after=worker._read_code_identity()
+    assert before['gpx_recipe_package_sha256']!=after['gpx_recipe_package_sha256']
+    assert {k:v for k,v in before.items() if k!='gpx_recipe_package_sha256'}=={
+        k:v for k,v in after.items() if k!='gpx_recipe_package_sha256'}

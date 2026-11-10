@@ -29,9 +29,10 @@ def scientific_check(check, *args):
         raise StageRejected(str(exc)) from exc
 
 
-def write_json(path, value):
+def write_json(path, value, *, compact=False):
     path = Path(path)
-    payload = json.dumps(json_safe(value), indent=2, allow_nan=False) + "\n"
+    payload = json.dumps(json_safe(value), indent=None if compact else 2,
+                         separators=(',', ':') if compact else None, allow_nan=False) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.partial')
     try:

@@ -1,5 +1,6 @@
 """Compact portfolio navigation within the existing Refinement workspace."""
 from trame.widgets import client,html,plotly,vuetify3 as v
+from .structural_mode_ui import mode_table
 
 
 FIT_PRESENTATION_CSS='''
@@ -77,10 +78,21 @@ def model_exploration(app):
             html.P('New campaigns default to eight concurrent Galaxy batches for independent models and scans. Analysis, recipe and model jobs share the History-wide capacity limit. Galaxy controls admission and CPU/RAM allocation; jobs may remain queued when the cluster is busy. An unreported allocation permits one native worker per job. The model-batch limit includes preparation jobs. Lowering it lets accepted jobs finish before submitting more.',classes='rf-notice')
         v.VProgressLinear(v_if='sx_busy',indeterminate=True,color='#267653',height=3,classes='mb-3')
         html.P('{{ sx_message }}',classes='rf-notice',raw_attrs=['aria-live="polite"'])
+        with html.Details(v_if='!sx_setup && sx_results_current && sx_structural_priority_rows.length',classes='rf-card mb-3'):
+            html.Summary('Prepared structural priorities')
+            with html.Div(v_for='entry in sx_structural_priority_rows',key='entry.id'):
+                html.Strong('{{ entry.scan }}')
+                html.P('{{ entry.summary }}',classes='rf-notice')
+                mode_table(prefix='entry',on_select=app.select_structural_mode_group,arguments='[entry.id, $event]')
+            html.P('These are model priorities, not probabilities of phase presence. Native refinement checks the structural hypotheses.',classes='rf-notice')
         html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='!sx_setup && sx_groups.length',classes='rf-notice')
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
             html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
+            with html.Div(classes='rf-toolbar'):
+                html.P('{{ sx_preparation_notice }}',v_if='!!sx_preparation_notice',classes='rf-notice')
+                v.VBtn('Choose or prepare calculations',click=app.open_preparation_workspace,
+                    variant='text',prepend_icon='mdi-database-clock-outline')
             with html.Div(classes='rf-toolbar'):
                 scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources',
                     placeholder='Type a run number, temperature or recipe stage',persistent_placeholder=True)
@@ -100,8 +112,8 @@ def model_exploration(app):
                 html.P('For structural distortions, enter the distortion k vector in the parent basis. Use 0, 0, 0 for a zone-center distortion with unchanged translation periodicity. The magnetic k survey and magnetic setup assistant do not configure structural searches.',v_if="sx_kind === 'structural'",classes='rf-notice')
                 select('Moment model','sx_moment_model',"[{title:'Collinear moments',value:'collinear'},{title:'Symmetry-allowed components · can cant',value:'symmetry_allowed'}]",v_if="sx_kind === 'magnetic'")
                 select('Magnetic optimizer','sx_magnetic_optimizer',"[{title:'Fast checked optimizer · fixed nuclear model',value:'profiled_quadratic'},{title:'GSAS-II Hessian',value:'gsas_hessian'}]",v_if="sx_kind === 'magnetic'")
-                select('Parent reference GPX · optional','sx_parent_reference','sx_start_sources',v_if="sx_kind === 'structural'",clearable=True)
-                html.P('The starting GPX is the target scan. An optional well-refined parent scan supplies fractional coordinates and ADPs for candidate construction. Target observations, instrument, fitted parent cell, background and secondary phases are retained. Both inputs must have the same named parent phase, site chemistry and setting. Clear the reference to use the target itself.',v_if="sx_kind === 'structural'",classes='rf-notice')
+                select('Before-transition reference GPX · optional','sx_parent_reference','sx_start_sources',v_if="sx_kind === 'structural'",clearable=True)
+                html.P('The starting GPX is the target scan. Choose a well-refined scan before the transition to supply parent coordinates and ADPs for candidate construction. Prepared before/after ranking also compares its measured pattern with the target; it requires this reference. Both scans need compatible parent chemistry, setting and instrument bank. The reference is captured when the plan is built and stays fixed as new scans arrive. Clear it to construct and fit candidates from the target alone.',v_if="sx_kind === 'structural'",classes='rf-notice')
                 html.P('Native geometry and starting curves are prepared for each exact input context. All independent displacement and lattice coordinates are fitted jointly, and the saved GPX is independently checked with GSAS-II. Fixed secondary nuclear phases are retained. Check the parent peak widths before interpreting lower Rwp as symmetry breaking. Unresolved optimization remains visible; a good fit alone does not identify a unique structure.',v_if="sx_kind === 'structural'",classes='rf-notice')
                 html.P('Profiled optimization varies the allowed magnetic components and the selected common scale/background against the same GSAS-II model. It requires a commensurate constructed model, symmetry-allowed components and one neutron histogram. Unsupported inputs stop with a reason.',v_if="sx_kind === 'magnetic' && sx_magnetic_optimizer === 'profiled_quadratic'",classes='rf-notice')
                 select('Nuclear parent','sx_parent','sx_parents')

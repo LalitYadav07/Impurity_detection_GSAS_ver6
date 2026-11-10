@@ -59,6 +59,10 @@ def expand_magnetic_phase(parent,child,basis,uvec,vvec,transformer):
     for atom in topology['Atoms']:
         if atom[pcia]=='A':atom[pcia]='I'
     result,codes=transformer(topology,child,basis,uvec,vvec,True)
+    sg=result['General']['SGData']
+    if sg.get('SpGrp')=='P 1' and len(sg.get('SGCen',[]))>1:
+        from gsas_magnetic_preflight import complete_magnetic_orbits
+        result,codes=complete_magnetic_orbits(result,codes)
     cia=result['General']['AtomPtrs'][3]
     if len(codes)!=len(result['Atoms']):raise ValueError('Native magnetic coordinate expansion lost its site mapping')
     for atom,code in zip(result['Atoms'],codes):

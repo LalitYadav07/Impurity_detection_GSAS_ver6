@@ -15,3 +15,15 @@ def test_current_values_are_not_treated_as_instrument_refinement_flags():
 
 def test_sample_flags_are_normalized_at_their_distinct_native_index():
     assert parameter_flags({'Scale':[1.,1],'Gonio. radius':1000.,'Type':'Debye-Scherrer'},1)=={'Scale':[1.,True],'Gonio. radius':1000.,'Type':'Debye-Scherrer'}
+
+
+def test_numeric_sample_lists_never_become_refinement_flags():
+    for second in (0.,1.,.25):
+        source={'Contrast':[.3,second],'Unrecognized numeric pair':[2.,1.],
+            'Absorption':[.04,1],'DisplaceX':[.02,0]}
+        result=parameter_flags(source,1)
+        assert result['Contrast']==[.3,second] and type(result['Contrast'][1]) is float
+        assert result['Unrecognized numeric pair']==[2.,1.]
+        assert type(result['Unrecognized numeric pair'][1]) is float
+        assert result['Absorption']==[.04,True] and result['DisplaceX']==[.02,False]
+        assert type(source['Absorption'][1]) is int

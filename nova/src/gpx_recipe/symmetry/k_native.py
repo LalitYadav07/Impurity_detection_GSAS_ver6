@@ -25,9 +25,7 @@ def _open(source):
 
 def prepare(request,root):
     from .native_audit import inspect_source
-    from ..commensurate_k import recover_points
     from GSASII import GSASIIlattice as L,GSASIIstrMain as M
-    import spglib
     source=Path(request['source']).resolve();before=file_sha(source)
     if before!=request['source_sha256']:raise ValueError('Starting GPX changed before k preparation')
     context=inspect_source(source);require_runtime(context['runtime'],context['runtime']['magnetic_function_sha256'])
@@ -37,26 +35,8 @@ def prepare(request,root):
     if h.name not in phase.data['Histograms'] or not phase.data['Histograms'][h.name].get('Use',True):raise ValueError('The parent is not actively linked to this bank')
     if not str(h.InstrumentParameters['Type'][0]).startswith('PN'):raise ValueError('Magnetic k screening requires neutron powder data')
     parent=next(q for q in context['phases'] if q['name']==phase.name)
-    # Expand exact native operations. Preserve mixed-site chemistry as one
-    # composite spglib type, rather than duplicating atoms at the same position.
-    positions=[];motifs=[]
-    for atom in parent['atoms']:
-        if atom['occupancy']<=0:continue
-        if not np.isfinite(atom['occupancy']) or atom['occupancy']>1+1e-7:raise ValueError('Review nonphysical parent occupancies before k screening')
-        orbit=[]
-        for op in parent['operations']:
-            pos=(np.asarray(op['rotation'])@atom['xyz']+op['translation'])%1
-            if any(np.max(np.abs((pos-old+.5)%1-.5))<1e-7 for old in orbit):continue
-            orbit.append(pos)
-            found=next((i for i,old in enumerate(positions) if np.max(np.abs((pos-old+.5)%1-.5))<1e-7),None)
-            if found is None:found=len(positions);positions.append(pos);motifs.append([])
-            motifs[found].append((atom['type'],round(atom['occupancy'],7)))
-    if not positions or len(positions)>5000:raise ValueError('Expanded parent exceeds the k-survey size budget')
-    types={};numbers=[]
-    for motif in motifs:
-        token=tuple(sorted(motif));types.setdefault(token,len(types)+1);numbers.append(types[token])
-    structure=(L.cell2AB(parent['cell'])[0].T,np.asarray(positions),numbers)
-    points=recover_points(structure,parent['operations'],maximum_denominator=int(request.get('maximum_denominator',8)))
+    from .parent_k import parent_k_points
+    points=parent_k_points(parent,maximum_denominator=int(request.get('maximum_denominator',8)))
     x,observed,weights=[np.ma.asarray(v,dtype=float) for v in h.data['data'][1][:3]]
     from ..native_forward import forward_profile,tick_arrays
     nuclear,ticks=forward_profile(source,h.name)
@@ -175,7 +155,7 @@ def template(request,root):
     return result
 
 
-def _portfolio_child(directory):
+def _portfolio_child(directory,fallback=None):
     """One disposable Linux child; the parent never opens a GPX."""
     directory=Path(directory);started=time.monotonic()
     try:result=template(dict(directory=str(directory)),directory)
@@ -183,7 +163,53 @@ def _portfolio_child(directory):
     usage=resource.getrusage(resource.RUSAGE_SELF)
     result.update(elapsed_seconds=time.monotonic()-started,llm_calls=0,
         resources=dict(cpu_seconds=usage.ru_utime+usage.ru_stime,peak_rss_bytes=int(usage.ru_maxrss*1024)))
+    if fallback is not None:result['acceleration']=dict(method='ordinary_native',fallback=fallback)
     write_json(directory/'portfolio-response.json',json_safe(result))
+
+
+def portfolio_groups(directories):
+    """Group exact candidate contexts; each group owns a disposable process.
+
+    This is scheduling only. The child independently validates every job and
+    native input before using the shared response. Other scopes stay isolated
+    per template. Bound groups so one candidate cannot monopolize the queue.
+    """
+    groups={}
+    for directory in directories:
+        directory=Path(directory)
+        try:
+            job=json.loads((directory/'job.json').read_text());protocol=validate_protocol(job['protocol'])
+            shared=(job['schema']=='radar-symmetry-job/v1' and protocol['kind']=='magnetic'
+                and protocol['policy'].get('moment_model')=='symmetry_allowed'
+                and not protocol['policy'].get('refine_cell'))
+            key=(digest(protocol),job['candidate_id']) if shared else ('single',str(directory))
+        except (OSError,ValueError,KeyError,TypeError):key=('single',str(directory))
+        if key not in groups:groups[key]=[]
+        groups[key].append(directory)
+    return [rows[start:start+64] for rows in groups.values() for start in range(0,len(rows),64)]
+
+
+def _group_portfolio_child(directories):
+    """An unavailable accelerator requests an independently isolated retry."""
+    directories=[Path(p) for p in directories];started=time.monotonic()
+    try:
+        from .k_group import simulate_group
+        rows=simulate_group(directories)
+        if {Path(row['directory']) for row in rows}!=set(directories) or len(rows)!=len(directories):
+            raise ValueError('Grouped k response lost or duplicated a declared start')
+    except Exception as exc:
+        rows=[dict(directory=directory,response=dict(status='group_native_retry',
+            reason=str(exc),error_type=type(exc).__name__)) for directory in directories]
+    # Per-start construction/qualification failure cannot remove a hypothesis;
+    # the ordinary native path decides its final scientific disposition.
+    for row in rows:
+        row['directory']=str(row['directory'])
+        if row['response'].get('status') not in {'simulated','k_periodicity_mismatch'}:
+            row['response']=dict(row['response'],status='group_native_retry')
+    usage=resource.getrusage(resource.RUSAGE_SELF)
+    write_json(directories[0]/'group-portfolio-response.json',json_safe(dict(rows=rows,
+        elapsed_seconds=time.monotonic()-started,
+        resources=dict(cpu_seconds=usage.ru_utime+usage.ru_stime,peak_rss_bytes=int(usage.ru_maxrss*1024)))))
 
 
 def portfolio(request,root):
@@ -200,20 +226,45 @@ def portfolio(request,root):
     # starts from pristine GSAS-II project globals and is never reused.
     runtime=runtime_identity();require_runtime(runtime,runtime['magnetic_function_sha256'])
     from . import native_magnetic
-    context=multiprocessing.get_context('fork');todo=deque(directories);active={};results=[]
+    context=multiprocessing.get_context('fork')
+    todo=deque((rows,None) for rows in portfolio_groups(directories));active={};results=[];group_runs=[]
     progress_path=root/('portfolio-progress-'+uuid.uuid4().hex+'.json')
     deadline=time.monotonic()+float(seconds)
     try:
         while (todo or active) and time.monotonic()<deadline:
             while todo and len(active)<workers and time.monotonic()<deadline:
-                directory=todo.popleft();child=context.Process(target=_portfolio_child,args=(str(directory),));child.start();active[child.pid]=(child,directory)
-            for pid,(child,directory) in list(active.items()):
+                rows,fallback=todo.popleft()
+                target=_group_portfolio_child if len(rows)>1 else _portfolio_child
+                args=([str(p) for p in rows],) if len(rows)>1 else (str(rows[0]),fallback)
+                child=context.Process(target=target,args=args);child.start();active[child.pid]=(child,rows)
+            for pid,(child,rows) in list(active.items()):
                 if child.is_alive():continue
                 child.join();del active[pid]
-                receipt=directory/'portfolio-response.json'
-                response=json.loads(receipt.read_text()) if receipt.exists() else dict(status='failed',reason='Native child exited without a terminal response')
-                results.append(dict(directory=str(directory.relative_to(root)),response=response))
-            write_json(progress_path,dict(completed=len(results),total=len(directories),active=len(active)))
+                if len(rows)==1:
+                    directory=rows[0];receipt=directory/'portfolio-response.json'
+                    response=json.loads(receipt.read_text()) if receipt.exists() else dict(status='failed',reason='Native child exited without a terminal response')
+                    returned=[dict(directory=directory,response=response)]
+                else:
+                    receipt=rows[0]/'group-portfolio-response.json'
+                    try:
+                        record=json.loads(receipt.read_text());returned=record['rows']
+                        if len(returned)!=len(rows) or {Path(item['directory']) for item in returned}!=set(rows):
+                            raise ValueError('Grouped k response changed its declared starts')
+                        group_runs.append(dict(starts=len(rows),elapsed_seconds=record['elapsed_seconds'],resources=record['resources']))
+                    except (OSError,ValueError,KeyError,TypeError) as exc:
+                        returned=[dict(directory=p,response=dict(status='group_native_retry',reason=str(exc))) for p in rows]
+                for item in returned:
+                    directory=Path(item['directory']);response=item['response']
+                    if response.get('status')=='group_native_retry':
+                        # Keep the failed accelerator artifacts for inspection;
+                        # retry ordinary simulation in a fresh owned process.
+                        partial=directory/'simulation'
+                        if partial.exists():partial.rename(directory/('group-attempt-'+uuid.uuid4().hex))
+                        todo.append(([directory],dict(reason=response.get('reason','Grouped response unavailable'),
+                            error_type=response.get('error_type'))))
+                    else:results.append(dict(directory=str(directory.relative_to(root)),response=response))
+            write_json(progress_path,dict(completed=len(results),total=len(directories),active=len(active),
+                active_starts=sum(len(rows) for _,rows in active.values())))
             if active:time.sleep(.03)
     finally:
         for child,_ in active.values():child.terminate()
@@ -221,8 +272,10 @@ def portfolio(request,root):
             child.join(timeout=2)
             if child.is_alive():child.kill();child.join()
     return dict(schema='radar-k-native-portfolio/v1',results=results,
-                pending=[str(p.relative_to(root)) for p in list(todo)+[d for _,d in active.values()]],
-                runtime=runtime,workers=workers,fresh_process_per_template=True)
+                pending=[str(p.relative_to(root)) for rows,_ in todo for p in rows]+
+                    [str(p.relative_to(root)) for _,rows in active.values() for p in rows],
+                runtime=runtime,workers=workers,fresh_process_per_template=not group_runs,
+                fresh_process_per_context=True,group_runs=group_runs)
 
 
 def main():

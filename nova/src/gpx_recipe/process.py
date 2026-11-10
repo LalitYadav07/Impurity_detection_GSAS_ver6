@@ -3,9 +3,25 @@ import os
 import signal
 import subprocess
 import time
+import threading
+from contextlib import contextmanager
 
 
 class ScientificCancelled(subprocess.SubprocessError):pass
+
+
+@contextmanager
+def cancellation_signals(event):
+    """Relay termination to owned nested workers before this process exits."""
+    previous={}
+    if threading.current_thread() is threading.main_thread():
+        for name in (signal.SIGTERM,signal.SIGINT):
+            previous[name]=signal.getsignal(name)
+            signal.signal(name,lambda *_:event.set())
+    try:
+        yield
+    finally:
+        for name,handler in previous.items():signal.signal(name,handler)
 
 
 def run_scientific(command, *, timeout, cancel_event=None, **kwargs):

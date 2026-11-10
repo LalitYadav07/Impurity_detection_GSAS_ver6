@@ -1,0 +1,53 @@
+# Geometry transcribed from Gibbs, Knight & Lightfoot, arXiv:1008.3042v1 Table II.
+# Public source: https://arxiv.org/pdf/1008.3042
+# 1303 K parent; geometry-only symmetry enumeration, not a refinement-ready ADP model.
+# Reported anisotropic ADPs deliberately omitted; full occupancy assumed for enumeration.
+data_YMnO3_1303K_geometry
+_chemical_formula_sum 'Y Mn O3'
+_space_group_IT_number 194
+_symmetry_space_group_name_H-M 'P 63/m m c'
+_cell_length_a 3.618961
+_cell_length_b 3.618961
+_cell_length_c 11.34090
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 120
+_cell_formula_units_Z 2
+# Standard SG 194 operators from COD 9008496, same Hall setting -P 6c 2c.
+loop_
+_space_group_symop_operation_xyz
+x,y,z
+-x,-x+y,1/2+z
+x,x-y,1/2-z
+-x+y,-x,1/2-z
+x-y,x,1/2+z
+-y,-x,z
+y,x,-z
+y,-x+y,-z
+-y,x-y,z
+x-y,-y,1/2+z
+-x+y,y,1/2-z
+x,y,1/2-z
+-x,-y,1/2+z
+x,x-y,z
+-x,-x+y,-z
+x-y,x,-z
+-x+y,-x,z
+y,x,1/2+z
+-y,-x,1/2-z
+-y,x-y,1/2-z
+y,-x+y,1/2+z
+-x+y,y,z
+x-y,-y,-z
+-x,-y,-z
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+Y1 Y 0 0 0 1
+Mn1 Mn 0.333333333333 0.666666666667 0.25 1
+O1 O 0 0 0.25 1
+O2 O 0.333333333333 0.666666666667 0.08557 1

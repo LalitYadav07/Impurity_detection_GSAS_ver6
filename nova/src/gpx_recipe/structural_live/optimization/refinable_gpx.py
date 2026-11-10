@@ -18,6 +18,7 @@ from scipy.linalg import qr
 
 from gpx_recipe.execution import freeze, write_json
 from gpx_recipe.fit_domain import native_powder_fit_mask
+from gpx_recipe.native_termination import observe_leastsq
 from gpx_recipe.snapshot import json_safe
 from gpx_recipe.structural_live.native import curve, inventory, modules, sha
 
@@ -97,6 +98,33 @@ def assess_chemistry(project, phase_name=None):
     return EmpiricalNativeConstraint(native, catalog).assess([], [])
 
 
+def _native_powder_objective(project, selected, selected_curve):
+    """Sum the actual participating powder banks, including native weights."""
+    *_, native_io = modules()
+    used, _ = native_io.GetUsedHistogramsAndPhases(str(project.filename))
+    if not used or selected.name not in used or any(not name.startswith('PWDR') for name in used):
+        raise ValueError('Native continuation objective requires its selected bank and complete used powder inventory')
+    components=[]
+    for name in sorted(used):
+        hist=selected if name==selected.name else project.histogram(name)
+        fresh=selected_curve if name==selected.name else curve(project,hist)
+        arrays=hist.data['data'][1][:3]
+        x,y,w=[np.asarray(np.ma.getdata(a),float) for a in arrays]
+        mask=(w>0)&np.isfinite(y)&np.isfinite(w)&np.isfinite(fresh)
+        mask &= native_powder_fit_mask(x,hist.data['Limits'][1],hist.data['Limits'][2:])
+        for a in arrays:mask &= ~np.ma.getmaskarray(a)
+        factor=float(hist.data['data'][0].get('wtFactor',1.))
+        if not np.isfinite(factor) or factor<=0:
+            raise ValueError('Native histogram weight factor must be finite and positive')
+        # errRefine multiplies each bank's weighted residual by sqrt(wtFactor).
+        cost=factor*float(np.sum(w[mask]*(y[mask]-fresh[mask])**2))
+        components.append(dict(histogram=name,weight_factor=factor,weighted_chisq=cost,
+                               fitted_points=int(mask.sum())))
+        hist.data['data'][1][3]=fresh
+        hist.data['data'][1][5]=hist.data['data'][1][1]-fresh
+    return float(sum(row['weighted_chisq'] for row in components)),components
+
+
 def continue_native_refinement(project, expected_variables, *, phase_name=None, histogram_name=None,
                                max_passes=3, profile_tolerance=1e-8):
     """Native refinements with explicit saved-parameter prediction checks.
@@ -117,7 +145,9 @@ def continue_native_refinement(project, expected_variables, *, phase_name=None, 
     hist=project.histogram(histogram_name) if histogram_name else project.histograms()[0]
     passes=[]
     for _ in range(max_passes):
-        start=time.monotonic();project.refine()
+        start=time.monotonic()
+        with observe_leastsq(modules()[-2]) as termination:
+            project.refine()
         cov=copy.deepcopy(project.data['Covariance']['data'])
         if set(cov.get('varyList',[]))!=set(expected_variables):
             raise ValueError('Native refinement did not save the intended active variables')
@@ -128,12 +158,8 @@ def continue_native_refinement(project, expected_variables, *, phase_name=None, 
         saved=np.array(hist.data['data'][1][3],copy=True)
         fresh=curve(project,hist)
         gap=float(np.linalg.norm(fresh-saved)/max(np.linalg.norm(fresh),1e-30))
-        arrays=hist.data['data'][1][:3]
-        x,y,w=[np.asarray(np.ma.getdata(a),float) for a in arrays]
-        mask=(w>0)&np.isfinite(y)&np.isfinite(w)&np.isfinite(fresh)
-        mask &= native_powder_fit_mask(x,hist.data['Limits'][1],hist.data['Limits'][2:])
-        for a in arrays:mask &= ~np.ma.getmaskarray(a)
-        fresh_chi2=float(np.sum(w[mask]*(y[mask]-fresh[mask])**2))
+        fresh_chi2,components=_native_powder_objective(project,hist,fresh)
+        factor=next(row['weight_factor'] for row in components if row['histogram']==hist.name)
         objective_gap=abs(fresh_chi2-cov['Rvals']['chisq'])/max(1.,fresh_chi2)
         chemistry=assess_chemistry(project,phase.name)
         project.data['Covariance']['data']=cov
@@ -144,6 +170,11 @@ def continue_native_refinement(project, expected_variables, *, phase_name=None, 
         project.save()
         passes.append(dict(seconds=time.monotonic()-start,profile_relative_error=gap,
             objective_relative_error=objective_gap,
+            native_solver_termination=termination,
+            native_reported_converged=(cov['Rvals'].get('converged')
+                if type(cov['Rvals'].get('converged')) is bool else None),
+            native_histogram_weight_factor=factor,
+            native_powder_objective_components=components,
             native_rwp_percent=float(cov['Rvals']['Rwp']),chemistry_feasible=chemistry['feasible']))
         if not chemistry['feasible'] or objective_gap<=profile_tolerance:
             break

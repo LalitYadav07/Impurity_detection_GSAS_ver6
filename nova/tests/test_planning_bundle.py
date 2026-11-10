@@ -1,0 +1,210 @@
+"""Portable planner and History recovery preserve settings without pickle trust."""
+import copy
+import hashlib
+import io
+import json
+from pathlib import Path
+import pickle
+from types import SimpleNamespace
+import zipfile
+
+import numpy as np
+import pytest
+
+from radar_pd_nova import planning_bundle as bundle
+from radar_pd_nova.planning_controller import PlanningMixin
+from test_model_runtime import Service
+
+
+class State(SimpleNamespace):
+    def change(self,*_):return lambda callback:callback
+    def flush(self):pass
+
+
+class History(Service):
+    galaxy_key='PRIVATE-KEY'
+    def _dataset_metadata(self,key):
+        if key not in self.data:raise KeyError(key)
+        return dict(id=key,state='ok',history_id=self.history_id)
+
+
+def planner(tmp_path,service=None):
+    instance=PlanningMixin();instance.server=SimpleNamespace(state=State())
+    instance.service=service or SimpleNamespace(output_root=tmp_path)
+    instance._init_planning();instance.load_planning_example()
+    return instance,instance.server.state
+
+
+def result(instance):
+    root=instance._planning_root()/'simulation';root.mkdir(parents=True)
+    np.savez(root/'curves.npz',d=[1.,2.,3.],expected=[1.,2.,1.],nuclear=[1.,2.,1.],magnetic=[0.,0.,0.])
+    # This is intentionally a real pickle payload, which must remain opaque.
+    (root/'forward.gpx').write_bytes(pickle.dumps({'never':'load uploaded pickle'}))
+    receipt=dict(schema='powgen-planning-result/v1',mode='profile_only',looks=[],intensity_unit='shape',
+        artifacts={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()})
+    (root/'result.json').write_text(json.dumps(receipt))
+    instance._planning_output=root;instance._planning_receipt_sha256=hashlib.sha256((root/'result.json').read_bytes()).hexdigest()
+    instance.server.state.plan_current=True;instance.server.state.plan_result_ready=True
+    return root
+
+
+def test_portable_bundle_rebases_settings_and_results_without_executing_gpx(tmp_path,monkeypatch):
+    instance,s=planner(tmp_path/'original');root=result(instance)
+    s.plan_mass=2.5;s.plan_isotopes='{"Si":{"28":0.25,"29":0.75}}';s.plan_seconds='60, 900'
+    document,files=instance._planning_build_bundle();raw=bundle.archive(document,files)
+    assert document['schema']==bundle.SCHEMA and not Path(document['settings']['plan_cif']).is_absolute()
+    assert str(tmp_path) not in json.dumps(document)
+    monkeypatch.setattr(pickle,'load',lambda *a,**k:pytest.fail('Never unpickle uploaded native data'))
+    monkeypatch.setattr(pickle,'loads',lambda *a,**k:pytest.fail('Never unpickle uploaded native data'))
+    fresh,t=planner(tmp_path/'different')
+    restored,values=bundle.read_archive(raw);fresh._planning_apply_bundle(restored,values)
+    assert (t.plan_mass,t.plan_seconds,t.plan_isotopes)==(2.5,'60, 900',s.plan_isotopes)
+    assert t.plan_current and t.plan_result_ready and t.plan_figure['data']
+    assert 'provenance unverified' in t.plan_qualification
+    assert Path(t.plan_cif).is_file() and fresh._planning_output!=root
+    with pytest.raises(ValueError,match='Uploaded GPX'):
+        fresh._planning_native_input(fresh._planning_output/'forward.gpx')
+    fresh._planning_edited()
+    assert not t.plan_current and not t.plan_result_ready
+
+
+def test_real_history_save_and_fresh_controller_recovery(tmp_path):
+    service=History(tmp_path);service.output_root=tmp_path/'one'
+    instance,s=planner(tmp_path/'one',service);result(instance)
+    s.plan_name='Portable silicon';s.plan_mass=3.25
+    instance.save_planning_plan()
+    assert not s.plan_error and s.plan_saved_id.startswith('history:')
+    selected=s.plan_saved_id
+    # Simulate losing every original local path with a separate output root.
+    service.output_root=tmp_path/'two'
+    fresh,t=planner(tmp_path/'two',service)
+    fresh.refresh_planning_plans()
+    assert selected in {row['value'] for row in t.plan_saved_options}
+    t.plan_saved_id=selected;fresh.restore_planning_plan()
+    assert not t.plan_error and t.plan_mass==3.25 and t.plan_current
+    assert fresh._planning_output.is_relative_to(tmp_path/'two')
+    assert 'Galaxy' in s.plan_save_message
+
+
+def test_other_history_cannot_restore_even_an_accessible_copied_bundle(tmp_path):
+    service=History(tmp_path);service.output_root=tmp_path/'one'
+    instance,s=planner(tmp_path/'one',service);instance.save_planning_plan();selected=s.plan_saved_id
+    service.history_id='other-history';service.output_root=tmp_path/'other'
+    fresh,t=planner(tmp_path/'other',service);fresh.refresh_planning_plans()
+    t.plan_saved_id=selected;fresh.restore_planning_plan()
+    assert 'another History' in t.plan_error and not t.plan_current
+
+
+@pytest.mark.parametrize('name',['../outside.cif','/absolute.cif','C:\\outside.cif','inputs/../outside.cif'])
+def test_archive_path_escape_is_rejected(name):
+    data=io.BytesIO()
+    with zipfile.ZipFile(data,'w') as archive:archive.writestr(name,b'unsafe')
+    with pytest.raises(ValueError,match='relative'):bundle.read_archive(data.getvalue())
+
+
+def test_duplicate_link_and_unmanifested_files_are_rejected(tmp_path):
+    instance,_=planner(tmp_path);document,files=instance._planning_build_bundle()
+    raw=bundle.archive(document,files)
+    for mode in ('duplicate','link','extra'):
+        data=io.BytesIO(raw)
+        with zipfile.ZipFile(data,'a') as archive:
+            if mode=='duplicate':archive.writestr('plan.json',b'{}')
+            elif mode=='link':
+                item=zipfile.ZipInfo('inputs/link.cif');item.external_attr=0o120777<<16;archive.writestr(item,b'../elsewhere')
+            else:archive.writestr('unmanifested.cif',b'extra')
+        with pytest.raises(ValueError):bundle.read_archive(data.getvalue())
+
+
+def test_corrupt_result_and_absolute_backend_fail_before_state_changes(tmp_path):
+    instance,_=planner(tmp_path/'original');result(instance);document,files=instance._planning_build_bundle()
+    fresh,t=planner(tmp_path/'fresh');t.plan_mass=6.5
+    wrong=copy.deepcopy(document);wrong['backend']['_planning_output']='/etc'
+    with pytest.raises(ValueError,match='outside'):
+        fresh._planning_apply_bundle(wrong,files)
+    assert t.plan_mass==6.5
+    changed=dict(files);changed['results/output/curves.npz']=b'changed'
+    with pytest.raises(ValueError,match='changed'):
+        fresh._planning_apply_bundle(document,changed)
+    assert t.plan_mass==6.5
+
+
+def test_object_arrays_nonfinite_and_oversized_headers_are_rejected():
+    typed=io.BytesIO();np.savez(typed,model_type='compound_poisson_reference')
+    bundle.validate_arrays(typed.getvalue())  # fixed text metadata, without pickle
+    for values in ([object()],[float('nan')]):
+        data=io.BytesIO();np.savez(data,values=values)
+        with pytest.raises(ValueError):bundle.validate_arrays(data.getvalue())
+    array=io.BytesIO()
+    np.lib.format.write_array_header_1_0(array,dict(descr='<f8',fortran_order=False,shape=(10**12,)))
+    data=io.BytesIO()
+    with zipfile.ZipFile(data,'w',zipfile.ZIP_DEFLATED) as archive:archive.writestr('values.npy',array.getvalue())
+    with pytest.raises(ValueError,match='shape'):bundle.validate_arrays(data.getvalue())
+
+
+def test_client_cannot_invent_saved_native_authority(tmp_path):
+    instance,s=planner(tmp_path);root=result(instance)
+    document,files=instance._planning_build_bundle()
+    document['backend']['_planning_prepared']={'gpx':{'$path':'results/output/forward.gpx'},'gpx_sha256':hashlib.sha256((root/'forward.gpx').read_bytes()).hexdigest()}
+    document['backend']['_planning_prepared_kind']='magnetic'
+    instance._planning_apply_bundle(document,files,trusted=False)
+    assert instance._planning_prepared is None and instance._planning_prepared_kind is None
+    with pytest.raises(ValueError):instance._planning_native_input(instance._planning_output/'forward.gpx')
+
+
+def test_magnetic_catalog_snapshot_excludes_native_scratch_and_dispatch_locks(tmp_path):
+    instance,_=planner(tmp_path);root=instance._planning_root()/'discovery';root.mkdir()
+    catalog=dict(candidates=[],k=['0','0','0'])
+    (root/'catalog.json').write_text(json.dumps(catalog))
+    scratch=root/'native-dispatches';scratch.mkdir();(scratch/'job.lock').write_text('lock')
+    (root/'worker.log').write_text('private scratch should not be needed to restore a catalog')
+    instance._planning_catalog=(catalog,{}, {},root)
+    document,files=instance._planning_build_bundle()
+    assert 'catalogs/catalog/catalog.json' in files
+    assert not any('worker.log' in path or '.lock' in path for path in files)
+
+
+def test_original_scenario_binding_detects_edited_sample_isotopes_and_exposure(tmp_path):
+    instance,s=planner(tmp_path)
+    original=instance._planning_request()
+    assert instance._planning_matches_original(original,tmp_path)
+    s.plan_mass*=2
+    assert not instance._planning_matches_original(original,tmp_path)
+    s.plan_mass/=2;s.plan_seconds='1, 2'
+    assert not instance._planning_matches_original(original,tmp_path)
+    s.plan_seconds='60, 300, 1800';s.plan_isotopes='{"Si":"28"}'
+    assert not instance._planning_matches_original(original,tmp_path)
+
+
+def test_authentic_result_cannot_be_assigned_to_edited_saved_settings(tmp_path):
+    instance,_=planner(tmp_path/'source');root=result(instance)
+    original=instance._planning_request()
+    curve=root/'curves.npz'
+    instance._planning_native_artifacts={str(curve):dict(sha256=hashlib.sha256(curve.read_bytes()).hexdigest(),
+        handle={'fixture':'verified separately'},relative='result/curves.npz')}
+    document,files=instance._planning_build_bundle()
+    fresh,s=planner(tmp_path/'fresh')
+    fresh._planning_runtime_cache=SimpleNamespace(
+        verify_artifacts=lambda values,_:values,verify_result=lambda *_:(original,tmp_path))
+    fresh._planning_apply_bundle(document,files,trusted=True)
+    assert s.plan_current
+    changed=copy.deepcopy(document);changed['settings']['plan_mass']=99.
+    fresh._planning_apply_bundle(changed,files,trusted=True)
+    assert not s.plan_current and not s.plan_result_ready and not s.plan_figure['data']
+    assert 'differ from the original' in s.plan_message
+
+
+def test_structural_restore_binds_added_removed_and_changed_cell_overrides(tmp_path):
+    instance,s=planner(tmp_path)
+    original=instance._planning_request()
+    original['prepared_structural']=dict(candidate={'id':'child-a'},modes={'mode-a':.1},
+        cell=[5.,5.,8.,90.,90.,90.],requested_cell=None)
+    s.plan_transition='structural';s.plan_structural_candidate='child-a';s.plan_structural_parameters='{"mode-a":0.1}'
+    assert instance._planning_matches_original(original,tmp_path)
+    s.plan_structural_cell='[5,5,9,90,90,90]'
+    assert not instance._planning_matches_original(original,tmp_path)
+    original['prepared_structural']['requested_cell']=[5.,5.,9.,90.,90.,90.]
+    assert instance._planning_matches_original(original,tmp_path)
+    s.plan_structural_cell=''
+    assert not instance._planning_matches_original(original,tmp_path)
+    original['prepared_structural'].pop('requested_cell')
+    assert not instance._planning_matches_original(original,tmp_path)

@@ -147,15 +147,19 @@ def test_reused_start_bank_matches_every_direct_native_curve(tmp_path,synthetic)
     settings=SearchSettings(seconds=2.,starts=2)
     direct_source=make_source(prepared,tmp_path/'direct-context',settings)
     direct=tmp_path/'direct.npz';build(direct_source,direct)
+    # Materialize the checked arrays while this adapter owns native globals.
+    # A second adapter replaces those maps; it cannot validate the first one.
+    left=OfflineNativeStartBank(direct_source,direct)
     reused_source=make_source(prepared,tmp_path/'reuse-context',settings)
     reused=tmp_path/'reused.npz';receipt=build(reused_source,reused,reuse_fixed_cell_profiles=True)
-    left=OfflineNativeStartBank(direct_source,direct)
     right=OfflineNativeStartBank(reused_source,reused)
     np.testing.assert_array_equal(left.points,right.points)
     np.testing.assert_allclose(left.curves,right.curves,rtol=1e-11,atol=1e-9)
     np.testing.assert_allclose(left.proposal_cell_steps,right.proposal_cell_steps,rtol=0,atol=0)
     assert receipt['construction_execution']['cached_calls']>0
     assert receipt['construction_execution']['diagnostics']['maximum_check_error']<1e-9
+    with pytest.raises(RuntimeError,match='constraint state was replaced'):
+        OfflineNativeStartBank(direct_source,direct)
 
 
 def test_batched_native_inventory_imports_the_packaged_occupancy_loader(tmp_path,monkeypatch):
@@ -302,6 +306,12 @@ def test_worker_audit_reconstructs_declared_freedom_and_bounds(tmp_path,syntheti
     result=execute(job)
     assert result['status']=='optimization_unresolved',result
     assert result['inputs_verified'] and result['effects_verified'] and result['audit']['passed']
+    stages=result['structural_fit']['workflow_timings']
+    assert stages['scope']=='model' and stages['preparation_seconds']>0 and stages['fit_service_seconds']>0
+    assert stages['combined_service_seconds']==stages['preparation_seconds']+stages['fit_service_seconds']
+    assert stages['combined_service_seconds']<=result['resources']['wall_seconds']
+    saved=json.loads((job/'results/structural-fit.json').read_text())
+    assert saved['workflow_timings']==stages
     root=job;source=root/'source.gpx';out=job/'results'
     output=out/result['gpx'];original=output.read_bytes()
     good=audit_trial(source,output,protocol,protocol['candidates'][0],input_root=root)

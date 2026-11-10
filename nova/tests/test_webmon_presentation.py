@@ -96,3 +96,17 @@ def test_reflection_provenance_must_match_saved_fit(tmp_path):
     assert full_posterior(tmp_path/'posterior.json')['reflections']==metadata['tables']
     np.savez(tmp_path/'posterior.npz',samples=[[2]],loglike=[0])
     p=full_posterior(tmp_path/'posterior.json');assert not p['reflections'] and 'withheld' in p['reflection_status']
+
+
+def test_sampler_summary_explains_replica_disagreement_and_legacy_scope():
+    from radar_pd_nova.webmon.viewdata import sampler_summary
+    p=dict(sampler_history=[dict(acceptance=.3,local_acceptance=.25,sign_acceptance=1.)],
+        health=dict(median_discrepancy_in_interval_widths=0.,screen_passed=False,
+            predictive_agreement={'passed':False},physical_second_moment_agreement={'passed':False}))
+    text=sampler_summary(p)
+    assert 'calculated patterns' in text and 'moment directions or relative signs' in text
+    assert 'Sampling remains unresolved' in text
+    p['health']=dict(median_discrepancy_in_interval_widths=0.,screen_passed=True)
+    assert 'magnitudes only' in sampler_summary(p)
+    p['health'].update(predictive_agreement={'passed':True},physical_second_moment_agreement={'passed':True})
+    assert 'does not establish a unique structure' in sampler_summary(p)

@@ -24,3 +24,21 @@ data_old
 GSAS-II
 docs/user_manual/dist
 docs/user_manual/screenshots
+# Production images must not receive developer fixtures or experimental tests.
+nova/tests/
+tests/**
+# Retain only public synthetic controls explicitly used by image builds or
+# the installed CUDA acceptance command. CI mounts its remaining tests read-only.
+!tests/gpx_recipe/
+tests/gpx_recipe/**
+!tests/gpx_recipe/kernel_geometry_control.py
+!tests/gpx_recipe/nuclear_powder_control.py
+!tests/gpx_recipe/test_structural_training_cuda.py
+!tests/gpx_recipe/test_structural_paired_training_native.py
+!tests/gpx_recipe/test_structural_paired_blocks.py
+!tests/gpx_recipe/test_structural_joint_modes_native.py
+!tests/gpx_recipe/test_structural_family_targets.py
+!tests/gpx_recipe/test_structural_mode_projection.py
+!tests/gpx_recipe/test_structural_paired_preparation.py
+!tests/gpx_recipe/test_structural_training_jobs.py
+!tests/gpx_recipe/test_structural_ranker_cohort.py

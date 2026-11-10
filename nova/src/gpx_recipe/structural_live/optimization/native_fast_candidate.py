@@ -72,13 +72,17 @@ class NativeFastCandidate:
         if len(self.parts)!=1:raise ValueError('One independently analyzed histogram required')
         self.slice=self.parts[0][1];self.last=None
 
-    def _values(self,theta,chemistry_domain=None):
+    def _geometry(self,theta):
         theta=np.asarray(theta,float)
         if theta.shape!=(self.dimension,) or not np.isfinite(theta).all() or abs(theta[-2])>100:
             raise ValueError('Invalid physical parameter vector')
         a=self.basis['baseline_a']+self.slow.a_scale*(self.basis['cell_basis']@theta[self.nm:self.nm+self.nc])
         metric=np.array([[a[0],a[3]/2,a[4]/2],[a[3]/2,a[1],a[5]/2],[a[4]/2,a[5]/2,a[2]]])
         if np.linalg.eigvalsh(metric).min()<=0:raise ValueError('Nonpositive native cell metric')
+        return theta,a
+
+    def _values(self,theta,chemistry_domain=None):
+        theta,a=self._geometry(theta)
         certified=False
         if chemistry_domain is not None:
             from .bounded_chemical_prior import BoundedChemicalGeometry
@@ -87,6 +91,22 @@ class NativeFastCandidate:
             certified=compiler.certifies_native(theta[:self.nm+self.nc],z,geometry_key=self.chemical_geometry_key,
                 catalog_key=self.empirical_constraint.catalog.fingerprint)
         if not certified:self.empirical_constraint.require(theta[:self.nm],theta[self.nm:self.nm+self.nc])
+        return theta,self._mapped_values(theta,a)
+
+    def _peak_geometry_values(self,theta):
+        """Map cell-only arguments for instrument kernels, without atoms.
+
+        This does not evaluate a structure, structure factors or a pattern.
+        Actual forward/derivative/export methods retain ``_values`` and its
+        chemistry checks. Only the owned geometry-only peak producer uses
+        this narrower mapping; displacement and nuisance changes are rejected.
+        """
+        theta,a=self._geometry(theta)
+        if np.any(theta[:self.nm]) or np.any(theta[-2:]):
+            raise ValueError('Peak preparation requires cell-only native arguments')
+        return theta,self._mapped_values(theta,a)
+
+    def _mapped_values(self,theta,a):
         values=self.native.x0+self.lift@theta
         # GPX stores direct-cell parameters. Canonicalize through the same native
         # A -> cell -> A conversion as export/DoNoFit; tiny representation
@@ -97,7 +117,7 @@ class NativeFastCandidate:
             if name.startswith(prefix) and name[len(prefix):].isdigit():
                 values[i]=canonical_a[int(name[len(prefix):])]
         values[self.scale_index]=self.slow.histogram_scale*np.exp(theta[-2])
-        return theta,values
+        return values
 
     def evaluate_mode_jacobian(self,theta,*,chemistry_domain=None):
         """Native displacement derivatives only; no analytic cell claim.

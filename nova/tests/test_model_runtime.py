@@ -31,7 +31,11 @@ class Service:
     def search_history_datasets(self,query,**kwargs):
         rows=[dict(id=k,name=v) for k,v in reversed(list(self.labels.items())) if query in v]
         return rows[kwargs.get('offset',0):kwargs.get('offset',0)+kwargs.get('limit',500)]
-    def _download_dataset(self,key,target):Path(target).write_bytes(self.data[key])
+    def _download_dataset(self,key,target,**kwargs):
+        data=self.data[key]
+        if kwargs.get('maximum_bytes') is not None and len(data)>kwargs['maximum_bytes']:
+            raise ValueError('Dataset exceeds its download bound')
+        Path(target).write_bytes(data)
     def submit_utility(self,**kwargs):
         self.submissions.append(kwargs);key=kwargs['inputs']['dispatch_key']
         job=UtilityActionRecord(uid=key,tool_id=MODEL_TOOL_ID,name='RADAR-PD model '+key,galaxy_job_id='job'+str(len(self.jobs)),status=RunStatus.OK)
@@ -57,6 +61,62 @@ def remote(tmp_path,monkeypatch):
     p=tmp_path/'source.gpx';p.write_bytes(b'opaque-scientific-project')
     source=dict(id='scan1',dataset_id='original-data',source_path=str(p),source_sha256=file_sha(p))
     return runtime,service,source
+
+
+def structural_transport(remote,tmp_path,monkeypatch):
+    from test_structural_ranking_dispatch import setup_inputs
+    runtime,service,source=remote
+    inputs,p,document=setup_inputs(tmp_path/'structural-fixture')
+    source=dict(source,source_path=str(inputs/'source.gpx'),source_sha256=p['source']['sha256'])
+    campaign=Campaign(tmp_path/'structural-campaign',shared_inputs=True)
+    ids=campaign.enroll(p,inputs,approved_hash=digest(p));transport=GalaxyChunkTransport(runtime,campaign)
+    transport.state['inputs'][digest(p)]='fixture-assets';transport.state['sources'][digest(p)]=source
+    monkeypatch.setattr(transport,'_prepared_inputs',lambda *a,**k:(document,[]))
+    monkeypatch.setattr(transport,'checkpoint',lambda **k:None)
+    return transport,service,p,document,ids
+
+
+def test_only_one_chunk_owns_source_ranking_and_saved_advice_survives_restart(remote,tmp_path,monkeypatch):
+    from test_structural_ranking_dispatch import receipt
+    t,_,p,document,ids=structural_transport(remote,tmp_path,monkeypatch)
+    requests=[]
+    for uid in ids[:2]:
+        handle=t.submit_many([(uid,t.campaign.root/'trials'/uid)],workers=1)[uid]
+        requests.append(t.state['chunks'][handle['dispatch_key']]['request'])
+    assert [r['rank_structural'] for r in requests]==[True,False]
+    t.campaign.set_setting('structural_rankings',{digest(p):receipt(p,document)})
+    restored=GalaxyChunkTransport(t.runtime,t.campaign)
+    monkeypatch.setattr(restored,'_prepared_inputs',lambda *a,**k:(document,[]))
+    monkeypatch.setattr(restored,'checkpoint',lambda **k:None)
+    uid=ids[2];handle=restored.submit_many([(uid,t.campaign.root/'trials'/uid)],workers=1)[uid]
+    assert restored.state['chunks'][handle['dispatch_key']]['request']['rank_structural'] is False
+    assert len(t.campaign.trials())==4
+
+
+@pytest.mark.parametrize('damaged',[False,True])
+def test_source_bound_ranking_receipt_is_collected_without_hiding_native_outcomes(remote,tmp_path,monkeypatch,damaged):
+    from test_structural_ranking_dispatch import receipt
+    from gpx_recipe.symmetry.bundle import pack
+    t,service,p,document,ids=structural_transport(remote,tmp_path,monkeypatch)
+    uid=ids[0];handle=t.submit_many([(uid,t.campaign.root/'trials'/uid)],workers=1)[uid]
+    dispatch=handle['dispatch_key'];received=tmp_path/'received';received.mkdir()
+    ranking=receipt(p,document)
+    if damaged:ranking['source_sha256']='f'*64
+    response=dict(schema='radar-model-chunk-result/v1',dispatch_key=dispatch,protocol_sha256=digest(p),
+        trials=[dict(id=uid,state='finished',status='unsupported')],pending=[],allocation=dict(workers=1),
+        structural_ranking=ranking)
+    (received/'response.json').write_text(json.dumps(response))
+    trial=received/'trials'/uid;trial.mkdir(parents=True)
+    (trial/'result.json').write_text(json.dumps(dict(schema='radar-symmetry-trial/v1',id=uid,
+        protocol_sha256=digest(p),status='unsupported',reason='Opaque transport control')))
+    archive=tmp_path/'reply.zip';pack(received,archive,['response.json','trials/'+uid+'/result.json'])
+    service.jobs[dispatch].outputs={'result_bundle':service._put(archive.read_bytes(),'result')}
+    assert t.poll(handle,t.campaign.root/'trials'/uid)['state']=='finished'
+    assert (t.campaign.root/'trials'/uid/'result.json').is_file()
+    saved=t.campaign.setting('structural_rankings',{})
+    if damaged:
+        assert digest(p) not in saved and 'complete native search retained' in t.campaign.setting('structural_ranking_notice')
+    else:assert saved[digest(p)]==ranking
 
 
 def test_native_packet_result_roundtrip_and_credentials_stay_in_nova(remote,tmp_path,monkeypatch):

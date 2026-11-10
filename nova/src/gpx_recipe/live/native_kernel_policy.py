@@ -1,18 +1,20 @@
 """Choose and independently check a native fixed-nuisance magnetic compiler.
 
-The derivative compiler is faster for the larger measured spin spaces. If its
-numerical validation fails, central native profiles supply a checked fallback.
+Native amplitudes and peak profiles are reused before trying the derivative
+compiler. Unsupported or numerically unqualified accelerators fall back to
+the independently checked native profile path.
 This changes computation only: it provides no model-selection or stopping rule.
 """
 import time
 import numpy as np
 from .central_quadratic import compile_even_quadratic
 from .native_quadratic import compile_native_magnetic_jacobian
+from .native_reflection import compile_profile_reflections, ReflectionCompilerUnavailable
 
 
 def compile_native_magnetic_kernel(objective, reference, indices, *,
-                                   method='auto', seed=192, checks=5):
-    if method not in {'auto', 'central', 'derivative'}:
+                                   method='auto', seed=192, checks=5, factor_cache=None):
+    if method not in {'auto', 'central', 'derivative', 'reflection'}:
         raise ValueError('Unknown magnetic compiler')
     reference = np.asarray(reference, float)
     indices = list(indices)
@@ -21,8 +23,9 @@ def compile_native_magnetic_kernel(objective, reference, indices, *,
             any(not isinstance(i, (int, np.integer)) or i < 0 or i >= len(reference) for i in indices)):
         raise ValueError('Finite reference, valid distinct indices and positive checks required')
     started = time.monotonic()
-    selected = 'derivative' if method == 'derivative' or (method == 'auto' and len(indices) >= 6) else 'central'
+    selected = 'reflection' if method in {'auto', 'reflection'} else method
     fallback = None
+    reflection_diagnostics = None
 
     def forward(p):
         x = reference.copy()
@@ -44,6 +47,19 @@ def compile_native_magnetic_kernel(objective, reference, indices, *,
         return dict(total_profile_errors=total_errors, magnetic_signal_errors=magnetic_errors)
 
     try:
+        if selected == 'reflection':
+            try:
+                compiled = compile_profile_reflections(objective, reference, indices,
+                    factor_cache=factor_cache)
+                base, q = compiled['base'], compiled['quadratic']
+                validation = validate(base, q)
+                reflection_diagnostics = compiled['diagnostics']
+                native_diagnostics = None
+            except (ValueError, FloatingPointError, np.linalg.LinAlgError) as error:
+                if method != 'auto':
+                    raise
+                fallback = f'{type(error).__name__}: {error}'
+                selected = 'derivative' if len(indices) >= 6 else 'central'
         if selected == 'derivative':
             try:
                 compiled = compile_native_magnetic_jacobian(objective, reference, indices, seed=seed, checks=checks)
@@ -53,7 +69,7 @@ def compile_native_magnetic_kernel(objective, reference, indices, *,
             except (ValueError, FloatingPointError, np.linalg.LinAlgError) as error:
                 if method != 'auto':
                     raise
-                fallback = f'{type(error).__name__}: {error}'
+                fallback = '; '.join(filter(None, [fallback, f'{type(error).__name__}: {error}']))
                 selected = 'central'
         if selected == 'central':
             base = forward(np.zeros(len(indices)))
@@ -66,4 +82,5 @@ def compile_native_magnetic_kernel(objective, reference, indices, *,
         requested_method=method, selected_method=selected, dimensions=len(indices),
         fallback_reason=fallback, independent_validation=validation,
         native_derivative_diagnostics=native_diagnostics,
+        native_reflection_diagnostics=reflection_diagnostics,
         seconds=time.monotonic()-started, global_optimum_certified=False))

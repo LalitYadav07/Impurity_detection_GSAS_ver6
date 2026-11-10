@@ -47,10 +47,26 @@ def density_to_tof(pattern,*,d_edges,export_difc):
             or np.any(np.diff(edges)<=0) or not np.allclose((edges[:-1]+edges[1:])/2,pattern.x,rtol=0,atol=1e-8)
             or not np.isfinite(export_difc) or export_difc<=0):
         raise ValueError('Exact producer edges and positive focused export DIFC required')
-    target=edges*export_difc;factor=np.diff(edges)/np.diff(target)
-    y=pattern.y*factor;sigma=pattern.sigma*factor;weights=np.zeros_like(sigma)
-    np.divide(1.,sigma*sigma,out=weights,where=~pattern.mask)
-    return dict(x=pattern.x*export_difc,edges=target,y=y,sigma=sigma,weights=weights,mask=pattern.mask.copy())
+    with np.errstate(over='ignore',under='ignore',invalid='ignore',divide='ignore'):
+        target=edges*export_difc;factor=np.diff(edges)/np.diff(target)
+        x=pattern.x*export_difc
+        y=pattern.y*factor;sigma=pattern.sigma*factor;weights=np.zeros_like(sigma)
+        np.divide(1.,sigma*sigma,out=weights,where=~pattern.mask)
+    use=~pattern.mask
+    if (not np.isfinite(target).all() or not np.isfinite(x).all() or not np.all(np.diff(target)>0)
+            or not np.isfinite(y[use]).all() or not np.isfinite(sigma[use]).all()
+            or not np.isfinite(weights[use]).all() or np.any(sigma[use]<=0) or np.any(weights[use]<=0)):
+        raise ValueError('TOF conversion cannot represent the supplied observations and positive variances')
+    return dict(x=x,edges=target,y=y,sigma=sigma,weights=weights,mask=pattern.mask.copy())
+
+
+def uniform_density_to_tof(pattern,*,export_difc):
+    """Apply the reviewed uniform-bin exporter convention in one place."""
+    spacing=np.diff(pattern.x)
+    if not len(spacing) or not np.allclose(spacing,spacing[0],rtol=1e-6,atol=1e-10):
+        raise ValueError('The reviewed exporter requires uniform d bins')
+    return density_to_tof(pattern,d_edges=np.r_[pattern.x[0]-spacing[0]/2,pattern.x+spacing[0]/2],
+                          export_difc=export_difc)
 
 
 def _signature(stat):return (stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)

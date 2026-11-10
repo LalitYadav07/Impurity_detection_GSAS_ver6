@@ -41,11 +41,13 @@ def select_recovery_candidates(rows, top=3, include_flexible=True, include_paret
 
 
 def improve(source,table,observation,initial,*,bank=None,native_pool=None,
-            policy=None,checkpoint=None,force_native_mode_derivatives=False):
+            policy=None,checkpoint=None,force_native_mode_derivatives=False,evaluator=None):
     if policy is None:policy=RecoveryPolicy()
     if not isinstance(policy,RecoveryPolicy):raise TypeError('Explicit RecoveryPolicy required')
     if policy.chemistry_seconds and bank is None:
         raise ValueError('Chemistry-constrained recovery requires a prepared native start bank')
+    from .native_derivative_source import derivative_source,NativeDerivativeSource
+    source=derivative_source(source,evaluator=evaluator,force_native=force_native_mode_derivatives)
     started=time.monotonic()
     d=len(source.radii);z=np.asarray(initial,float)
     lower=np.r_[-np.ones(d),-.3,np.log(.25)]
@@ -65,6 +67,8 @@ def improve(source,table,observation,initial,*,bank=None,native_pool=None,
         receipt=dict(best=best,stages=records.copy(),seconds=time.monotonic()-started,
             policy=asdict(policy),global_optimum_certified=False,model_exclusion_authorized=False,
             rwp_percent=observation_rwp_percent(observation,rate),original_objective_preserved=True)
+        if isinstance(source,NativeDerivativeSource):
+            receipt['native_derivative_execution']=source.diagnostics()
         if checkpoint is not None:checkpoint(receipt,rate)
         return receipt
     publish()

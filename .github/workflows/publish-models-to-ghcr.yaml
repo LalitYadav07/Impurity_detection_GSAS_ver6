@@ -5,17 +5,26 @@ on:
     branches: [birthright-container]
     paths:
       - Dockerfile.symmetry
+      - .dockerignore
+      - tests/test_production_image_payload.py
       - nova/src/gpx_recipe/**
-      - tests/gpx_recipe/test_prepared_structural_acceptance_native.py
-      - tests/gpx_recipe/data/synthetic-ersi-cmcm-isodistort.cif
+      - nova/src/radar_pd_nova/data/powgen_calibrations/**
+      - nova/tools/check_powgen_planner_release.py
+      - tests/gpx_recipe/**
       - scripts/ndip_model_campaign.py
       - scripts/ndip_runtime.py
       - scripts/ndip_symmetry.py
       - .github/workflows/publish-models-to-ghcr.yaml
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      image_variant:
+        description: Worker image to qualify
+        type: choice
+        default: models
+        options: [models, preparation-cuda]
 
 concurrency:
-  group: publish-models-${{ github.ref }}
+  group: publish-models-${{ github.ref }}-${{ inputs.image_variant || 'models' }}
   cancel-in-progress: true
 
 jobs:
@@ -33,19 +42,48 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:models-${GITHUB_SHA}" >> "$GITHUB_ENV"
+        env:
+          WORKER_VARIANT: ${{ inputs.image_variant || 'models' }}
+        run: |
+          case "$WORKER_VARIANT" in models|preparation-cuda) ;; *) exit 1 ;; esac
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:${WORKER_VARIANT}-${GITHUB_SHA}" >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.symmetry
+          file: ${{ inputs.image_variant == 'preparation-cuda' && 'Dockerfile.preparation-cuda' || 'Dockerfile.symmetry' }}
           platforms: linux/amd64
           load: true
           push: false
           provenance: false
           sbom: false
           tags: ${{ env.IMAGE }}
-          cache-from: type=gha,scope=model-worker
-          cache-to: type=gha,scope=model-worker,mode=max
+          cache-from: |
+            type=gha,scope=model-worker
+            type=gha,scope=model-worker-${{ inputs.image_variant || 'models' }}
+          cache-to: type=gha,scope=model-worker-${{ inputs.image_variant || 'models' }},mode=max
+      - name: Verify production image excludes development fixtures
+        run: |
+          docker run --rm --entrypoint python \
+            -v "$PWD/tests/test_production_image_payload.py:/validation/test_production_image_payload.py:ro" \
+            "$IMAGE" /validation/test_production_image_payload.py \
+            --image-kind "${{ inputs.image_variant || 'models' }}"
+      - name: Verify CUDA image and device-independent recovery contracts
+        if: inputs.image_variant == 'preparation-cuda'
+        run: |
+          # Exercise the installed fixture closure without the source-checkout
+          # mount; that mount must not conceal missing image dependencies.
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/opt/radar-cuda-validation" &&
+          cd /tmp &&
+          python -c "from pathlib import Path; from tempfile import TemporaryDirectory; from test_structural_paired_training_native import data; from test_structural_joint_modes_native import cohort; context=TemporaryDirectory(); root=Path(context.name); data(root/\"pairs\"); cohort(root/\"modes\"); print(\"Verified installed CUDA acceptance fixture closure\")"'
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 &&
+          python -c "import torch; assert str(torch.__version__)==\"2.14.1+cu126\" and torch.version.cuda==\"12.6\"; print(\"CUDA wheel verified; GPU hardware acceptance is a separate NDIP gate\")" &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+            /validation/tests/gpx_recipe/test_structural_accelerator_checkpoint.py \
+            /validation/tests/gpx_recipe/test_structural_training_cuda.py \
+            -k "not real_cuda"'
       - name: Verify native stack, adapter identity and credential isolation
         run: |
           docker run --rm --entrypoint python "$IMAGE" -c '
@@ -56,6 +94,11 @@ jobs:
           import os
           require_adapters()
           r=runtime_identity(); require_runtime(r,r["magnetic_function_sha256"])
+          from GSASII import GSASIIpwd
+          from gpx_recipe.live.native_peak_batch import NativePeakBatch
+          helper=NativePeakBatch(GSASIIpwd)
+          assert helper.diagnostics()["interpolation"] is False
+          assert hasattr(helper.library,"proposal_tof_profile_sum")
           budget=allocation(4,environ={})
           assert 1 <= budget["workers"] <= 4
           if not budget["allocation_reported"]: assert budget["workers"]==1
@@ -64,6 +107,18 @@ jobs:
           os.environ["BCS_API_KEY"]="must-not-transfer"
           assert not any("KEY" in k or "TOKEN" in k for k in scientific_environment())
           print("Verified worker implementation",package_signature())'
+          docker run --rm --user 65534:65534 -e HOME=/tmp --entrypoint python "$IMAGE" -c '
+          import numpy as np
+          from GSASII import GSASIIpwd
+          from gpx_recipe.live.native_peak_batch import NativePeakBatch
+          helper=NativePeakBatch(GSASIIpwd)
+          x=np.linspace(900.,1100.,401);p=np.array([1000.,.1,.1,4.,.5]);height=1.75
+          expected=np.zeros_like(x)
+          expected+=np.float64(height)*GSASIIpwd.getEpsVoigt(*p,x)[0]
+          actual=helper.render({(1,0,0):(p,height,0,len(x))},x)
+          assert actual.dtype==expected.dtype==np.dtype("float64")
+          assert np.array_equal(actual,expected)
+          print("Verified readable, array-identical native helper as non-root UID")'
           docker run --rm --entrypoint python "$IMAGE" -c '
           from pathlib import Path
           from gpx_recipe.structural_live.optimization import native_fast_candidate
@@ -74,12 +129,18 @@ jobs:
           assert SearchSettings().starts >= 2
           print("Verified packaged structural service and contact data")'
           docker run --rm --entrypoint python "$IMAGE" /opt/radar-symmetry/ndip_model_campaign.py --help
+      - name: Verify managed planner native calculation and numerical controls
+        if: inputs.image_variant != 'preparation-cuda'
+        run: |
+          docker run --rm --entrypoint python "$IMAGE" \
+            /opt/radar-symmetry/check_planner_installation.py /tmp/planner-installation-check
+
       - name: Verify resource, protocol and runtime gates
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
           python -m pip install --quiet pytest &&
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
-          python -c "import GSASII.GSASIIscriptable" &&
+          python -c "import GSASII.GSASIIscriptable, torch" &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_model_campaign_worker.py \
             /validation/tests/gpx_recipe/test_native_protocol.py \
@@ -90,6 +151,37 @@ jobs:
             /validation/tests/gpx_recipe/test_project_view.py \
             /validation/tests/gpx_recipe/test_native_profiled.py \
             /validation/tests/gpx_recipe/test_profiled_cache_transport.py \
+            /validation/tests/gpx_recipe/test_reflection_factors.py \
+            /validation/tests/gpx_recipe/test_native_background.py \
+            /validation/tests/gpx_recipe/test_native_peak_memo.py \
+            /validation/tests/gpx_recipe/test_native_peak_precision.py \
+            /validation/tests/gpx_recipe/test_tof_profile_arrays.py \
+            /validation/tests/gpx_recipe/test_structural_candidate_routing.py \
+            /validation/tests/gpx_recipe/test_structural_training_counts.py \
+            /validation/tests/gpx_recipe/test_structural_observation_metrics.py \
+            /validation/tests/gpx_recipe/test_structural_training_curriculum.py \
+            /validation/tests/gpx_recipe/test_structural_training_cache.py \
+            /validation/tests/gpx_recipe/test_structural_replay.py \
+            /validation/tests/gpx_recipe/test_structural_training_checkpoint.py \
+            /validation/tests/gpx_recipe/test_structural_training_checkpoint_native.py \
+            /validation/tests/gpx_recipe/test_structural_training_transfer.py \
+            /validation/tests/gpx_recipe/test_structural_training_continuation.py \
+            /validation/tests/gpx_recipe/test_structural_training_transfer_native.py \
+            /validation/tests/gpx_recipe/test_native_peak_batch.py \
+            /validation/tests/gpx_recipe/test_native_peak_workload.py \
+            /validation/tests/gpx_recipe/test_native_peak_groups.py \
+            /validation/tests/gpx_recipe/test_native_window_response.py \
+            /validation/tests/gpx_recipe/test_native_axis_view.py \
+            /validation/tests/gpx_recipe/test_native_reflection_memo.py \
+            /validation/tests/gpx_recipe/test_structural_background_context.py \
+            /validation/tests/gpx_recipe/test_quadratic_qualification.py \
+            /validation/tests/gpx_recipe/test_preparation_authority.py \
+            /validation/tests/gpx_recipe/test_live_preparation_authority.py \
+            /validation/tests/gpx_recipe/test_preparation_batch.py \
+            /validation/tests/gpx_recipe/test_preparation_batch_cancellation.py \
+            /validation/tests/gpx_recipe/test_preparation_failures.py \
+            /validation/tests/gpx_recipe/test_preparation_native_size.py \
+            /validation/tests/gpx_recipe/test_preparation_magnetic_arrays.py \
             /validation/tests/gpx_recipe/test_native_forward.py \
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
             /validation/tests/gpx_recipe/test_grouped_profile_receipts.py \
@@ -108,7 +200,123 @@ jobs:
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
           export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 RADAR_REQUIRE_STRUCTURAL_NATIVE=1 &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/structural.xml \
-            /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=13 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
+            /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py \
+            /validation/tests/gpx_recipe/test_structural_block_damping.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=15 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
+      - name: Require portable preparation and structural acquisition handoffs
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
+          python -m pip install --quiet pytest &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+            /validation/tests/gpx_recipe/test_native_tof_scalars.py::test_batched_scalars_match_complete_native_trace_at_current_geometry \
+            /validation/tests/gpx_recipe/test_native_tof_forward.py::test_batched_native_curves_retain_original_values_and_observations &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/preparation.xml \
+            /validation/tests/gpx_recipe/test_preparation_theory_native.py \
+            /validation/tests/gpx_recipe/test_preparation_reference.py \
+            /validation/tests/gpx_recipe/test_native_background_native.py \
+            /validation/tests/gpx_recipe/test_native_background_benchmark_native.py \
+            /validation/tests/gpx_recipe/test_structural_background_context_native.py \
+            /validation/tests/gpx_recipe/test_native_peak_precision_native.py \
+            /validation/tests/gpx_recipe/test_native_peak_batch_native.py \
+            /validation/tests/gpx_recipe/test_native_peak_records.py \
+            /validation/tests/gpx_recipe/test_native_peak_derivative_batch.py \
+            /validation/tests/gpx_recipe/test_native_peak_derivative_batch_native.py \
+            /validation/tests/gpx_recipe/test_structural_live_profiled_native_fit.py \
+            /validation/tests/gpx_recipe/test_structural_live_profiled_nuisance.py \
+            /validation/tests/gpx_recipe/test_starting_proposal_banks.py \
+            /validation/tests/gpx_recipe/test_tof_profile_proposals_native.py \
+            /validation/tests/gpx_recipe/test_tof_shape.py \
+            /validation/tests/gpx_recipe/test_tof_shape_native.py \
+            /validation/tests/gpx_recipe/test_tof_profile_table_native.py \
+            /validation/tests/gpx_recipe/test_tof_profile_hints.py \
+            /validation/tests/gpx_recipe/test_prepared_tof_profile_handoff_native.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_sampling.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_features.py \
+            /validation/tests/gpx_recipe/test_structural_parent_metric.py \
+            /validation/tests/gpx_recipe/test_structural_conditioning.py \
+            /validation/tests/gpx_recipe/test_structural_parent_reference_native.py \
+            /validation/tests/gpx_recipe/test_structural_pairs_native.py \
+            /validation/tests/gpx_recipe/test_structural_three_curve_features.py \
+            /validation/tests/gpx_recipe/test_structural_projection_reuse.py \
+            /validation/tests/gpx_recipe/test_structural_three_curve_attention.py \
+            /validation/tests/gpx_recipe/test_structural_partitions.py \
+            /validation/tests/gpx_recipe/test_structural_paired_blocks.py \
+            /validation/tests/gpx_recipe/test_structural_paired_cohort.py \
+            /validation/tests/gpx_recipe/test_structural_three_curve_store.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_cohort.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_training_native.py \
+            /validation/tests/gpx_recipe/test_structural_attention_portable_native.py \
+            /validation/tests/gpx_recipe/test_structural_attention_metrics_native.py \
+            /validation/tests/gpx_recipe/test_structural_reference_normalization_native.py \
+            /validation/tests/gpx_recipe/test_structural_linear_attention_native.py \
+            /validation/tests/gpx_recipe/test_structural_mode_readout.py \
+            /validation/tests/gpx_recipe/test_structural_mode_readout_native.py \
+            /validation/tests/gpx_recipe/test_structural_joint_modes_native.py \
+            /validation/tests/gpx_recipe/test_structural_mode_calibration.py \
+            /validation/tests/gpx_recipe/test_structural_mode_calibration_native.py \
+            /validation/tests/gpx_recipe/test_structural_readout_health_native.py \
+            /validation/tests/gpx_recipe/test_structural_paired_training_native.py \
+            /validation/tests/gpx_recipe/test_structural_pair_packing.py \
+            /validation/tests/gpx_recipe/test_structural_paired_preparation.py \
+            /validation/tests/gpx_recipe/test_structural_paired_preparation_native.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_support.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_store.py \
+            /validation/tests/gpx_recipe/test_structural_ranker_augmentation.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_examples_native.py \
+            /validation/tests/gpx_recipe/test_structural_training_jobs.py \
+            /validation/tests/gpx_recipe/test_structural_training_jobs_native.py \
+            /validation/tests/gpx_recipe/test_structural_preparation_dependencies.py \
+            /validation/tests/gpx_recipe/test_structural_preparation_dependencies_native.py \
+            /validation/tests/gpx_recipe/test_preparation_structural_ranking_hints.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_domain.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_result.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_dispatch.py \
+            /validation/tests/gpx_recipe/test_structural_ranking_admission_native.py \
+            /validation/tests/gpx_recipe/test_preparation_library.py \
+            /validation/tests/gpx_recipe/test_preparation_compiled_storage.py \
+            /validation/tests/gpx_recipe/test_compiled_ranker_native.py \
+            /validation/tests/gpx_recipe/test_structural_start_diversity.py \
+            /validation/tests/gpx_recipe/test_profiled_qualification.py \
+            /validation/tests/gpx_recipe/test_native_window_response.py \
+            /validation/tests/gpx_recipe/test_native_window_response_native.py \
+            /validation/tests/gpx_recipe/test_native_profile_capture.py \
+            /validation/tests/gpx_recipe/test_captured_cell_derivative_native.py \
+            /validation/tests/gpx_recipe/test_native_peak_memo_native.py \
+            /validation/tests/gpx_recipe/test_native_peak_memo.py \
+            /validation/tests/gpx_recipe/test_native_axis_view.py \
+            /validation/tests/gpx_recipe/test_native_axis_view_native.py \
+            /validation/tests/gpx_recipe/test_native_reflection_memo.py \
+            /validation/tests/gpx_recipe/test_native_reflection_memo_native.py \
+            /validation/tests/gpx_recipe/test_native_tof_scalars.py \
+            /validation/tests/gpx_recipe/test_native_tof_forward.py \
+            /validation/tests/gpx_recipe/test_native_tof_kernels.py \
+            /validation/tests/gpx_recipe/test_native_kernel_pass.py \
+            /validation/tests/gpx_recipe/test_native_kernel_geometry.py \
+            /validation/tests/gpx_recipe/test_native_kernel_bank.py \
+            /validation/tests/gpx_recipe/test_kernel_origin.py \
+            /validation/tests/gpx_recipe/test_kernel_origin_native.py \
+            /validation/tests/gpx_recipe/test_kernel_geometry_storage.py \
+            /validation/tests/gpx_recipe/test_native_joint_profiled_fit.py \
+            /validation/tests/gpx_recipe/test_tof_kernel_storage.py \
+            /validation/tests/gpx_recipe/test_native_cell_proposals.py \
+            /validation/tests/gpx_recipe/test_preparation_worker_native.py \
+            /validation/tests/gpx_recipe/test_preparation_batch_native.py \
+            /validation/tests/gpx_recipe/test_preparation_failures_native.py \
+            /validation/tests/gpx_recipe/test_preparation_adaptation_native.py \
+            /validation/tests/gpx_recipe/test_preparation_authority_native.py \
+            /validation/tests/gpx_recipe/test_preparation_magnetic_authority_native.py \
+            /validation/tests/gpx_recipe/test_preparation_rendered_magnetic.py \
+            /validation/tests/gpx_recipe/test_preparation_identity.py \
+            /validation/tests/gpx_recipe/test_prepared_rendered_oracle_native.py \
+            /validation/tests/gpx_recipe/test_prepared_k_series_native.py \
+            /validation/tests/gpx_recipe/test_prepared_model_handoff_native.py \
+            /validation/tests/gpx_recipe/test_prepared_structural_handoff_native.py \
+            /validation/tests/gpx_recipe/test_shared_structural_native_execution.py \
+            /validation/tests/gpx_recipe/test_native_termination.py \
+            /validation/tests/gpx_recipe/test_convergence.py \
+            /validation/tests/gpx_recipe/test_structural_snapshot_job_native.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/preparation.xml\").findall(\".//testcase\"); assert len(cases)>=600 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Preparation native acceptance must run without skips\""'
       - name: Publish verified immutable image
         run: docker push "$IMAGE"

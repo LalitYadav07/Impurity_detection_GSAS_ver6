@@ -1,6 +1,7 @@
 """Model-campaign adapter to the shared prepared nonlinear structural service."""
 import shutil
-from ..structural_live.service import SearchSettings, fit_snapshot, prepare_model
+import time
+from ..structural_live.service import SearchSettings, fit_snapshot, prepare_model, workflow_timings
 from .compiler import confined
 from .worker import TrialDisposition
 
@@ -10,8 +11,9 @@ def optimization_progress(result):
     fitted=result['result'];blocks=fitted.get('blocks',[]);attempts=fitted.get('attempts',[])
     progress=dict(starts_attempted=len(attempts),
         starts_time_limited=sum(a.get('reason')=='per_start_time_budget' for a in attempts),
-        complete_lattice_blocks=sum(b['kind']=='cell' for b in blocks),
-        complete_displacement_blocks=sum(b['kind']=='modes' for b in blocks),
+        complete_lattice_blocks=sum(b['kind'] in {'cell','joint'} for b in blocks),
+        complete_displacement_blocks=sum(b['kind'] in {'modes','joint'} for b in blocks),
+        complete_joint_blocks=sum(b['kind']=='joint' for b in blocks),
         accepted_local_steps=sum(len(b.get('accepted_costs',[])) for b in blocks))
     if not blocks:
         message='Prepared starting curves were checked, but no complete local-update block finished. Increase the per-model allocation before comparing structures.'
@@ -19,6 +21,8 @@ def optimization_progress(result):
         message=(f"{progress['starts_attempted']} starts attempted; {progress['starts_time_limited']} reached their allocation; "
             f"{progress['complete_lattice_blocks']} lattice and {progress['complete_displacement_blocks']} displacement blocks completed. "
             'Optimization and structure assignment require review.')
+        if progress['complete_joint_blocks']:
+            message+=f" {progress['complete_joint_blocks']} blocks updated lattice and displacement coordinates together."
     return progress,message
 
 
@@ -33,12 +37,23 @@ def run(source_gpx,ctx,protocol,candidate,seed):
     child=confined(ctx.input_root,candidate['child']['path'])
     settings=SearchSettings(mode_radius=scope['structural_mode_radius'],cell_radius=scope['structural_cell_radius'],
         seconds=scope['structural_seconds'],starts=scope['structural_starts'],recovery_seconds=scope['structural_recovery_seconds'])
+    from ..preparation.structural_hints import candidates as prepared_candidates
+    preparation_began=time.monotonic()
+    prepared_banks,preparation=prepared_candidates(ctx.input_root,protocol,candidate['id'])
+    from ..preparation.tof_profile_hints import candidates as profile_candidates
+    prepared_profiles,profile_attachment=profile_candidates(ctx.input_root,protocol)
+    preparation['profile_tables']=profile_attachment
     metadata=prepare_model(source_gpx,child,candidate['transformation_matrix'],candidate['origin_shift'],
                      root/'prepared',phase_name=protocol['parent_phase'],histogram_name=protocol['histogram'],
-                     reference_gpx=confined(ctx.input_root,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None,settings=settings)
+                     reference_gpx=confined(ctx.input_root,protocol['structural_reference']['path']) if 'structural_reference' in protocol else None,
+                     settings=settings,prepared_banks=prepared_banks,prepared_profiles=prepared_profiles)
     if set(candidate['modes'])!=set(metadata['inventory']['native_mode_names']):
         raise TrialDisposition('integrity_failure','Prepared search requires the complete discovered native mode inventory')
+    fitting_began=time.monotonic()
     result=fit_snapshot(root/'prepared',root/'fit',settings=settings)
+    stages=workflow_timings(fitting_began-preparation_began,time.monotonic()-fitting_began,scope='model')
+    result['workflow_timings']=stages
+    result['preparation_attachment']=preparation
     output=ctx.run_dir/'child-refinement.gpx'
     shutil.copyfile(result['continuation']['path'],output)
     ctx.save_json('zero-control.json',dict(relative_profile_error=metadata['zero_profile_error'],
@@ -54,6 +69,9 @@ def run(source_gpx,ctx,protocol,candidate,seed):
         zero_control_error=metadata['zero_profile_error'],
         structural_fit=dict(all_physical_modes_retained=True,physical_modes=result['physical_mode_count'],
             origin_gauges=metadata['inventory']['gauge_rank'],covariance_available=False,
-            timings=result['timings'],optimization_qualified=False,optimization_progress=progress,
+            timings=result['timings'],workflow_timings=stages,
+            optimization_qualified=False,optimization_progress=progress,
+            portable_preparation=result['portable_preparation'],preparation_attachment=preparation,
+            initialization_execution=result['initialization_execution'],
             native_active_set_verified=result['continuation']['native_active_set_verified']),
         reviewable_gpx=True)

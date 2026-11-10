@@ -1,12 +1,20 @@
 # RADAR-PD NOVA
 
-This package is the interactive NDIP/NOVA client for RADAR-PD. It does not run
-the scientific pipeline in the interactive container. It uploads or resolves
+This package is the interactive NDIP/NOVA client for RADAR-PD. Analysis uploads or resolves
 inputs, submits the existing `neutrons_radar_pd_analyze_prototype` Galaxy tool,
 recovers jobs from the user's Galaxy history, and renders completed artifacts.
 
 The Full and Rapid paths share one setup form and one Galaxy submission
 contract. Scientific work remains inside the versioned RADAR-PD batch image.
+
+The new **Experiment Planner** tab supports POWGEN without an IPTS. It runs
+bounded forward calculations in the application's pinned GSAS-II runtime and
+reuses the existing symmetry services. Analysis and refinement still use their
+Galaxy workers. The default image preserves the NDIP supervisor/nginx launch;
+`tools/planner_local.py` starts the same application directly on localhost.
+See [the integration and validation notes](docs/experiment-planner-integration.md)
+and [the user guide](help/experiment-planner.html). Count predictions remain
+conditional; software integration checks do not certify experimental accuracy.
 
 ## Version 0.6.0
 
@@ -35,6 +43,31 @@ individual refinement/model concurrency controls still apply. Galaxy determines
 the actual CPU and memory allocation. See
 [`docs/unified_live_refinement.md`](../docs/unified_live_refinement.md) for source
 identity, native-kernel and release contracts.
+
+## Experiment preparation (development)
+
+Use **Prepare experiment** in the header to inspect a nuclear parent CIF and
+each expected instrument-bank profile, choose a finite commensurate model scope,
+and prepare reusable calculations before collecting a scan. **Libraries and
+recovery** shows preparation stages, queued work, failures and portable exports.
+Recover the original History checkpoint to reconnect existing jobs; importing a
+portable ZIP creates an independent library.
+
+Native structural examples run on the CPU worker. New three-curve model training
+uses the managed CUDA training tool automatically and requires an NDIP destination
+that reserves and exposes one usable GPU. Setting a worker count or registering
+the tool does not allocate hardware. Device initialization failure stops training
+with its saved inputs retained; no CPU fallback is submitted. Earlier CPU-owned
+jobs keep their original producer and continuation identity.
+
+For a completed or imported model, **Training record** reads the saved device,
+completed epochs, selected checkpoint and trainer time on demand. Missing fields
+remain unrecorded. Trainer time excludes Galaxy queueing, image startup and
+transfer. Held-out simulation validation and actual-scan native fit qualification
+remain separate. Prepared rankings prioritize the reviewed candidates; they do
+not establish a unique subgroup or remove untested alternatives. The CUDA route
+and full experimental handoff still require NDIP hardware acceptance before a
+user-facing preparation release.
 
 The **User guide** header button opens the bundled screenshot walkthrough in a
 new tab. The guide is served below the current session path, so opening it does
@@ -83,6 +116,13 @@ New symmetry-allowed magnetic plans vary independent child-orbit signs and
 amplitudes while preserving exact site-symmetry couplings. They retain a finite,
 reviewed portfolio, rather than claiming exhaustive orientation coverage. Old
 sealed plans keep their original starts and require their original worker.
+
+Prepared structural mode estimates use the same inspection table in Model
+exploration and Live acquisition. **Symmetry to inspect** shows one space
+group's distortion families, retaining unsupported families as **Not learned**.
+The selection survives a refresh of the same context and changes only the
+display; it does not change the native search. Learned ranges remain unresolved
+and are not calibrated experimental confidence intervals.
 
 NOMAD normalized sliced and summed products are explicit source families.
 Separate slices of one parent have separate lifecycle and plotting identities.
@@ -435,6 +475,11 @@ inline chart uses less height for short series, while **Expand map** retains a
 larger inspection view. **Show setup** restores the rail; **Focus plots** hides
 it and brings the map back into view. Monitor and fit qualifications remain available
 from the Results tab and fit note.
+The vertical scan cursor matches the visible heatmap rows and keeps that page
+fixed while inspecting scans. **Page** browses the next or previous rows and
+keeps the selected scan visible; **Inspect scan** can jump anywhere in the
+series. The raw curves and both fit panels follow the same selection. A fixed
+chart layout keeps the cursor aligned when the window size or row count changes.
 
 Live experiments open on **Results**, with the familiar phase-fraction,
 refinement-quality and composition plots, completed-scan selector and full-result

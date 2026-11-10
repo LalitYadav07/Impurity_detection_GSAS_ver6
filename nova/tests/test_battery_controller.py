@@ -26,7 +26,7 @@ def app(monkeypatch):
     return app
 
 
-@pytest.mark.parametrize(('view','collapsed'), [('experiment', True), ('results', True), ('monitor', False)])
+@pytest.mark.parametrize(('view','collapsed'), [('experiment', True), ('results', True), ('monitor', False), ('preparation', True)])
 def test_battery_detour_returns_to_displayed_workspace(app, view, collapsed):
     state=app.server.state
     state.workspace_view=view

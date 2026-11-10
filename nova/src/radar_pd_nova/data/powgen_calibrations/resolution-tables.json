@@ -1,0 +1,39 @@
+{
+  "schema": "powgen-published-resolution-tables/v1",
+  "source_url": "https://neutrons-user-facilities.ornl.gov/wp-content/uploads/2026/08/doc-powgen-bl11a-sns-FullProf_Mag2Pol_2026B.zip",
+  "source_page": "https://neutrons-user-facilities.ornl.gov/instruments/powgen/",
+  "rules": [
+    {
+      "profile_id": "2026B_HighRes_60HzB1_CWL0p8.instprm",
+      "profile_sha256": "396e12327b46e94cbbc0b2015aea5afb5fbecff2dd7b21bea0b904b26ac42456",
+      "resource": "PG2026B_HighRes_60Hz_b1_Ddep.irf",
+      "sha256": "984722f812d8a534d5b5bd177232aba2dd10be77e29ce99a221e7309327ee19c",
+      "d_range_a": [
+        0.26629,
+        3.13572
+      ]
+    },
+    {
+      "profile_id": "2026B_HighRes_60HzB2_CWL1p5.instprm",
+      "profile_sha256": "851ca0f2bc2eed0ca6ddc38a48736ccccb1a7fcf7133e297950355d77c8dae19",
+      "resource": "PG2026B_HighRes_60Hz_b2_Ddep.irf",
+      "sha256": "f3a0be9452e5f44c432104ffa444727b2205402f58a4100be6f67e6515838619",
+      "d_range_a": [
+        0.44259,
+        7.24558
+      ]
+    },
+    {
+      "profile_id": "2026B_HighRes_60HzB3_CWL2p665.instprm",
+      "profile_sha256": "e4ab35b5d44069d47352a4a8b717aa5f3131b0c682cbe969eeee852bb0d1c571",
+      "resource": "PG2026B_HighRes_60Hz_b3_Ddep.irf",
+      "sha256": "c1533aea5721c2d34019ffc1feba93664d42168a18a7f7998068639c09a54f2d",
+      "d_range_a": [
+        0.95139,
+        7.24558
+      ]
+    }
+  ],
+  "native_fullprof_equivalence_established": false,
+  "experimental_accuracy_certified": false
+}

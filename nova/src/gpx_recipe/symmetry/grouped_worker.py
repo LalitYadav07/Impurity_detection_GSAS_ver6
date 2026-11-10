@@ -173,7 +173,10 @@ def execute_group(directories, *, cancelled=None, workers=1):
             identity=digest(dict(protocol=protocol,candidate=candidate,variables=native.moment_names,
                 maps=native.cartesian_maps.tolist()))
             cache=input_root/'_profiled_cache'/f'{identity}.npz'
-            model,proof=native.build(cache_path=cache,cache_identity=identity)
+            from ..preparation.hints import cache_for
+            factor_cache,prepared_scattering=cache_for(input_root,protocol,candidate=candidate_id)
+            model,proof=native.build(cache_path=cache,cache_identity=identity,factor_cache=factor_cache)
+            proof['prepared_scattering']=prepared_scattering
         except ValueError as exc:
             raise TrialDisposition('unsupported',str(exc)) from exc
         shutil.copyfile(cache,data/'kernel.npz')

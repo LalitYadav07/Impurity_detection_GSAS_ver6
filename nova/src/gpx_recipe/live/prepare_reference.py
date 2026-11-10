@@ -14,7 +14,7 @@ def prepare(receipt_path):
     from GSASII import GSASIIscriptable as G
     from .gpx_index import install_fresh_gpx_index
     from .native_profile import NativeReducedProfile
-    from .snapshot import parse_live_ascii,density_to_tof,stable_read
+    from .snapshot import parse_live_ascii,uniform_density_to_tof,stable_read
     from gpx_recipe.execution import freeze
     from gpx_recipe.symmetry.native_preparation import normalize_flags
     from gsas_magnetic_preflight import preflight_magnetic_sites,setting_fingerprint
@@ -80,9 +80,7 @@ def prepare(receipt_path):
     raw=stable_read(binding['source_dat'])
     import hashlib
     if hashlib.sha256(raw).hexdigest()!=binding['source_dat_sha256']:raise ValueError('Target snapshot changed during preparation')
-    live=parse_live_ascii(raw);spacing=np.diff(live.x)
-    if not len(spacing) or not np.allclose(spacing,spacing[0],rtol=1e-6,atol=1e-10):raise ValueError('This archive adapter requires verified uniform d bins')
-    step=spacing[0];a=density_to_tof(live,d_edges=np.r_[live.x[0]-step/2,live.x+step/2],export_difc=difc)
+    live=parse_live_ascii(raw);a=uniform_density_to_tof(live,export_difc=difc)
     limits=copy.deepcopy(h.data['Limits']);limits[0]=[float(a['x'][0]),float(a['x'][-1])]
     limits[1]=[max(limits[1][0],limits[0][0]),min(limits[1][1],limits[0][1])]
     transfer_limits=list(limits[1])

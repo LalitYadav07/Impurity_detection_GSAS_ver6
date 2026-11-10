@@ -127,6 +127,20 @@ def test_insufficient_allocated_memory_is_explicit(tmp_path):
     with pytest.raises(ValueError,match='1536'):allocation(4,environ={'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'1024'},cgroup=tmp_path)
 
 
+@pytest.mark.parametrize('slots',[1,2,4,8])
+def test_controlled_allocation_receipt_preserves_cpu_and_ram_evidence(tmp_path,monkeypatch,slots):
+    """Synthetic entitlement controls, not measured NDIP scaling results."""
+    monkeypatch.setattr('gpx_recipe.symmetry.resources.affinity_limit',lambda:128)
+    monkeypatch.setattr('os.cpu_count',lambda:256)
+    (tmp_path/'cpu.max').write_text(f'{slots*100000} 100000')
+    (tmp_path/'memory.max').write_text(str((512+1024*slots)*1024**2))
+    value=allocation(8,environ={'GALAXY_SLOTS':str(slots),'GALAXY_MEMORY_MB':'65536'},cgroup=tmp_path)
+    assert value['workers']==slots and value['blas_threads']==1
+    assert value['galaxy_slots']==slots and value['cpu_quota']==float(slots)
+    assert value['memory_mb']==512+1024*slots and value['visible_cpu_count']==256
+    assert value['allocation_reported'] and value['allocation_source']=='galaxy_slots'
+
+
 def request(p):
     return dict(schema='radar-model-chunk/v1',protocol=p,protocol_sha256=digest(p),
         trials=[trial_id(p,c['id'],s['id']) for c,s in iter_trials(p)],workers=4,dispatch_key='d'*24,seconds=30)
@@ -284,7 +298,9 @@ def test_galaxy_entrypoint_uses_separate_source_without_reupload_and_preserves_o
     with zipfile.ZipFile(assets,'w') as z:
         if legacy:z.write(source,'source.gpx')
     request=tmp_path/'request.json'
-    request.write_text(json.dumps(dict(schema='radar-model-native/v1',expected_source_sha256=file_sha(source),
+    from gpx_recipe.symmetry.compiler import package_signature
+    request.write_text(json.dumps(dict(schema='radar-model-native/v1',operation='inspect',payload={'source':'source.gpx'},
+        implementation_sha256=package_signature(),timeout=120,expected_source_sha256=file_sha(source),
         input_hashes={'source.gpx':file_sha(source)},dispatch_key='a'*24)))
     def native(value,inputs,root,cancel):
         assert (inputs/'source.gpx').read_bytes()==source.read_bytes()

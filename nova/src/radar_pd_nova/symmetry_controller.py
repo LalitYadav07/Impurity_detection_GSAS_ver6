@@ -31,7 +31,7 @@ from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
 from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence,fit_caption,fit_diagnostics,pin_label
-from .symmetry_workspace import structural_discovery_feedback,candidate_display_name,parameter_note
+from .symmetry_workspace import structural_discovery_feedback,candidate_display_name,parameter_note,structural_timing_summary
 from . import symmetry_plots as plots
 from .parent_moments import parent_frame_moments
 from .symmetry_sources import start_choices,resolve_start,acquisition_details,acquisition_notices,acquisition_temperature,display_acquisition_notices
@@ -65,10 +65,10 @@ class SymmetryMixin(KSearchMixin):
             sx_parent_axis='c',sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',sx_discovery_rows=[],
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,sx_native_reference='',
-            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='')
+            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='',sx_preparation_notice='')
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=8,
-            sx_queue_notice='',sx_backend='',sx_batches=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
+            sx_queue_notice='',sx_backend='',sx_batches=[],sx_structural_priority_rows=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,
             sx_structural_starts=4,sx_structural_seconds=DEFAULT_FIT_SECONDS,
             sx_structural_radius=.05,sx_structural_cells=DEFAULT_CELL_RADIUS,sx_structural_recovery=0.,sx_parent_reference='')
@@ -105,6 +105,7 @@ class SymmetryMixin(KSearchMixin):
         if not isinstance(self.service,GalaxyService):return None
         if not (self.service.galaxy_url and self.service.galaxy_key and self.service.history_id):return None
         if self._model_runtime_cache is None:self._model_runtime_cache=GalaxyModelRuntime(self._symmetry_root()/'runtime',self.service)
+        self._model_runtime_cache.preparation_provider=getattr(self,'_capture_prepared_model_inputs',None)
         self._model_runtime_cache.max_active_jobs=self.server.state.sx_parallel_jobs
         return self._model_runtime_cache
 
@@ -132,7 +133,8 @@ class SymmetryMixin(KSearchMixin):
         environment={}
         for name in ['GSASII_ROOT','RADAR_GPX_DOCKER_IMAGE']:
             if os.environ.get(name):environment[name]=os.environ[name]
-        return LocalTransport([python],environment=environment)
+        return LocalTransport([python],environment=environment,
+            preparation_provider=getattr(self,'_capture_prepared_model_inputs',None))
 
     def _symmetry_campaign(self,root):
         """Retain stamp-checked receipt caches across ordinary UI refreshes."""
@@ -327,6 +329,8 @@ class SymmetryMixin(KSearchMixin):
                 remote=self._model_remote()
                 backend='Galaxy jobs · allocated CPU/RAM' if remote else 'Configured local scientific worker'
                 s.sx_backend=backend
+                caption=getattr(self,'_prepared_selection_caption',None)
+                s.sx_preparation_notice=caption() if callable(caption) else ''
                 scope=s.rf_experiment if s.sx_result_scope=='experiment' else None
                 restored=getattr(self,'_model_restored_scopes',set())
                 requested=getattr(self,'_model_restore_requests',set())
@@ -358,6 +362,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_campaigns=[dict(title=p.parent.name,value=p.parent.name) for p in roots]
                 if s.sx_campaign not in {p.parent.name for p in roots}:s.sx_campaign=roots[-1].parent.name if roots else ''
                 if not s.sx_campaign:
+                    self._symmetry_ranking_evidence={};s.sx_structural_priority_rows=[]
                     self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[]
                     s.sx_source='';s.sx_source_options=[];s.sx_enrollments=[];s.sx_coverage=[]
                     s.sx_progress='';s.sx_execution_detail='';s.sx_scope_progress='';s.sx_resumable=False;s.sx_following=False
@@ -436,6 +441,8 @@ class SymmetryMixin(KSearchMixin):
                 if identity!=(s.sx_campaign,s.rf_experiment,s.sx_result_scope):
                     self._symmetry_refresh_pending=True;return
                 rows=scope_rows(rows,s.rf_experiment,s.sx_result_scope)
+                from .structural_ranking_labels import checked_receipts
+                self._symmetry_ranking_evidence=checked_receipts(campaign,rows)
                 s.sx_coverage=coverage_rows(rows)
                 s.sx_resumable=campaign_can_resume(summaries,list(campaign.setting('enrollments',{}).values()),
                     following=bool(template and campaign.setting('following',False)))
@@ -509,6 +516,9 @@ class SymmetryMixin(KSearchMixin):
 
     def _symmetry_publish_source(self):
         s=self.server.state;groups=self._symmetry_groups;rows=self._symmetry_rows
+        from .structural_ranking_labels import visible_rows
+        s.sx_structural_priority_rows=visible_rows(getattr(self,'_symmetry_ranking_evidence',{}),rows,
+            previous=getattr(s,'sx_structural_priority_rows',None) or ())
         s.sx_groups=[dict(id=g['id'],title=g['representative']['name'] if g['representative']['has_view'] else display_status(g['representative']['status']).capitalize(),count=len(g['members']),rwp=(f"{g['representative']['rwp']:.3f}%" if g['representative']['rwp'] is not None else '—'),status=display_status(g['representative']['status'])) for g in groups]
         s.sx_overview=plots.overview(rows,s.sx_selected)
         s.sx_pin_options=[dict(title=pin_label(r,include_start=True),value=r['id']) for r in rows if r['has_view']]
@@ -516,6 +526,12 @@ class SymmetryMixin(KSearchMixin):
         s.sx_pins=[uid for uid in s.sx_pins if uid in pinnable][-2:]
         s.sx_group=choose_group(groups,s.sx_selected,explicit=self._symmetry_explicit_selection)
         self._symmetry_group_changed()
+
+    def select_structural_mode_group(self,protocol,group):
+        from .structural_ranking_labels import mode_view
+        s=self.server.state
+        s.sx_structural_priority_rows=[dict(row,**mode_view(row.get('mode_rows',[]),group))
+            if row['id']==protocol else row for row in s.sx_structural_priority_rows]
 
     def _symmetry_source_changed(self,**_):
         # Inspection consumes only the last verified snapshot. It neither
@@ -596,6 +612,9 @@ class SymmetryMixin(KSearchMixin):
                         scope='shared worker peak RAM' if usage.get('peak_rss_scope')=='shared_group_worker' else 'peak RAM'
                         detail+=f" · {usage['peak_rss_bytes']/1024**2:.0f} MiB {scope}"
                     s.sx_details.append(dict(label='Measured resources',value=detail+' · excludes Galaxy queue and transfer'))
+                structural=row.get('structural_fit') if row.get('kind')=='structural' else None
+                timing=structural_timing_summary(structural.get('workflow_timings') if isinstance(structural,dict) else None)
+                if timing:s.sx_details.append(dict(label='Structural service stages',value=timing))
                 if row.get('sites'):s.sx_details.append(dict(label='Magnetic sites',value='; '.join(site['label']+'='+site['form_factor']+' (g='+str(site['lande_g'])+')' for site in row['sites'])))
                 if row.get('baseline_rwp') is not None and row.get('rwp') is not None:
                     baseline=row['baseline_rwp']
@@ -1452,6 +1471,7 @@ class SymmetryMixin(KSearchMixin):
         from copy import deepcopy
         for name,value in self._symmetry_defaults.items():setattr(self.server.state,name,deepcopy(value))
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved=''
+        self._symmetry_ranking_evidence={}
         self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_restore_requests=set();self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_pause_task=None;self._model_start_cancel=None
         self._k_result=None;self._k_result_identity=None
         s=self.server.state;s.sx_k_rows=[];s.sx_k_choices=[];s.sx_k_notes=[];s.sx_k_has_result=False;s.sx_k_busy=False

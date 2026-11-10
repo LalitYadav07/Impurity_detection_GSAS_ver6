@@ -181,6 +181,21 @@ def _inline_map_height(scan_count):
     return 730
 
 
+def _map_row_heights(scan_count):
+    return [.50, .50] if scan_count <= 8 else [.38, .62] if scan_count <= 30 else [.30, .70]
+
+
+def _map_cursor_geometry(scan_count, height):
+    """Align the cursor endpoints with row centers, independently of controls."""
+    plot_height = height - 25 - 82
+    data_height = _map_row_heights(scan_count)[1] * (1 - .045) * plot_height
+    top = 25 + plot_height - data_height
+    pitch = data_height / max(1, scan_count)
+    return {"data_top": top, "data_bottom": top + data_height,
+            "cursor_top": top + pitch / 2,
+            "cursor_height": max(0, scan_count - 1) * pitch}
+
+
 def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier, *,
                       selected_types, selected_event=-1, scale="linear",
                       palette="Turbo", zoom=None, revision=0, series="",
@@ -199,7 +214,7 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
     raw_hover = [[f"{value:.5g}" if np.isfinite(value) else ""
                   for value in row] for row in raw]
     count = len(view_rows)
-    row_heights = [.50, .50] if count <= 8 else [.38, .62] if count <= 30 else [.30, .70]
+    row_heights = _map_row_heights(count)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         row_heights=row_heights, vertical_spacing=.045)
     identity = identity or {}
@@ -286,7 +301,12 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
         scan = scans[view_rows[index]["run_id"]]
         condition = _condition_label(scan, order_by)
         label = re.sub(r"^Exp\s+\d+\s*·\s*", "", scan_label(scan))
-        tick_labels.append(f"{label} · {condition.replace(' measured', '')}")
+        # The selected series already identifies the bank. Repeating it and
+        # the full missing-condition notice clips the run number at the left.
+        label = re.sub(r"\s*·\s*bank\s+[^·]+$", "", label)
+        if condition != "Condition unavailable":
+            label += " · " + condition.replace("Temperature ", "").replace(" measured", "")
+        tick_labels.append(label)
     fig.update_yaxes(title_text="Measured intensity", row=1, col=1)
     row_axis = 'Temperature order' if order_by == 'temperature' else order_label
     fig.update_yaxes(title_text=row_axis, tickmode="array",
@@ -295,9 +315,9 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
     fig.update_xaxes(title_text=COORDINATES.get(current.scope.coordinate,
                                                current.scope.coordinate), row=2, col=1)
     fig.update_layout(template="plotly_white", height=height,
-                      margin={"l": 170, "r": 90, "t": 25, "b": 82},
+                      margin={"l": 170, "r": 90, "t": 25, "b": 82, "autoexpand": False},
                       hovermode="closest", barmode="overlay", dragmode="zoom",
-                      legend={"orientation": "h", "y": 1.12},
+                      legend={"orientation": "h", "y": 1.005, "yanchor": "bottom"},
                       uirevision=f"{series}:{revision}")
     if zoom is not None:
         fig.update_xaxes(range=list(zoom))
@@ -710,6 +730,7 @@ class UnetTransitionMixin:
         self._unet_transition_fit_cache = {}
         self._unet_transition_fit_signature = None
         self._unet_transition_overlay_edited = False
+        self._unet_transition_overlay_all = False
         state = self.server.state
         for name, value in {
             "transition_evidence_mode": "unet",
@@ -764,10 +785,14 @@ class UnetTransitionMixin:
             "unet_transition_map_window": 30,
             "unet_transition_map_window_options": [30, 60, 100],
             "unet_transition_map_height": 470,
-            "unet_transition_map_scroll_padding": 175,
+            "unet_transition_map_cursor_top": 0,
+            "unet_transition_map_cursor_height": 0,
+            "unet_transition_map_data_top": 0,
+            "unet_transition_map_data_bottom": 0,
             "unet_transition_map_start": 1,
             "unet_transition_map_scroll_max": 1,
             "unet_transition_map_scan_position": 1,
+            "unet_transition_map_scan_min": 1,
             "unet_transition_map_scan_max": 1,
             "unet_transition_map_scroll_label": "All scans visible",
             "unet_transition_map_scroll_compact": "0 scans",
@@ -919,19 +944,21 @@ class UnetTransitionMixin:
                    classes="radar-tracker-selected-inline")
             with html.Div(classes="radar-tracker-map-shell", v_show="!unet_transition_loading"):
                 with html.Div(classes="radar-tracker-map-scroll",
-                              style=("'height:' + unet_transition_map_height + 'px;padding-top:' + unet_transition_map_scroll_padding + 'px'",)):
+                              style=("'height:' + unet_transition_map_height + 'px;--map-cursor-top:' + unet_transition_map_cursor_top + 'px;--map-cursor-height:' + unet_transition_map_cursor_height + 'px;--map-data-top:' + unet_transition_map_data_top + 'px;--map-data-bottom:' + unet_transition_map_data_bottom + 'px'",)):
                     vuetify.VBtn("↑ Page", click=self.previous_unet_transition_map_page,
                                  disabled=("unet_transition_map_start <= 1",),
-                                 variant="text", size="x-small")
-                    vuetify.VSlider(label="Inspect scan", v_model=("unet_transition_map_scan_position",),
-                                    direction="vertical", reverse=True,
-                                    min=1, max=("unet_transition_map_scan_max",), step=1,
-                                    disabled=("unet_transition_map_scan_max <= 1",),
-                                    update_modelValue=(self.select_unet_transition_map_scan, "[$event]"),
-                                    hide_details=True, density="compact", thumb_label=True)
+                                 variant="text", size="x-small", classes="radar-tracker-page-back")
+                    with html.Div(classes="radar-tracker-map-cursor"):
+                        vuetify.VSlider(label="Inspect visible scan", v_model=("unet_transition_map_scan_position",),
+                                        direction="vertical", reverse=True,
+                                        min=("unet_transition_map_scan_min",),
+                                        max=("unet_transition_map_scan_max",), step=1,
+                                        disabled=("unet_transition_map_scan_max <= unet_transition_map_scan_min",),
+                                        update_modelValue=(self.select_unet_transition_map_scan, "[$event]"),
+                                        hide_details=True, density="compact", thumb_label=True)
                     vuetify.VBtn("↓ Page", click=self.next_unet_transition_map_page,
                                  disabled=("unet_transition_map_start >= unet_transition_map_scroll_max",),
-                                 variant="text", size="x-small")
+                                 variant="text", size="x-small", classes="radar-tracker-page-forward")
                     html.Span("{{ unet_transition_map_scroll_compact }}",
                               title=("unet_transition_map_scroll_label",))
                 with html.Div(classes="radar-tracker-map-frame"):
@@ -944,7 +971,7 @@ class UnetTransitionMixin:
                     figure.layout = ("unet_transition_map.layout",)
             with html.Details(classes="radar-tracker-map-help", v_show="!unet_transition_loading"):
                 html.Summary("How to read this map")
-                html.P("Top: raw measured reference and selected curves. Bottom: compatible scans in the chosen order. Colored marks are model suggestions mapped to the measured axis. The vertical slider selects a scan; Page browses rows. Wider comparisons can reveal cumulative changes; adjacent scans help locate onset. Heat-map colors share one global intensity scale for the series.",
+                html.P("Top: raw measured reference and selected curves. Bottom: compatible scans in the chosen order. Colored marks are model suggestions mapped to the measured axis. The vertical slider selects a visible row without moving the page; Page browses other rows. Inspect scan above can jump to any scan. Wider comparisons can reveal cumulative changes; adjacent scans help locate onset. Heat-map colors share one global intensity scale for the series.",
                        classes="radar-section-help")
             with html.Details(classes="radar-tracker-map-help", v_if="!!powgen_convergence_notice && !unet_transition_loading"):
                 html.Summary("Fit quality note")
@@ -1529,9 +1556,10 @@ class UnetTransitionMixin:
              "value": name}
             for name in [*_FEATURE_COLORS, "uncertain"]
         ]
-        if not self._unet_transition_overlay_edited:
+        if not self._unet_transition_overlay_edited or self._unet_transition_overlay_all:
+            visible_types = [*_FEATURE_COLORS, "uncertain"] if self._unet_transition_overlay_all else _DEFAULT_OVERLAYS
             state.unet_transition_overlay_types = [
-                name for name in _DEFAULT_OVERLAYS if counts[name]
+                name for name in visible_types if counts[name]
             ]
         width = min(max(1, int(state.unet_transition_map_window)), 100)
         max_start = max(0, len(rows) - width)
@@ -1542,13 +1570,13 @@ class UnetTransitionMixin:
         view_rows = rows[start:start + width]
         map_height = _inline_map_height(len(view_rows))
         state.unet_transition_map_height = map_height
-        heatmap_top = 25 + ((.5 if len(view_rows) <= 8 else .38 if len(view_rows) <= 30 else .3)
-                            + .045) * (map_height - 107)
-        state.unet_transition_map_scroll_padding = max(0, round(heatmap_top - 48))
+        for name, value in _map_cursor_geometry(len(view_rows), map_height).items():
+            setattr(state, "unet_transition_map_" + name, value)
         state.unet_transition_map_start = start + 1
         state.unet_transition_map_scroll_max = max_start + 1
         state.unet_transition_map_scan_position = position + 1
-        state.unet_transition_map_scan_max = len(rows)
+        state.unet_transition_map_scan_min = start + 1
+        state.unet_transition_map_scan_max = start + len(view_rows)
         state.unet_transition_map_scroll_label = (
             f"Rows {start + 1}–{start + len(view_rows)} of {len(rows)}"
             if max_start else f"All {len(rows)} scans visible")
@@ -1626,6 +1654,7 @@ class UnetTransitionMixin:
         state.unet_transition_map_start = 1
         state.unet_transition_map_scroll_max = 1
         state.unet_transition_map_scan_position = 1
+        state.unet_transition_map_scan_min = 1
         state.unet_transition_map_scan_max = 1
         state.unet_transition_map_scroll_label = "No scans available"
         state.unet_transition_map_scroll_compact = "0 scans"
@@ -1775,6 +1804,7 @@ class UnetTransitionMixin:
     def select_unet_transition_overlay_types(self, values, **_):
         allowed = {*_FEATURE_COLORS, "uncertain"}
         self._unet_transition_overlay_edited = True
+        self._unet_transition_overlay_all = False
         self.server.state.unet_transition_overlay_types = [
             name for name in (values or []) if name in allowed
         ]
@@ -1782,10 +1812,12 @@ class UnetTransitionMixin:
         self._render_unet_transition_tracking()
 
     def show_all_unet_transition_overlays(self, **_):
-        self.select_unet_transition_overlay_types([
-            option["value"] for option in self.server.state.unet_transition_overlay_options
-            if not option["title"].endswith("(0)")
-        ])
+        # This is a continuing Live policy, not a snapshot of today's types.
+        # Keep empty chips out of view, but include new types as scans arrive.
+        self._unet_transition_overlay_edited = True
+        self._unet_transition_overlay_all = True
+        self.server.state.unet_transition_selected_event = -1
+        self._render_unet_transition_tracking()
 
     def clear_unet_transition_overlays(self, **_):
         self.select_unet_transition_overlay_types([])
@@ -1822,6 +1854,17 @@ class UnetTransitionMixin:
                 if row["group"] == state.unet_transition_series]
         ids = [row["run_id"] for row in rows]
         position = ids.index(state.unet_transition_selected) if state.unet_transition_selected in ids else -1
+        if rows:
+            first = state.unet_transition_map_start - 1
+            last = min(len(rows), first + state.unet_transition_map_window) - 1
+            visible_position = max(first, min(position, last))
+            if visible_position != position:
+                state.unet_transition_selected = ids[visible_position]
+                state.unet_transition_follow = False
+                state.unet_transition_selected_event = -1
+                state.unet_transition_feature_filter = "all"
+                self._render_unet_transition_tracking()
+                return
         self._update_unet_transition_map(rows, position)
 
     def select_unet_transition_map_scan(self, value, **_):
@@ -1833,7 +1876,17 @@ class UnetTransitionMixin:
                 if row["group"] == self.server.state.unet_transition_series]
         if rows:
             position = max(0, min(position, len(rows) - 1))
-            self.select_unet_transition_scan(rows[position]["run_id"])
+            run_id = rows[position]["run_id"]
+            if run_id not in self._unet_transition_map_ids:
+                self.select_unet_transition_scan(run_id)
+                return
+            state = self.server.state
+            state.unet_transition_selected = run_id
+            state.unet_transition_follow = False
+            state.unet_transition_selected_event = -1
+            state.unet_transition_feature_filter = "all"
+            state.unet_transition_map_manual_scroll = True
+            self._render_unet_transition_tracking()
 
     def previous_unet_transition_map_page(self, **_):
         self.select_unet_transition_map_start(

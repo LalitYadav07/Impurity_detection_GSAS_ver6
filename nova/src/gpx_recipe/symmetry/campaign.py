@@ -311,7 +311,14 @@ class Campaign:
                             candidate=prepared[0]['candidate']
                             group=[r for r in prepared if r['candidate']==candidate][:256]
                         else:
-                            group=balanced_trial_order(prepared,per_candidate=2 if paired else 1)[:size]
+                            ordered=balanced_trial_order(prepared,per_candidate=2 if paired else 1)
+                            ranking=self.setting('structural_rankings',{}).get(selected)
+                            if protocol['kind']=='structural' and ranking is not None:
+                                from ..preparation.structural_ranking_result import prioritize
+                                try:ordered=prioritize(ordered,ranking,protocol)
+                                except (ValueError,TypeError,KeyError):
+                                    self.set_setting('structural_ranking_notice','Saved ranking did not match this source and scope; complete native order retained.')
+                            group=ordered[:size]
                         for row in group:self.set_state(row['id'],'submitting')
                         try:
                             handles=transport.submit_many([(r['id'],self.trial_directory(r)) for r in group],workers=slots)
@@ -386,8 +393,8 @@ class Campaign:
                     raise ValueError('The shared campaign requires its original pinned worker implementation')
                 continue
             root=confined(directory,'runtime/gpx_recipe')
-            files={str(p.relative_to(root)):file_sha(confined(root,str(p.relative_to(root))))
-                   for p in sorted(root.rglob('*')) if p.is_file() and p.suffix in {'.py','.json','.csv'}}
+            from .compiler import source_inventory
+            files=source_inventory(root)
             if digest(files)!=protocol['implementation_sha256']:
                 raise ValueError('The original sealed scientific package changed')
             for name in ['gsas_magnetic_preflight.py','gsas_isodistort_import.py','gsas_cif_import.py']:

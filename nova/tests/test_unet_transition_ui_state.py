@@ -456,7 +456,8 @@ def test_scan_slider_selects_inspected_scan_and_centers_linked_map(app):
     assert state.unet_transition_selected == rows[11]["run_id"]
     assert not state.unet_transition_follow
     assert state.unet_transition_map_scan_position == 12
-    assert state.unet_transition_map_scan_max == 55
+    assert state.unet_transition_map_scan_min == 1
+    assert state.unet_transition_map_scan_max == 30
     assert state.unet_transition_map_start == 1
     assert rows[11]["run_id"] in app._unet_transition_map_ids
     assert first_y(state.unet_transition_map, "Selected scan") == rows[11]["pattern"]["y"][0]
@@ -473,12 +474,79 @@ def test_scan_slider_moves_within_a_single_map_page(app):
     assert state.unet_transition_map_scan_max == 3
     assert state.unet_transition_map_scroll_max == 1
     assert state.unet_transition_map_height == 470
-    assert state.unet_transition_map_scroll_padding == 175
     assert state.unet_transition_map["layout"]["height"] == 470
     assert state.unet_transition_map["layout"]["margin"]["r"] == 90
     heatmap = next(trace for trace in state.unet_transition_map["data"] if trace["type"] == "heatmap")
     assert heatmap["colorbar"]["orientation"] == "v"
     assert state.unet_transition_dialog_figure["layout"]["height"] == 690
+
+
+def test_map_cursor_inspects_visible_rows_without_recentering_or_inference(app):
+    rows = [scan(i) for i in range(1, 56)]
+    app.refresh(rows)
+    state = app.server.state
+    assert (state.unet_transition_map_scan_min, state.unet_transition_map_scan_max) == (26, 55)
+    calls = app._unet_transition_engine.calls
+    for position in (44, 45, 43, 26, 55):
+        app.select_unet_transition_map_scan(position)
+        assert state.unet_transition_map_start == 26
+        assert state.unet_transition_selected == rows[position - 1]["run_id"]
+        assert state.unet_transition_map_scan_position == position
+        assert not state.unet_transition_follow
+        assert "Run " + str(position) in state.unet_transition_pair_label
+    assert app._unet_transition_engine.calls == calls
+    app.previous_unet_transition_map_page()
+    assert state.unet_transition_map_start == 1
+    assert (state.unet_transition_map_scan_min, state.unet_transition_map_scan_max) == (1, 30)
+    assert state.unet_transition_selected == rows[29]["run_id"]
+    assert "Run 30" in state.unet_transition_pair_label
+    assert "Run 30" in state.unet_transition_selected_fit_label
+    app.next_unet_transition_map_page()
+    assert state.unet_transition_map_start == 26
+    assert state.unet_transition_selected == rows[29]["run_id"]
+    assert app._unet_transition_engine.calls == calls
+
+
+def test_show_all_types_includes_later_arrivals_but_manual_filters_stay_fixed(app):
+    rows = [scan(i) for i in (1, 2)]
+    app.refresh(rows)
+    app.show_all_unet_transition_overlays()
+    assert app.server.state.unet_transition_overlay_types == []
+    later = scan(3)
+    later['fake_events'] = [dict(x0=2., x1=2.2, attention_score=.8,
+                                 feature_types=['peak_disappearance'])]
+    rows.append(later)
+    app.refresh(rows)
+    assert app.server.state.unet_transition_overlay_types == ['peak_disappearance']
+    assert trace(app.server.state.unet_transition_map, 'U-Net overlays')['base'] == [2.]
+    app.select_unet_transition_overlay_types(['peak_emergence'])
+    newest = scan(4)
+    newest['fake_events'] = [dict(x0=3., x1=3.2, attention_score=.8,
+                                  feature_types=['peak_splitting'])]
+    rows.append(newest)
+    app.refresh(rows)
+    assert app.server.state.unet_transition_overlay_types == ['peak_emergence']
+    app.clear_unet_transition_overlays()
+    app.refresh([*rows, scan(5)])
+    assert app.server.state.unet_transition_overlay_types == []
+
+
+@pytest.mark.parametrize('count', [1, 3, 12, 30, 55, 100])
+def test_map_cursor_geometry_matches_rendered_heatmap_row_centers(app, count):
+    app.refresh([scan(i) for i in range(1, count + 1)])
+    state = app.server.state
+    figure = state.unet_transition_map
+    layout = figure['layout']
+    domain = layout['yaxis2']['domain']
+    margins = layout['margin']
+    area = layout['height'] - margins['t'] - margins['b']
+    n = len(trace(figure, 'Measured heat map')['y'])
+    pitch = (domain[1] - domain[0]) * area / n
+    first = margins['t'] + (1 - domain[1]) * area + pitch / 2
+    last = margins['t'] + (1 - domain[0]) * area - pitch / 2
+    assert state.unet_transition_map_cursor_top == pytest.approx(first)
+    assert state.unet_transition_map_cursor_top + state.unet_transition_map_cursor_height == pytest.approx(last)
+    assert layout['margin']['autoexpand'] is False
 
 
 def test_return_to_latest_restores_map_window_after_manual_paging(app):
@@ -502,6 +570,7 @@ def test_empty_map_resets_both_page_and_inspected_scan_slider_limits(app):
     assert state.unet_transition_map_start == 1
     assert state.unet_transition_map_scroll_max == 1
     assert state.unet_transition_map_scan_position == 1
+    assert state.unet_transition_map_scan_min == 1
     assert state.unet_transition_map_scan_max == 1
     assert state.unet_transition_map_scroll_compact == "0 scans"
     assert not state.unet_transition_map_manual_scroll
