@@ -60,6 +60,12 @@ jobs:
       - name: Verify CUDA image and device-independent recovery contracts
         if: inputs.image_variant == 'preparation-cuda'
         run: |
+          # Exercise the installed fixture closure without the source-checkout
+          # mount; that mount must not conceal missing image dependencies.
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/opt/radar-cuda-validation" &&
+          cd /tmp &&
+          python -c "from pathlib import Path; from tempfile import TemporaryDirectory; from test_structural_paired_training_native import data; from test_structural_joint_modes_native import cohort; context=TemporaryDirectory(); root=Path(context.name); data(root/\"pairs\"); cohort(root/\"modes\"); print(\"Verified installed CUDA acceptance fixture closure\")"'
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
           export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 &&
