@@ -203,6 +203,9 @@ jobs:
           cd /tmp &&
           PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
             /validation-tests/test_preparation_registry.py \
+            /validation-tests/test_preparation_gpu_routing.py \
+            /validation-tests/test_structural_input_transport.py \
+            /validation-tests/test_native_operations.py \
             /validation-tests/test_preparation_queue.py \
             /validation-tests/test_preparation_training_continuation.py \
             /validation-tests/test_preparation_batch_queue.py \
