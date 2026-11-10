@@ -1,6 +1,6 @@
 {
   "schema": "radar-pd-user-guide/v2",
-  "application_version": "0.7.9",
+  "application_version": "0.7.10",
   "pages": [
     "index.html",
     "reference-0.4.34.html",
@@ -506,10 +506,10 @@
     "assets/fd2dbb4afe01d19cb485.jpg": "fd2dbb4afe01d19cb48518d6c30a192c45c3c2af8560638d27a791b548d2c1f1",
     "assets/fe125ef98e627cd6c801.jpg": "fe125ef98e627cd6c801d7ee43c340537394df5b483555ba70b11d9fc8e476cf",
     "assets/ff2125e34a54ca4330be.jpg": "ff2125e34a54ca4330be10216af2b81c44e4bc4ed2ed09fe7ef801d7bc53795d",
-    "experiment-planner.html": "a4e08efa2894965447e43632cdd45a21567e88c1fabaebe65838ac5701ddbe51",
+    "experiment-planner.html": "8e91a2f071302da6141715d13c19f9d6df920454b0cee2441d132a510f815ada",
     "guide.css": "5c42c1e1efb87a99c78d01e726a5856492245faff6eae738f116da679777ce1a",
     "guide.js": "4ab14ce0c86f67a2d8b3f8cbe29a2f49e62ca1e03bd6d1bcd9aba264c118930e",
-    "index.html": "5efbe9cb6f4e39627a9d0494b5e388ca3e616f37f83ebdacb594010c5d063b52",
+    "index.html": "ffac45361dc163ab3a419b715e2bc7a476f36bf7ada5ffa1ad475507cfe86c77",
     "inputs/ages-analysis-settings.yaml": "fbbff1d875b7b38f963c7edfe55ef019bdc01acc5e649c2918b3ae8e428656fc",
     "inputs/approved-refinement-recipe.json": "4e8e9d6365a47df527566ad20caaa4eb3a53b87e6d34bd7360ff0aeca94855fd",
     "inputs/llm-refinement-request.txt": "8bb6e275e5e675c32442279b246b1eaf38632fd6689b07133ce2c06139291283",
