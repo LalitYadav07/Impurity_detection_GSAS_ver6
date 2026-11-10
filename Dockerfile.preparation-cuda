@@ -1,0 +1,14 @@
+# An isolated experimental trainer; existing model/app images stay unchanged.
+FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6:models-d2bc43d8e76a9677415b2d6afc8f098b39558103
+USER root
+COPY nova/src/gpx_recipe /opt/radar-symmetry/gpx_recipe
+COPY scripts/ndip_model_campaign.py /opt/radar-symmetry/ndip_model_campaign.py
+COPY scripts/ndip_preparation_cuda_acceptance.py /opt/radar-symmetry/ndip_preparation_cuda_acceptance.py
+COPY requirements.preparation-cuda.txt /opt/radar-symmetry/requirements.preparation-cuda.txt
+COPY tests/gpx_recipe/test_structural_training_cuda.py tests/gpx_recipe/test_structural_paired_training_native.py tests/gpx_recipe/test_structural_paired_blocks.py /opt/radar-cuda-validation/
+COPY tests/gpx_recipe/test_structural_joint_modes_native.py tests/gpx_recipe/test_structural_family_targets.py tests/gpx_recipe/test_structural_mode_projection.py /opt/radar-cuda-validation/
+RUN python -c "import subprocess,pathlib; rows=subprocess.check_output(['python','-m','pip','freeze'],text=True).splitlines(); pathlib.Path('/tmp/radar-cuda-constraints.txt').write_text('\n'.join(r for r in rows if not r.lower().startswith(('torch==','torch @')))+'\n')" \
+    && python -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu126 --constraint /tmp/radar-cuda-constraints.txt -r /opt/radar-symmetry/requirements.preparation-cuda.txt \
+    && python -m pip install --no-cache-dir pytest \
+    && python -m gpx_recipe.live.native_peak_batch --build \
+    && python -c "import torch; assert str(torch.__version__)=='2.14.1+cu126' and torch.version.cuda=='12.6'"

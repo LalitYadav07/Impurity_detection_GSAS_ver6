@@ -159,11 +159,11 @@ def loss(prediction,targets,*,rows,class_count):
             or lo.dtype!=np.float64 or hi.dtype!=np.float64 or not np.isfinite(lo).all() or not np.isfinite(hi).all()
             or np.any(lo<0) or np.any(hi<lo)):
         raise ValueError('Complete native transformed intervals and conditional row/class labels required')
+    # Keep the shared class/mode objective on CPU, with its native float64
+    # targets. Transfers retain autograd for either accelerator; an empty
+    # query batch must return its connected zero on that same CPU as well.
+    if prediction.device.type!='cpu':prediction=prediction.cpu()
     if not len(prediction):return prediction.sum()*0.
-    # MPS does not implement float64. Transfer this small query result to the
-    # existing CPU objective, keeping autograd, rather than narrowing native
-    # targets or enabling an implicit device fallback.
-    if prediction.device.type=='mps':prediction=prediction.cpu()
     truth=torch.from_numpy(np.column_stack((lo,hi))).to(prediction.device)
     residual=truth-prediction.to(torch.float64)
     quantiles=prediction.new_tensor([.1,.9],dtype=torch.float64)

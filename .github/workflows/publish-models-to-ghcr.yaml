@@ -11,7 +11,13 @@ on:
       - scripts/ndip_runtime.py
       - scripts/ndip_symmetry.py
       - .github/workflows/publish-models-to-ghcr.yaml
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      image_variant:
+        description: Worker image to qualify
+        type: choice
+        default: models
+        options: [models, preparation-cuda]
 
 concurrency:
   group: publish-models-${{ github.ref }}
@@ -32,11 +38,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:models-${GITHUB_SHA}" >> "$GITHUB_ENV"
+        env:
+          WORKER_VARIANT: ${{ inputs.image_variant || 'models' }}
+        run: |
+          case "$WORKER_VARIANT" in models|preparation-cuda) ;; *) exit 1 ;; esac
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:${WORKER_VARIANT}-${GITHUB_SHA}" >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.symmetry
+          file: ${{ inputs.image_variant == 'preparation-cuda' && 'Dockerfile.preparation-cuda' || 'Dockerfile.symmetry' }}
           platforms: linux/amd64
           load: true
           push: false
@@ -45,6 +55,17 @@ jobs:
           tags: ${{ env.IMAGE }}
           cache-from: type=gha,scope=model-worker
           cache-to: type=gha,scope=model-worker,mode=max
+      - name: Verify CUDA image and device-independent recovery contracts
+        if: inputs.image_variant == 'preparation-cuda'
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 &&
+          python -c "import torch; assert str(torch.__version__)==\"2.14.1+cu126\" and torch.version.cuda==\"12.6\"; print(\"CUDA wheel verified; GPU hardware acceptance is a separate NDIP gate\")" &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+            /validation/tests/gpx_recipe/test_structural_accelerator_checkpoint.py \
+            /validation/tests/gpx_recipe/test_structural_training_cuda.py \
+            -k "not real_cuda"'
       - name: Verify native stack, adapter identity and credential isolation
         run: |
           docker run --rm --entrypoint python "$IMAGE" -c '

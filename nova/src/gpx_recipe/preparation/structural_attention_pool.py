@@ -26,6 +26,9 @@ def adaptive(values,tokens,*,maximum=False):
             or type(maximum)is not bool or values.shape[-1]<1):
         raise ValueError('Adaptive attention pooling needs complete bounded curve tensors')
     native=F.adaptive_max_pool1d if maximum else F.adaptive_avg_pool1d
+    if values.device.type=='cuda':
+        from .structural_cuda_pool import adaptive as deterministic
+        return deterministic(values,tokens,maximum=maximum)
     if values.device.type!='mps' or values.shape[-1]%tokens==0:
         return native(values,tokens)
     positions,valid,counts=_windows(values.shape[-1],tokens)

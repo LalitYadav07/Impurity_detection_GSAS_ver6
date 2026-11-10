@@ -433,6 +433,9 @@ def _completed_training(request,out,plan_sha):
 def execute_training(request):
     from .structural_ranker import train
     request = validate_training(request); settings = request['settings']
+    if __import__('os').environ.get('RADAR_PREPARATION_TRAINING_DEVICE')=='cuda':
+        from .structural_training_backend import cuda_backend
+        cuda_backend()
     plan_path = Path(request['plan']).resolve(); plan_sha = file_sha(plan_path); plan = read_plan(plan_path)
     if settings.get('representation')!=plan.get('representation'):
         raise ValueError('Training settings differ from the captured example representation')

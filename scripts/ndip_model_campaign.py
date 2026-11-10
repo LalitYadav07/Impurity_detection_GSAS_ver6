@@ -64,6 +64,9 @@ def native(request,inputs,root,cancel):
         # Resolve from the actual reviewed compiler, not that package shim.
         from gpx_recipe.symmetry.compiler import native_environment
         environment=native_environment()
+        if operation=='preparation-structural-training':
+            from gpx_recipe.preparation.structural_training_backend import child_environment
+            environment.update(child_environment())
         process=run_scientific([sys.executable,*command],timeout=request['timeout'],cancel_event=cancel,
             cwd=root,env=environment,stdout=log,stderr=subprocess.STDOUT)
     if process.returncode or not output.is_file():

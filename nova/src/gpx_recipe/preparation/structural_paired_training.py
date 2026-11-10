@@ -128,7 +128,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
     mean,scale=channel_statistics(rows,train_rows,minimum_scale=.01,center=False)
     setup_seconds=time.monotonic()-began
     out=Path(destination)
-    engine=backend.select(out,segmented=_segment_seconds is not None,transferred=_resume is not None)
+    engine=backend.select(out,segmented=_segment_seconds is not None,transferred=_resume is not None,continuation=_resume)
     recovery=engine.checkpoint
     run_identity=recovery.identity(cohort,rows,targets,split,clean,mean,scale,
         epochs=epochs,seed=seed,workers=budget['workers'])

@@ -29,15 +29,19 @@ def forward(model,values):
 
 class Backend:
     def __init__(self,kind):
-        if kind not in ('cpu','mps'):raise ValueError('Unknown structural training execution device')
+        if kind not in ('cpu','mps','cuda'):raise ValueError('Unknown structural training execution device')
         self.kind=kind
-        if kind=='mps':
+        if kind=='cuda':
+            from . import structural_cuda_checkpoint
+            structural_cuda_checkpoint.runtime()
+            self.checkpoint=structural_cuda_checkpoint
+        elif kind=='mps':
             from . import structural_mps_checkpoint
             self.checkpoint=structural_mps_checkpoint
         else:self.checkpoint=cpu_checkpoint
 
     def place(self,model):
-        return model if self.kind=='cpu' else model.to('mps')
+        return model if self.kind=='cpu' else model.to(self.kind)
 
     @contextmanager
     def random_state(self,seed):
@@ -45,6 +49,25 @@ class Backend:
             yield
             return
         import torch
+        if self.kind=='cuda':
+            before=torch.cuda.get_rng_state(0).clone()
+            deterministic=torch.are_deterministic_algorithms_enabled()
+            warn_only=torch.is_deterministic_algorithms_warn_only_enabled()
+            matmul_tf32=torch.backends.cuda.matmul.allow_tf32
+            cudnn_tf32=torch.backends.cudnn.allow_tf32
+            benchmark=torch.backends.cudnn.benchmark
+            try:
+                torch.use_deterministic_algorithms(True)
+                torch.backends.cuda.matmul.allow_tf32=False
+                torch.backends.cudnn.allow_tf32=False;torch.backends.cudnn.benchmark=False
+                torch.cuda.manual_seed(seed)
+                yield
+            finally:
+                torch.cuda.synchronize(0);torch.cuda.set_rng_state(before,0)
+                torch.use_deterministic_algorithms(deterministic,warn_only=warn_only)
+                torch.backends.cuda.matmul.allow_tf32=matmul_tf32
+                torch.backends.cudnn.allow_tf32=cudnn_tf32;torch.backends.cudnn.benchmark=benchmark
+            return
         before=torch.mps.get_rng_state().clone()
         try:
             torch.mps.manual_seed(seed)
@@ -75,14 +98,47 @@ class Backend:
                     raise ValueError('GPU training weights do not reproduce portable CPU logits')
                 largest=max(largest,float((actual-expected).abs().max()));count+=len(values)
         if not count:raise ValueError('CPU portability requires training representatives')
-        return cpu,dict(device='mps',portable_inference_device='cpu',
+        return cpu,dict(device=self.kind,portable_inference_device='cpu',
             representatives=count,maximum_logit_absolute_error=largest,
             **(dict(mode_queries=mode_queries,maximum_mode_absolute_error=mode_error) if mode_context is not None else {}),
             relative_tolerance=1e-4,absolute_tolerance=1e-5,
             scope='Training-only numerical transport; no screening qualification')
 
 
-def select(destination,*,segmented=False,transferred=False):
+def cuda_backend():
+    """Fail before cohort assembly when a GPU worker lacks its bound device."""
+    import os,torch
+    if os.environ.get('CUBLAS_WORKSPACE_CONFIG') not in (':4096:8',':16:8'):
+        raise ValueError('CUDA training needs its deterministic cuBLAS workspace configured before launch')
+    engine=Backend('cuda')
+    # Application VRAM cap; it does not imply exclusive GPU allocation.
+    total=torch.cuda.get_device_properties(0).total_memory
+    torch.cuda.set_per_process_memory_fraction(min(1.,4096*1024**2/total),0)
+    return engine
+
+
+def child_environment():
+    """Pass managed device controls only to the training subprocess."""
+    import os
+    required=os.environ.get('RADAR_PREPARATION_TRAINING_DEVICE')
+    if required is None:return {}
+    if required not in ('cpu','cuda'):raise ValueError('Unknown managed structural training device')
+    result={'RADAR_PREPARATION_TRAINING_DEVICE':required}
+    if required=='cuda':
+        workspace=os.environ.get('CUBLAS_WORKSPACE_CONFIG')
+        if workspace not in (':4096:8',':16:8'):
+            raise ValueError('CUDA training needs its deterministic cuBLAS workspace configured before launch')
+        result['CUBLAS_WORKSPACE_CONFIG']=workspace
+        for name in ('CUDA_VISIBLE_DEVICES','CUDA_DEVICE_ORDER'):
+            value=os.environ.get(name)
+            if value is not None:
+                if not 0<len(value)<=512 or any(ord(c)<32 for c in value):
+                    raise ValueError('Invalid bounded CUDA device binding')
+                result[name]=value
+    return result
+
+
+def select(destination,*,segmented=False,transferred=False,continuation=None):
     """Choose hardware once; retain CPU worker transport and existing owners."""
     import torch
     destination=Path(destination)
@@ -90,8 +146,26 @@ def select(destination,*,segmented=False,transferred=False):
     mps=destination/'training-mps-checkpoint.npz'
     has_cpu=cpu.exists() or cpu.is_symlink()
     has_mps=mps.exists() or mps.is_symlink()
-    if has_cpu and has_mps:
-        raise ValueError('Conflicting CPU and MPS structural training owners')
+    cuda=destination/'training-cuda-checkpoint.npz';has_cuda=cuda.exists() or cuda.is_symlink()
+    if sum((has_cpu,has_mps,has_cuda))>1:
+        raise ValueError('Conflicting structural training device owners')
+    import os
+    required=os.environ.get('RADAR_PREPARATION_TRAINING_DEVICE')
+    if required not in (None,'cpu','cuda'):raise ValueError('Unknown managed structural training device')
+    resume_device=None
+    if continuation is not None:
+        from .structural_training_transfer import read,CUDA_SCHEMA
+        receipt,_=read(continuation)
+        resume_device='cuda' if receipt['schema']==CUDA_SCHEMA else 'cpu'
+        if required is not None and resume_device!=required:
+            raise ValueError('A transferred optimizer cannot move silently to another device')
+    if required=='cuda' or has_cuda or resume_device=='cuda':
+        if has_cuda and required=='cpu':raise ValueError('An owned CUDA optimizer cannot move silently to CPU')
+        if has_cpu or has_mps:raise ValueError('An owned optimizer cannot move silently to CUDA')
+        return cuda_backend()
+    if required=='cpu':
+        if has_mps:raise ValueError('An owned optimizer cannot move silently to CPU')
+        return Backend('cpu')
     available=(sys.platform=='darwin' and torch.backends.mps.is_available()
         and __import__('os').environ.get('PYTORCH_ENABLE_MPS_FALLBACK','0')=='0')
     if has_mps:

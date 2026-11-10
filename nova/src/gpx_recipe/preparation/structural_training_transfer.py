@@ -22,6 +22,7 @@ from .structural_model_files import MAX_BYTES,MAX_METADATA_BYTES
 from .tof_kernel_arrays import array_identity,checksum,read_bounded
 
 SCHEMA='radar-attention-training-continuation/v1'
+CUDA_SCHEMA='radar-attention-training-continuation/v2'
 STATE='training-state.npz'
 RECEIPT='training-state.json'
 
@@ -29,7 +30,17 @@ RECEIPT='training-state.json'
 def inspect(path,*,identity=None,epochs=None):
     """Check the data container; never replace the canonical tensor audit."""
     raw=read_bounded(path,MAX_BYTES);validate_npz_bytes(raw,maximum_bytes=MAX_BYTES)
+    numeric=raw;device_identity=None
     with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
+        envelope=set(archive.files)=={'metadata','cpu_checkpoint','device_rng'}
+    if envelope:
+        from .structural_accelerator_checkpoint import inspect_bytes
+        from .structural_cuda_checkpoint import SCHEMA as CUDA_STATE_SCHEMA,validate_runtime
+        outer,metadata=inspect_bytes(raw,schema=CUDA_STATE_SCHEMA,identity=identity)
+        device_identity=metadata['identity']
+        validate_runtime(metadata['runtime']);numeric=outer['cpu_checkpoint'].tobytes()
+        validate_npz_bytes(numeric,maximum_bytes=MAX_BYTES)
+    with np.load(io.BytesIO(numeric),allow_pickle=False) as archive:
         if set(archive.files)!=checkpoint.ARRAYS|{'metadata'}:
             raise ValueError('Invalid training continuation array inventory')
         arrays={key:archive[key] for key in archive.files}
@@ -40,6 +51,7 @@ def inspect(path,*,identity=None,epochs=None):
     metadata=restore_history(json.loads(encoded.tobytes()))
     if (not isinstance(metadata,dict)
             or not checksum(metadata.get('identity')) or not checksum(metadata.get('layout'))
+            or (envelope and metadata['identity']!=device_identity)
             or (identity is not None and metadata['identity']!=identity)
             or metadata.get('arrays_sha256')!=array_identity(arrays)):
         raise ValueError('Training continuation identity or numerical bytes changed')
@@ -80,12 +92,17 @@ def snapshot(directory,destination,*,identity,epochs):
     owner=json.loads(read_bounded(directory/'training-identity.json',1024))
     if owner!={'schema':'radar-owned-attention-training-run/v1','identity':identity}:
         raise ValueError('Training continuation has no matching owned run')
-    raw,metadata=inspect(directory/'training-checkpoint.npz',identity=identity,epochs=epochs)
+    paths=[directory/name for name in ('training-checkpoint.npz','training-cuda-checkpoint.npz')
+        if (directory/name).exists() or (directory/name).is_symlink()]
+    if len(paths)!=1:raise ValueError('Training continuation requires exactly one complete device owner')
+    cuda=paths[0].name=='training-cuda-checkpoint.npz'
+    raw,metadata=inspect(paths[0],identity=identity,epochs=epochs)
     receipt=dict(schema=SCHEMA,identity=identity,implementation_sha256=package_signature(),
         checkpoint_sha256=hashlib.sha256(raw).hexdigest(),epochs=epochs,
         epochs_completed=metadata['epochs_completed'],warmup_completed=metadata['warmup_completed'],
         elapsed_seconds=metadata['elapsed_seconds'],role='optimizer_continuation_only',
         trained_model=False,scientific_result=False,candidate_pruning_authorized=False)
+    if cuda:receipt.update(schema=CUDA_SCHEMA,device='cuda')
     destination=Path(destination)
     if destination.exists() or destination.is_symlink():
         existing,data=read(destination,identity=identity,epochs=epochs)
@@ -110,7 +127,10 @@ def read(directory,*,identity=None,epochs=None):
     expected={'schema','identity','implementation_sha256','checkpoint_sha256','epochs',
         'epochs_completed','warmup_completed','elapsed_seconds','role','trained_model',
         'scientific_result','candidate_pruning_authorized'}
-    if (not isinstance(receipt,dict) or set(receipt)!=expected or receipt['schema']!=SCHEMA
+    cuda=isinstance(receipt,dict) and receipt.get('schema')==CUDA_SCHEMA
+    if cuda:expected.add('device')
+    if (not isinstance(receipt,dict) or set(receipt)!=expected or receipt['schema'] not in (SCHEMA,CUDA_SCHEMA)
+            or cuda and receipt['device']!='cuda'
             or not checksum(receipt['identity']) or not checksum(receipt['checkpoint_sha256'])
             or receipt['implementation_sha256']!=package_signature()
             or type(receipt['epochs'])is not int or not 1<=receipt['epochs']<=1000
@@ -120,6 +140,9 @@ def read(directory,*,identity=None,epochs=None):
             or receipt['scientific_result'] is not False or receipt['candidate_pruning_authorized'] is not False):
         raise ValueError('Invalid bound training continuation receipt')
     raw,metadata=inspect(directory/STATE,identity=receipt['identity'],epochs=receipt['epochs'])
+    with np.load(io.BytesIO(raw),allow_pickle=False) as archive:
+        actual_cuda=set(archive.files)=={'metadata','cpu_checkpoint','device_rng'}
+    if cuda!=actual_cuda:raise ValueError('Training continuation device and numerical envelope differ')
     if (hashlib.sha256(raw).hexdigest()!=receipt['checkpoint_sha256']
             or any(receipt[key]!=metadata[key] for key in
                    ('epochs_completed','warmup_completed','elapsed_seconds'))):
@@ -143,7 +166,11 @@ def _restore_owned(directory,destination,*,identity,epochs):
     owner=json.loads(read_bounded(destination/'training-identity.json',1024))
     if owner!={'schema':'radar-owned-attention-training-run/v1','identity':identity}:
         raise ValueError('Restore training state only inside its matching owned run')
-    target=destination/'training-checkpoint.npz'
+    device='cuda' if receipt['schema']==CUDA_SCHEMA else 'cpu'
+    target=destination/('training-cuda-checkpoint.npz' if device=='cuda' else 'training-checkpoint.npz')
+    if any((destination/name).exists() or (destination/name).is_symlink() for name in
+           ('training-checkpoint.npz','training-cuda-checkpoint.npz','training-mps-checkpoint.npz') if name!=target.name):
+        raise ValueError('Training continuation cannot replace an alternate device owner')
     if target.exists() or target.is_symlink():
         existing,metadata=inspect(target,identity=identity,epochs=epochs)
         if existing==raw:return dict(receipt,disposition='identical_owned_checkpoint_retained')
