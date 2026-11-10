@@ -133,7 +133,7 @@ def refinement_dashboard(app):
                 html.P('{{ rf_message }}',v_if='!!rf_message',classes='rf-muted')
                 html.P('{{ rf_preparation_progress }}',v_if='!!rf_preparation_progress',classes='rf-notice',role='status')
                 html.P('Recipe preparation is separate from polishing. This draft needs approval before it can start polishing jobs.',
-                    v_if='!!rf_preparation_progress && rf_busy',classes='rf-muted')
+                    v_if='!!rf_preparation_progress && (rf_busy || rf_guided_busy)',classes='rf-muted')
                 with html.Div(v_if='!rf_cards.length && !rf_busy && !rf_questions.length',classes='rf-empty mt-4'):
                     html.H3('Your staged plan will appear here')
                     html.P('Inspect the exact parameters released at each stage before any scan is polished.')

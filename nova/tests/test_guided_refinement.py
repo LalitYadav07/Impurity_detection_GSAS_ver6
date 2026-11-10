@@ -247,6 +247,10 @@ def test_guided_compile_preserves_selected_series_and_future_enrollment(context)
         def _refinement_sync(self):pass
         def _refinement_checkpoint(self):pass
         def _refinement_schedule(self,work,label):asyncio.run(work)
+        async def _prepare_recipe_with_progress(self,owner):
+            assert owner['selection']==('exp','s1',guided.build_plan(context,setup)['request'],'guided')
+            assert owner['source_sha256']==context['source']['sha256']
+            return owner['workspace'].prepare(*owner['selection'][:3],guided=owner['guided'])
     app=App();app.server=SimpleNamespace(state=state);app._guided_state=setup;app._guided_epoch='test'
     app._refinement_workspace=SimpleNamespace(prepare=lambda *a,**k:calls.append((a,k)))
     app.compile_guided_refinement()

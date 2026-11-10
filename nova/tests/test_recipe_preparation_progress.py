@@ -56,6 +56,27 @@ def test_cached_inspection_and_a_broken_progress_consumer_do_not_repeat_work(tmp
     assert [c[0] for c in rt.calls]==['inspect','preview','preview']
 
 
+def test_guided_plan_uses_shared_progress_without_calling_luna(tmp_path):
+    from gpx_recipe import guided
+    w,rt=create(tmp_path);w.observe([source('1')])
+    context=w.inspect('1')['context'];setup=guided.start(context)
+    answers=dict(recipe='mixture',model_review='reviewed',cell_phases=[])
+    while (question:=guided.next_question(context,setup)) is not None:
+        setup=guided.answer(context,setup,question['id'],answers[question['id']])
+    plan=guided.build_plan(context,setup)
+    def no_model(*args,**kwargs):raise AssertionError('Guided choices must not call a model')
+    w._planner=no_model
+    app=App(w);app.server.state.rf_setup_mode='guided';app.server.state.rf_request=plan['request']
+    owner=dict(workspace=w,selection=('exp','1',plan['request'],'guided'),
+               source_sha256=context['source']['sha256'],guided=setup)
+    result=asyncio.run(app._prepare_recipe_with_progress(owner))
+    assert result['status']=='ready' and result['plan']==plan
+    assert 'Preparation complete' in app.server.state.rf_preparation_progress
+    assert result['origin']=='Guided rules · deterministic recipe'
+    assert [c[0] for c in rt.calls]==['inspect','preview']
+    assert not w.state['jobs'] and not app._refinement_preparations
+
+
 def test_clarification_has_no_preflight_and_no_success_claim(tmp_path):
     w,rt=create(tmp_path);w.observe([source('1')]);events=[]
     def needs_input(request,context,previous=None):
@@ -143,8 +164,9 @@ class Gates:
 
 
 async def until(predicate):
-    async with asyncio.timeout(5):
+    async def poll():
         while not predicate():await asyncio.sleep(.002)
+    await asyncio.wait_for(poll(),timeout=5)
 
 
 def test_delayed_phases_tick_without_writes_or_polishing_count_changes(tmp_path,monkeypatch):

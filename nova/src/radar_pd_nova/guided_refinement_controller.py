@@ -84,7 +84,7 @@ class GuidedRefinementMixin:
         if s.rf_busy or s.rf_guided_busy or not w or not s.rf_source:return
         source_id=s.rf_source;epoch=self._guided_epoch
         self._refinement_hold_enrollment();w.discard_draft(s.rf_experiment)
-        s.rf_guided_busy=True;s.rf_error='';s.rf_message='';s.rf_request='';s.flush()
+        s.rf_guided_busy=True;s.rf_error='';s.rf_message='Inspecting the selected GPX before asking refinement questions. This includes Galaxy transfer and queue time; no refinement has started.';s.rf_request='';s.flush()
         async def work():
             try:
                 source=await asyncio.to_thread(w.inspect,source_id)
@@ -92,6 +92,7 @@ class GuidedRefinementMixin:
                 self._guided_source_id=source_id;self._guided_state=guided.start(source['context'])
                 self._guided_binding=(source_id,source['source_sha256'])
                 self._guided_render()
+                s.rf_message='Starting model inspected. Answer the guided questions below; no model call is required for direct choices.'
             except Exception as exc:
                 if epoch==self._guided_epoch and source_id==s.rf_source:s.rf_error=str(exc)
             finally:s.rf_guided_busy=False;self._refinement_sync();s.flush()
@@ -167,11 +168,13 @@ class GuidedRefinementMixin:
         try:
             context=self._guided_context();state=deepcopy(self._guided_state)
             plan=guided.build_plan(context,state);source_id=s.rf_source;experiment=s.rf_experiment;epoch=self._guided_epoch
-            s.rf_request=plan['request'];s.rf_guided_busy=True;s.rf_error='';s.rf_message='';s.flush()
+            s.rf_request=plan['request'];s.rf_guided_busy=True;s.rf_error='';s.rf_message='Checking the guided recipe against the native model. Approval and Start refinement are still required.';s.flush()
+            owner=dict(workspace=w,selection=(experiment,source_id,plan['request'],getattr(s,'rf_setup_mode','guided')),
+                       source_sha256=context['source']['sha256'],guided=state)
         except Exception as exc:s.rf_error=str(exc);return
         async def work():
             try:
-                draft=await asyncio.to_thread(w.prepare,experiment,source_id,plan['request'],guided=state)
+                draft=await self._prepare_recipe_with_progress(owner)
                 if draft and epoch==self._guided_epoch and s.rf_source==source_id and s.rf_experiment==experiment:
                     s.rf_message='Guided recipe checked by the native engine. Review its free parameters and assumptions before approving.'
             except Exception as exc:
