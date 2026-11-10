@@ -40,12 +40,12 @@ def test_structural_parameters_use_child_cell_and_mode_units_without_inventing_e
 
 def test_expanded_fit_caption_retains_scan_model_residual_and_disposition():
     r=dict(metadata={'scan':'Run123 · Bank2'},name='R-3c',bns='167.103',rwp=23.171,status='inadequate_fit')
-    assert fit_caption(r)=='Run123 · Bank2 · R-3c · BNS 167.103 · Rwp 23.171% · inadequate fit'
+    assert fit_caption(r)=='Run123 · Bank2 · R-3c · BNS 167.103 · Rwp 23.171% · Rwp target not met'
     assert fit_caption(dict(r,metadata={'scan':'Run124 · Bank2'},status='valid')).startswith('Run124 · Bank2')
     assert 'native checks passed' in fit_caption(dict(r,status='valid'))
     assert fit_caption(None)==''
-    assert 'Rwp' not in fit_caption(dict(r,rwp=float('nan')))
-    assert fit_caption(r,temperature='mean 0.7001 K')=='Run123 · Bank2 · mean 0.7001 K · R-3c · BNS 167.103 · Rwp 23.171% · inadequate fit'
+    assert 'nan' not in fit_caption(dict(r,rwp=float('nan'))).lower()
+    assert fit_caption(r,temperature='mean 0.7001 K')=='Run123 · Bank2 · mean 0.7001 K · R-3c · BNS 167.103 · Rwp 23.171% · Rwp target not met'
     assert fit_caption(dict(r,metadata={'scan':'Run123 · Bank2','condition':0.,'condition_unit':'K'}))==fit_caption(r)
 
 

@@ -47,7 +47,7 @@ def test_pinned_legend_hover_preserve_unresolved_attempts_and_two_pin_limit(tmp_
         assert '%{text}' in trace['hovertemplate']
         assert trace['connectgaps'] is False
     figure=fit(selected,[inadequate])
-    assert any('Rwp 22.400% · inadequate fit' in trace['name'] for trace in figure['data'])
+    assert any('Rwp 22.400% · Rwp target not met' in trace['name'] for trace in figure['data'])
     assert selected['status']=='valid' and unresolved['status']=='optimization_unresolved'
 
 

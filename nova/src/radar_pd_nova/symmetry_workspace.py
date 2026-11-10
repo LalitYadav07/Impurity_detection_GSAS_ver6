@@ -260,7 +260,8 @@ def disposition_reason(row):
 
 def display_status(status):
     return {'prepared':'awaiting dispatch','running':'assigned to a batch',
-            'submitting':'submission pending','profile_equivalent':'equivalent screened start'}.get(status,status.replace('_',' '))
+            'submitting':'submission pending','profile_equivalent':'equivalent screened start',
+            'inadequate_fit':'Rwp target not met'}.get(status,status.replace('_',' '))
 
 
 def pin_label(row,*,include_start=False):
