@@ -1,5 +1,6 @@
 """Owned, portable planner snapshots with authenticated Galaxy History recovery."""
 import asyncio
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import copy
 from datetime import datetime, timezone
 import hashlib
@@ -72,6 +73,27 @@ class PlanningStorageMixin:
         except RuntimeError:pass
         return self._refinement_schedule(coroutine,name)
 
+    def _planning_on_owner(self, action):
+        """Commit state and run its callbacks on the captured interactive loop."""
+        loop=getattr(self,'_planning_progress_loop',None)
+        try:current=asyncio.get_running_loop()
+        except RuntimeError:current=None
+        if loop is None or current is loop:return action()
+        if not loop.is_running():raise RuntimeError('The planner viewer closed before its state could be updated')
+        result=Future()
+        def deliver():
+            if not result.set_running_or_notify_cancel():return
+            try:result.set_result(action())
+            except BaseException as exc:result.set_exception(exc)
+        loop.call_soon_threadsafe(deliver)
+        while True:
+            try:return result.result(timeout=.5)
+            except FutureTimeoutError:
+                if result.done():raise
+                if not loop.is_running():
+                    result.cancel()
+                    raise RuntimeError('The planner viewer closed before its state could be updated')
+
     def _planning_root(self):
         if not hasattr(self, '_planning_owned_root'):
             root=getattr(getattr(self, 'service', None), 'output_root', None)
@@ -114,20 +136,28 @@ class PlanningStorageMixin:
         service=getattr(self,'service',None)
         return service if service and all(getattr(service,k,None) for k in ('galaxy_url','galaxy_key','history_id')) else None
 
-    def _planning_storage_action(self, action, message):
-        """Keep History network and archive work off the interactive event loop."""
+    def _planning_storage_action(self, action, message, *, completed=None, failed=None):
+        """Do storage work in a thread; deliver UI effects on the owner loop."""
         s=self.server.state
         if s.plan_busy:return
         async def run():
-            try:await asyncio.to_thread(action)
-            except Exception as exc:s.plan_error=str(exc)
+            try:
+                value=await asyncio.to_thread(action)
+                if completed is not None:completed(value)
+            except Exception as exc:
+                if failed is not None:failed()
+                s.plan_error=str(exc)
             finally:s.plan_busy=False;s.plan_can_cancel=False;s.flush()
         if hasattr(self,'_refinement_schedule'):
             s.plan_busy=True;s.plan_can_cancel=False;s.plan_error='';s.plan_save_message=message;s.flush()
             self._planning_schedule(run(),'radar-planner-storage')
         else:
-            try:action()
-            except Exception as exc:s.plan_error=str(exc)
+            try:
+                value=action()
+                if completed is not None:completed(value)
+            except Exception as exc:
+                if failed is not None:failed()
+                s.plan_error=str(exc)
             s.flush()
 
     def _planning_build_bundle(self):
@@ -239,7 +269,7 @@ class PlanningStorageMixin:
                     document,files=bundle.read_directory(root)
                 self._planning_apply_bundle(document,files,trusted=trusted)
             except Exception:
-                self._planning_edited()
+                self._planning_on_owner(self._planning_edited)
                 raise
         self._planning_storage_action(restore,'Opening and validating the saved plan…')
 
@@ -297,33 +327,37 @@ class PlanningStorageMixin:
             settings['plan_current']=False;settings['plan_result_ready']=False
         for key in ('_planning_catalog','_planning_structural_catalog'):
             if backend.get(key):backend[key]=(*backend[key][:-1],Path(backend[key][-1]))
-        self._planning_generation+=1
-        self._planning_restoring=True
-        try:
-            for key in (*FIELDS,*EXTRA_FIELDS):
-                if key in settings:setattr(s,key,settings[key])
-            self._planning_owned_inputs.update(owned)
-            self._planning_native_artifacts.update(verified)
-            for key in BACKEND_FIELDS:
-                value=backend.get(key)
-                if key in {'_planning_output','_planning_parent_output'} and value:value=Path(value)
-                setattr(self,key,value)
-            self._planning_profile_context=(s.plan_configuration,s.plan_custom_profile)
-            self._planning_isotope_source=self._planning_structure_sources()
-            self._planning_profile_options()
-            s.plan_error='';s.plan_save_message='Opened '+document['name']+'.'+native_message
-            s.plan_message='Saved inputs and results opened.'+native_message
-            if s.plan_current and original_scenario is None:
-                s.plan_qualification='Imported saved preview · scientific provenance unverified'
-                s.plan_warnings=list(s.plan_warnings)+['Recalculate this saved preview to verify it against the current inputs and worker.']
-            elif s.plan_current:
-                if not self._planning_matches_original(original_scenario,original_root):
-                    s.plan_current=False;s.plan_result_ready=False
-                    s.plan_message='Saved settings differ from the original calculation. Recalculate this plan before using its prediction.'
-            if not s.plan_current:s.plan_figure={'data':[],'layout':{}}
-            if same_engine:
-                self._planning_plot()
-        finally:self._planning_restoring=False;s.flush()
+        def apply():
+            self._planning_generation+=1
+            self._planning_restoring=True
+            try:
+                for key in (*FIELDS,*EXTRA_FIELDS):
+                    if key in settings:setattr(s,key,settings[key])
+                self._planning_owned_inputs.update(owned)
+                self._planning_native_artifacts.update(verified)
+                for key in BACKEND_FIELDS:
+                    value=backend.get(key)
+                    if key in {'_planning_output','_planning_parent_output'} and value:value=Path(value)
+                    setattr(self,key,value)
+                self._planning_profile_context=(s.plan_configuration,s.plan_custom_profile)
+                self._planning_isotope_source=self._planning_structure_sources()
+                self._planning_profile_options()
+                s.plan_error='';s.plan_save_message='Opened '+document['name']+'.'+native_message
+                s.plan_message='Saved inputs and results opened.'+native_message
+                if s.plan_current and original_scenario is None:
+                    s.plan_qualification='Imported saved preview · scientific provenance unverified'
+                    s.plan_warnings=list(s.plan_warnings)+['Recalculate this saved preview to verify it against the current inputs and worker.']
+                elif s.plan_current:
+                    if not self._planning_matches_original(original_scenario,original_root):
+                        s.plan_current=False;s.plan_result_ready=False
+                        s.plan_message='Saved settings differ from the original calculation. Recalculate this plan before using its prediction.'
+                if not s.plan_current:s.plan_figure={'data':[],'layout':{}}
+                if same_engine:
+                    self._planning_plot()
+            finally:
+                try:s.flush()
+                finally:self._planning_restoring=False
+        self._planning_on_owner(apply)
 
     def _planning_matches_original(self, original, root):
         """Do not present an authentic result as the prediction of edited inputs."""
@@ -357,13 +391,13 @@ class PlanningStorageMixin:
 
     def export_planning_plan(self, **_):
         def export():
-            try:
-                document,files=self._planning_build_bundle()
-                self.download_file('powgen-experiment-plan.zip','application/zip',bundle.archive(document,files))
-            except Exception:
-                self._planning_edited()
-                raise
-        self._planning_storage_action(export,'Preparing the portable plan and result bundle…')
+            document,files=self._planning_build_bundle()
+            return bundle.archive(document,files)
+        def deliver(raw):
+            self.download_file('powgen-experiment-plan.zip','application/zip',raw)
+            self.server.state.plan_save_message='Portable plan download requested.'
+        self._planning_storage_action(export,'Preparing the portable plan and result bundle…',
+                                      completed=deliver,failed=self._planning_edited)
 
     def import_planning_plan(self, **_):
         def imported():

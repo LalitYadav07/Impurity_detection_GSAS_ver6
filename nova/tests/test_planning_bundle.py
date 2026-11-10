@@ -1,12 +1,15 @@
 """Portable planner and History recovery preserve settings without pickle trust."""
+import asyncio
 import copy
 import hashlib
 import io
 import json
 from pathlib import Path
 import pickle
+import threading
 from types import SimpleNamespace
 import zipfile
+import uuid
 
 import numpy as np
 import pytest
@@ -128,6 +131,147 @@ def test_history_label_handles_missing_or_malformed_display_metadata():
     assert _planning_history_label({'name':name,'display_name':{},'update_time':{}},'6a00c9f0aa11bb22')=='Named experiment · 6a00c9f0'
     assert _planning_history_label({'name':None,'display_name':None},'6a00c9f0aa11bb22')=='6a00c9f0aa11bb22'
     assert len(_planning_history_label({'name':{},'display_name':'x'*10000},'6a00c9f0aa11bb22'))==256
+
+
+def connected_planner(tmp_path,service=None):
+    """Real Trame state, NOVA download and wslink publication; only the wire is a sink."""
+    from nova.trame import ThemedApp
+    from trame.app import get_server
+    from trame.widgets import client
+    from trame_server.protocol import CoreServer
+    from trame_server.state import State as TrameState
+    from wslink.publish import PublishManager
+    frames=[];commits=[];tasks=[];download_sent=asyncio.Event()
+    publisher=PublishManager()
+    class Wire:
+        network_monitor=SimpleNamespace(on_enter=lambda:None,on_exit=lambda *_:None)
+        async def sendWrappedMessage(self,topic,data,**kwargs):
+            frames.append((threading.get_ident(),topic,copy.deepcopy(data)))
+            if 'trame.actions.topic' in topic:download_sent.set()
+    publisher.registerProtocol(Wire())
+    def commit(data):
+        commits.append((threading.get_ident(),copy.deepcopy(data)))
+        publisher.publish('trame.state.topic',copy.deepcopy(data))
+    server=get_server('planner-storage-'+uuid.uuid4().hex,client_type='vue3')
+    server._state=TrameState(commit_fn=commit,ready=True)
+    # wslink normally attaches publish to the root protocol during server startup.
+    protocol=object.__new__(CoreServer);protocol.publish=publisher.publish
+    server._root_protocol=protocol
+    instance=PlanningMixin();instance.server=server
+    instance.service=service or SimpleNamespace(output_root=tmp_path)
+    instance._init_planning();server.state.flush()
+    instance.load_planning_example();server.state.flush()
+    def schedule(coroutine,name):
+        task=asyncio.create_task(coroutine,name=name);tasks.append(task);return task
+    instance._refinement_schedule=schedule
+    instance.download_file=ThemedApp.download_file.__get__(instance,PlanningMixin)
+    instance._download_file=client.JSEval(trame_server=server,exec='async () => {}').exec
+    return instance,server.state,tasks,frames,commits,download_sent
+
+
+def test_export_delivers_real_nova_download_on_owner_loop_with_exact_bundle_bytes(tmp_path,monkeypatch):
+    async def check():
+        owner=threading.get_ident()
+        instance,s,tasks,frames,_,download_sent=connected_planner(tmp_path)
+        result(instance);s.flush()
+        expected_document,expected_files=instance._planning_build_bundle()
+        built=[]
+        def build():
+            built.append(threading.get_ident());return expected_document,expected_files
+        monkeypatch.setattr(instance,'_planning_build_bundle',build)
+        instance.export_planning_plan();await tasks[-1]
+        assert not s.plan_error
+        await asyncio.wait_for(download_sent.wait(),1)
+        actions=[(thread,data) for thread,topic,data in frames if 'trame.actions.topic' in topic]
+        assert len(actions)==1 and actions[0][0]==owner
+        action=actions[0][1][0]
+        assert action['method']=='exec'
+        name,mime,raw=action['args'][0]
+        assert (name,mime)==('powgen-experiment-plan.zip','application/zip')
+        actual_document,actual_files=bundle.read_archive(raw)
+        assert actual_document==expected_document and actual_files==expected_files
+        assert built and all(thread!=owner for thread in built)
+        assert s.plan_save_message=='Portable plan download requested.'
+        assert not s.plan_busy and not s.plan_can_cancel
+    asyncio.run(check())
+
+
+def test_history_restore_publishes_values_and_callbacks_on_owner_loop_before_clearing_guard(tmp_path,monkeypatch):
+    service=History(tmp_path);service.output_root=tmp_path/'original'
+    original,source=planner(tmp_path/'original',service);result(original)
+    source.plan_name='Restored silicon';source.plan_mass=3.25
+    original.save_planning_plan();selected=source.plan_saved_id
+    async def check():
+        owner=threading.get_ident();service.output_root=tmp_path/'fresh'
+        instance,s,tasks,frames,commits,_=connected_planner(tmp_path/'fresh',service)
+        instance._planning_history_ids={selected.removeprefix('history:')}
+        s.plan_saved_id=selected;s.flush();await asyncio.sleep(0)
+        frames.clear();commits.clear();callbacks=[];downloads=[]
+        @s.change('plan_mass','plan_cif','plan_current')
+        def changed(**_):callbacks.append((threading.get_ident(),instance._planning_restoring))
+        download=service._download_dataset
+        def tracked_download(*args,**kwargs):
+            downloads.append(threading.get_ident());return download(*args,**kwargs)
+        monkeypatch.setattr(service,'_download_dataset',tracked_download)
+        instance.restore_planning_plan();await tasks[-1];await asyncio.sleep(.01)
+        assert not s.plan_error and s.plan_mass==3.25 and s.plan_name=='Restored silicon'
+        assert s.plan_current and s.plan_result_ready and s.plan_figure['data']
+        assert s.plan_save_message.startswith('Opened Restored silicon.')
+        assert callbacks and all(thread==owner and guarded for thread,guarded in callbacks)
+        assert downloads and all(thread!=owner for thread in downloads)
+        published={key:value for _,topic,data in frames if 'trame.state.topic' in topic for key,value in data.items()}
+        assert published['plan_mass']==3.25 and published['plan_current'] is True
+        assert published['plan_result_ready'] is True and published['plan_figure']['data']
+        assert commits and all(thread==owner for thread,_ in commits)
+        assert not s.plan_busy and not s.plan_can_cancel and not instance._planning_restoring
+    asyncio.run(check())
+
+
+def test_failed_export_keeps_download_silent_and_invalidates_results_on_owner_loop(tmp_path,monkeypatch):
+    async def check():
+        owner=threading.get_ident();instance,s,tasks,frames,commits,_=connected_planner(tmp_path)
+        result(instance);s.flush();await asyncio.sleep(0);commits.clear();frames.clear()
+        def fail():raise ValueError('The saved result changed')
+        monkeypatch.setattr(instance,'_planning_build_bundle',fail)
+        instance.export_planning_plan();await tasks[-1];await asyncio.sleep(.01)
+        assert s.plan_error=='The saved result changed' and not s.plan_current and not s.plan_result_ready
+        assert not any('trame.actions.topic' in topic for _,topic,_ in frames)
+        assert all(thread==owner for thread,_ in commits)
+        assert not s.plan_busy and not s.plan_can_cancel
+    asyncio.run(check())
+
+
+def test_failed_history_restore_preserves_inputs_and_publishes_error_on_owner_loop(tmp_path):
+    async def check():
+        owner=threading.get_ident();service=History(tmp_path);service.output_root=tmp_path
+        instance,s,tasks,frames,commits,_=connected_planner(tmp_path,service)
+        service.data['broken']=b'not a planner archive'
+        instance._planning_history_ids={'broken'};s.plan_saved_id='history:broken'
+        result(instance);s.flush();await asyncio.sleep(0);commits.clear();frames.clear()
+        original_cif=s.plan_cif;original_mass=s.plan_mass
+        instance.restore_planning_plan();await tasks[-1];await asyncio.sleep(.01)
+        assert s.plan_error and not s.plan_current and not s.plan_result_ready
+        assert (s.plan_cif,s.plan_mass)==(original_cif,original_mass)
+        assert not s.plan_busy and not s.plan_can_cancel and not instance._planning_restoring
+        assert commits and all(thread==owner for thread,_ in commits)
+        published={key:value for _,topic,data in frames if 'trame.state.topic' in topic for key,value in data.items()}
+        assert published['plan_error']==s.plan_error and published['plan_current'] is False
+    asyncio.run(check())
+
+
+def test_failed_owner_delivery_propagates_timeout_and_invalidates_export(tmp_path,monkeypatch):
+    async def check():
+        instance,s,tasks,_,_,_=connected_planner(tmp_path)
+        result(instance);s.flush()
+        def fail(*_):raise TimeoutError('Download delivery failed')
+        monkeypatch.setattr(instance,'download_file',fail)
+        instance.export_planning_plan();await asyncio.wait_for(tasks[-1],2)
+        assert s.plan_error=='Download delivery failed' and not s.plan_current and not s.plan_result_ready
+        assert not s.plan_busy and not s.plan_can_cancel
+        # A timeout raised by an owner-loop action is not a Future wait timeout.
+        with pytest.raises(TimeoutError,match='Download delivery failed'):
+            await asyncio.wait_for(asyncio.to_thread(instance._planning_on_owner,lambda:fail()),2)
+    asyncio.run(check())
 
 
 @pytest.mark.parametrize('name',['../outside.cif','/absolute.cif','C:\\outside.cif','inputs/../outside.cif'])
