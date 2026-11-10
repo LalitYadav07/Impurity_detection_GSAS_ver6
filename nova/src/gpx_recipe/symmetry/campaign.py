@@ -42,6 +42,23 @@ def balanced_trial_order(rows,*,per_candidate=1):
     return result
 
 
+def whole_model_batch(rows, count):
+    """Keep each prepared model's starts together under the 256-start cap."""
+    if type(count) is not int or not 1 <= count <= 8:
+        raise ValueError('Batch one to eight complete model portfolios')
+    models = {}
+    for row in rows:
+        models.setdefault(row['candidate'], []).append(row)
+    batch = []
+    for group in list(models.values())[:count]:
+        if len(batch) + len(group) > 256:
+            # A single oversized portfolio retains the previous bounded
+            # behavior. Its remainder stays prepared for a subsequent batch.
+            return batch or group[:256]
+        batch.extend(group)
+    return batch
+
+
 def verify_receipt(directory, expected):
     """Rehash terminal artifacts on every collection/restart, not just once."""
     directory=Path(directory)
@@ -296,7 +313,6 @@ class Campaign:
                         if idle:protocols=idle
                         selected=protocols[0]
                         prepared=[r for r in prepared if r['protocol']==selected]
-                        size=transport.chunk_size_for(prepared[0]['protocol']) if hasattr(transport,'chunk_size_for') else transport.chunk_size
                         # A pilot must sample different candidates and starts,
                         # not exhaust one cheap/unsupported model first.
                         with self.connect() as db:
@@ -306,11 +322,12 @@ class Campaign:
                         # coverage; no start is removed from the finite plan.
                         paired=protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic'
                         if protocol.get('policy',{}).get('grouped_surrogate'):
-                            # One complete model portfolio shares a compiled
-                            # objective. Other models use other job slots.
-                            candidate=prepared[0]['candidate']
-                            group=[r for r in prepared if r['candidate']==candidate][:256]
+                            # Preserve complete portfolios while amortizing
+                            # job overhead after the transport's measured pilot.
+                            count=transport.model_groups_for(selected) if hasattr(transport,'model_groups_for') else 1
+                            group=whole_model_batch(prepared,count)
                         else:
+                            size=transport.chunk_size_for(selected) if hasattr(transport,'chunk_size_for') else transport.chunk_size
                             ordered=balanced_trial_order(prepared,per_candidate=2 if paired else 1)
                             ranking=self.setting('structural_rankings',{}).get(selected)
                             if protocol['kind']=='structural' and ranking is not None:

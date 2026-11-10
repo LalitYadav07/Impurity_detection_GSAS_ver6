@@ -57,7 +57,7 @@ def test_verified_tree_measurement_counts_all_artifacts_and_uses_largest_trial(t
     b=tmp_path/'trials/b';b.mkdir();(b/'result.json').write_text('{}')
     (tmp_path/'response.json').write_text('{}')
     assert output_measurements(tmp_path,{'a','b'})==dict(max_trial_bytes=22,max_trial_files=2,
-        fixed_bytes=2,fixed_files=1,native_artifacts=True)
+        fixed_bytes=2,fixed_files=1,native_artifacts=True,total_bytes=26,total_files=4)
 
 
 def trials(campaign,protocol,count,*,state='prepared',dispatch=None):

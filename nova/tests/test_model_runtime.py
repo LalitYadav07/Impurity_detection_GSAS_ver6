@@ -205,6 +205,47 @@ def test_profiled_cache_follows_result_archive_and_rehydrates_after_viewer_loss(
     assert len(service.submissions)==2 and len(c.trials())==3
 
 
+def test_complete_model_timing_survives_collection_and_recovery_only_for_same_protocol(remote,tmp_path,monkeypatch):
+    from test_symmetry_contracts import make_protocol
+    from gpx_recipe.symmetry.bundle import pack
+    runtime,service,source=remote
+    inputs=tmp_path/'captured';p=make_protocol(inputs)
+    p['implementation_sha256']=package_signature()
+    p['seeds']=[dict(p['seeds'][0],id=str(i)) for i in range(3)]
+    p['policy'].update(grouped_surrogate=True,magnetic_optimizer='profiled_quadratic',
+        optimizer_iterations=120,moment_model='symmetry_allowed')
+    source=dict(source,source_path=str(inputs/'source.gpx'),source_sha256=p['source']['sha256'])
+    c=Campaign(tmp_path/'campaign',shared_inputs=True);ids=c.enroll(p,inputs,approved_hash=digest(p))
+    t=GalaxyChunkTransport(runtime,c);t.prepare_source(p,inputs,source)
+    monkeypatch.setattr(t,'checkpoint',lambda **_:None)
+    assert t.model_groups_for(digest(p))==1
+    handles=t.submit_many([(uid,c.root/'trials'/uid) for uid in ids],workers=1)
+    key=handles[ids[0]]['dispatch_key'];received=tmp_path/'received';received.mkdir()
+    for uid in ids:
+        directory=received/'trials'/uid;directory.mkdir(parents=True)
+        (directory/'result.json').write_text(json.dumps(dict(schema='radar-symmetry-trial/v1',
+            id=uid,protocol_sha256=digest(p),status='inadequate_fit',reason='Telemetry-only transport fixture')))
+    owner=received/'trials'/ids[0];(owner/'native.gpx').write_bytes(b'telemetry fixture, not a scientific result')
+    data=owner/'group-data';data.mkdir()
+    (data/'summary.json').write_text(json.dumps(dict(schema='radar-profiled-group-result/v1',
+        protocol_sha256=digest(p),candidate_id=p['candidates'][0]['id'],declared=3,screened=3,
+        native_verified_profiles=1,wall_seconds=20.,allocation=dict(representative_workers=1))))
+    response=dict(schema='radar-model-chunk-result/v1',dispatch_key=key,protocol_sha256=digest(p),
+        grouped_surrogate=True,wall_seconds=22.,allocation=dict(workers=1),pending=[],
+        trials=[dict(id=uid,state='finished',status='inadequate_fit') for uid in ids])
+    (received/'response.json').write_text(json.dumps(response))
+    archive=tmp_path/'response.zip';pack(received,archive,
+        [str(path.relative_to(received)) for path in received.rglob('*') if path.is_file()])
+    service.jobs[key].outputs={'result_bundle':service._put(archive.read_bytes(),'result')}
+    assert t.poll(handles[ids[0]],c.root/'trials'/ids[0])['state']=='finished'
+    assert len(t.state['chunks'][key]['group_measurements'])==1
+    assert t.model_groups_for(digest(p))==8
+    restored=GalaxyChunkTransport(runtime,c)
+    assert restored.model_groups_for(digest(p))==8
+    restored.state['chunks'][key]['protocol']='another-source'
+    assert restored.model_groups_for(digest(p))==1
+
+
 def test_native_inspections_reuse_a_manifest_only_packet_without_copying_gpx(remote,tmp_path):
     runtime,service,source=remote
     first=runtime.packet(tmp_path,['source.gpx'],source_sha256=source['source_sha256'])

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from gpx_recipe.symmetry.campaign import Campaign,balanced_trial_order
+from gpx_recipe.symmetry.campaign import Campaign,balanced_trial_order,whole_model_batch
 
 
 def test_profiled_pairing_preserves_denominator_and_early_candidate_coverage():
@@ -32,6 +32,41 @@ def test_grouped_surrogate_submits_whole_model_despite_small_legacy_batch_limit(
     assert transport.groups==[ids]
     c.tick(transport,slots=1)
     assert len(transport.groups)==1  # no duplicated model or seed submissions
+
+
+def test_whole_model_batch_preserves_every_start_and_256_start_limit():
+    rows=[dict(id=f'{c}-{s}',candidate=c) for c in 'abcdef' for s in range(96)]
+    assert whole_model_batch(rows,8)==rows[:192]
+    assert whole_model_batch(rows,1)==rows[:96]
+    large=[dict(id=str(i),candidate='one') for i in range(300)]
+    assert whole_model_batch(large,8)==large[:256]
+    assert whole_model_batch(large[256:],8)==large[256:]
+    with pytest.raises(ValueError):whole_model_batch(rows,True)
+
+
+def test_measured_group_batch_keeps_candidate_portfolios_complete_and_ledger_recoverable(setup):
+    root,p,c,_=setup
+    p['policy'].update(moment_model='symmetry_allowed',magnetic_optimizer='profiled_quadratic',
+        optimizer_iterations=120,grouped_surrogate=True,maximum_trials=9)
+    p['candidates']=[dict(p['candidates'][0],id=f'mag:model-{i}') for i in range(3)]
+    catalog=json.loads((root/'inputs/catalog.json').read_text());catalog['candidates']=p['candidates']
+    (root/'inputs/catalog.json').write_text(json.dumps(catalog));p['catalog']['sha256']=file_sha(root/'inputs/catalog.json')
+    ids=c.enroll(p,root/'inputs',approved_hash=digest(p))
+    class GroupTransport:
+        max_active_jobs=2;chunk_size=1
+        def __init__(self):self.groups=[]
+        def model_groups_for(self,protocol):return 2
+        def submit_many(self,entries,*,workers):
+            self.groups.append([uid for uid,_ in entries]);key=str(len(self.groups))
+            return {uid:dict(key=uid,dispatch_key=key) for uid,_ in entries}
+        def poll(self,handle,directory):return dict(state='running',handle=handle)
+    transport=GroupTransport()
+    c.tick(transport,slots=1);c.tick(transport,slots=1)
+    assert [len(group) for group in transport.groups]==[6,3]
+    assert {uid for group in transport.groups for uid in group}==set(ids)
+    assert len(c.trials())==9 and all(row['state']=='running' for row in c.trials())
+    Campaign(c.root).tick(transport,slots=1)
+    assert len(transport.groups)==2
 from gpx_recipe.symmetry.compiler import file_sha
 from gpx_recipe.symmetry.contracts import digest
 from test_symmetry_contracts import make_protocol

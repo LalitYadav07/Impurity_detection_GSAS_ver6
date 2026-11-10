@@ -50,7 +50,108 @@ def output_measurements(root, members):
             fixed_files += 1
     return dict(max_trial_bytes=max(sizes.values(), default=0),
         max_trial_files=max(counts.values(), default=0),
-        fixed_bytes=fixed_bytes, fixed_files=fixed_files, native_artifacts=native)
+        fixed_bytes=fixed_bytes, fixed_files=fixed_files, native_artifacts=native,
+        total_bytes=sum(sizes.values())+fixed_bytes,
+        total_files=sum(counts.values())+fixed_files)
+
+
+def complete_model_measurements(root, protocol, members, response):
+    """Read optional timing evidence for complete, natively checked portfolios.
+
+    A cheap unsupported model or a partially returned portfolio cannot teach
+    the dispatcher how long a complete scientific calculation takes. These
+    measurements affect batching only; missing/invalid evidence never rejects
+    an otherwise valid scientific receipt.
+    """
+    from gpx_recipe.symmetry.compiler import confined
+    from gpx_recipe.symmetry.contracts import digest, iter_trials, trial_id
+    if not protocol.get('policy', {}).get('grouped_surrogate'):
+        return []
+    sha = digest(protocol)
+    if response.get('protocol_sha256') != sha:
+        return []
+    groups = {}
+    for candidate, seed in iter_trials(protocol):
+        groups.setdefault(candidate['id'], set()).add(trial_id(protocol, candidate['id'], seed['id']))
+    completed = {row['id'] for row in response.get('trials', []) if row.get('state') == 'finished'}
+    result = []
+    for candidate, ids in groups.items():
+        if not ids <= set(members) or not ids <= completed:
+            continue
+        try:
+            paths = [confined(root, f'trials/{uid}/group-data/summary.json', exists=False) for uid in sorted(ids)]
+            summaries = [path for path in paths if path.is_file()]
+            if len(summaries) != 1 or summaries[0].stat().st_size > 65536:
+                continue
+            summary = json.loads(summaries[0].read_text())
+            seconds = summary.get('wall_seconds')
+            workers = summary.get('allocation', {}).get('representative_workers')
+            if (summary.get('schema') != 'radar-profiled-group-result/v1'
+                    or summary.get('protocol_sha256') != sha or summary.get('candidate_id') != candidate
+                    or summary.get('declared') != len(ids) or summary.get('screened') != len(ids)
+                    or type(summary.get('native_verified_profiles')) is not int
+                    or summary['native_verified_profiles'] < 1
+                    or type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0
+                    or type(workers) is not int or not 1 <= workers <= 16):
+                continue
+            size = count = 0
+            native = False
+            for uid in ids:
+                for path in confined(root, f'trials/{uid}').rglob('*'):
+                    if path.is_file():
+                        value = path.stat().st_size
+                        size += value
+                        count += 1
+                        native |= path.suffix.lower() == '.gpx' and value > 0
+            if native:
+                result.append(dict(candidate=candidate, declared=len(ids), wall_seconds=seconds,
+                    representative_workers=workers, output_bytes=size, output_files=count))
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    return result
+
+
+def model_group_count(source_bytes, chunks, *, maximum=8):
+    """Amortize launch/transfer overhead with complete magnetic models.
+
+    Start with one model. Later batches retain a fourfold artifact reserve and
+    target three minutes of measured native work. Account for the workers used
+    inside the pilot model before estimating concurrency across several models.
+    Visible host cores never increase the granted worker budget.
+    """
+    results = [c for c in chunks if c.get('result')]
+    measured = []
+    for chunk in results:
+        groups = chunk.get('group_measurements', [])
+        if not isinstance(groups, list) or not groups or not isinstance(chunk.get('output_measurements'), dict):
+            continue
+        wall = chunk['result'].get('wall_seconds')
+        workers = chunk['result'].get('allocation', {}).get('workers', 1)
+        if (type(workers) is not int or not 1 <= workers <= 16
+                or type(wall) not in (int, float) or not math.isfinite(wall) or wall <= 0):
+            continue
+        for row in groups:
+            if not isinstance(row, dict):
+                continue
+            values = [row.get(key) for key in ('wall_seconds', 'representative_workers', 'output_bytes', 'output_files')]
+            if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in values):
+                continue
+            if type(row['representative_workers']) is not int or row['representative_workers'] > workers:
+                continue
+            used = min(workers, len(groups) * row['representative_workers'])
+            measured.append((row, wall * used / len(groups), chunk['output_measurements']))
+    if not measured:
+        return 1
+    granted = results[-1]['result'].get('allocation', {}).get('workers', 1)
+    granted = granted if type(granted) is int and 1 <= granted <= 16 else 1
+    seconds = max(max(row['wall_seconds'] * row['representative_workers'], overhead)
+                  for row, overhead, _ in measured)
+    size = max(2 * source_bytes, 4 * max(row['output_bytes'] for row, _, _ in measured), 1)
+    files = max(1, 4 * max(row['output_files'] for row, _, _ in measured))
+    fixed_size = 4 * max(m.get('fixed_bytes', 0) for _, _, m in measured)
+    fixed_files = 4 * max(m.get('fixed_files', 0) for _, _, m in measured)
+    return max(1, min(maximum, int(180 * granted / seconds),
+        int((TARGET_BYTES - fixed_size) // size), int((TARGET_FILES - fixed_files) // files)))
 
 
 def batch_size(source_bytes, chunks, *, maximum=128, profiled=False, prepared=False):

@@ -700,6 +700,14 @@ class GalaxyChunkTransport:
                        prepared=p.get('kind')=='structural' and p.get('policy',{}).get('structural_optimizer')=='prepared_nonlinear'),
                    concurrency_batch_limit(self.campaign,protocol,self.max_active_jobs))
 
+    def model_groups_for(self,protocol):
+        root=self.campaign.root/'inputs'/protocol
+        p=json.loads((root/'protocol.json').read_text())
+        size=confined(root,p['source']['path']).stat().st_size
+        from .model_batch_budget import model_group_count
+        measured=[c for c in self.state['chunks'].values() if c.get('protocol')==protocol]
+        return model_group_count(size,measured)
+
     def _collect_profiled_cache(self,protocol,received,response,dispatch):
         document=response.get('profiled_cache')
         if not document:return
@@ -922,9 +930,18 @@ class GalaxyChunkTransport:
                 for source,target,status in sorted(commits,key=lambda item:item[2]=='profile_equivalent'):
                     temporary=target/('.result-'+uuid.uuid4().hex+'.partial')
                     shutil.copyfile(source/'result.json',temporary);temporary.replace(target/'result.json')
-                from .model_batch_budget import output_measurements
+                from .model_batch_budget import output_measurements,complete_model_measurements
                 measurements=output_measurements(received,set(chunk['members']))
-                with self._state_lock:chunk.update(complete=True,result=response,output_measurements=measurements);self.save()
+                groups=[]
+                if response.get('grouped_surrogate') is True:
+                    try:
+                        protocol=json.loads((self.campaign.root/'inputs'/chunk['protocol']/'protocol.json').read_text())
+                        groups=complete_model_measurements(received,protocol,chunk['members'],response)
+                    except (OSError,ValueError,TypeError,KeyError):
+                        pass  # Optional timing must not prevent collection of verified scientific receipts.
+                with self._state_lock:
+                    chunk.update(complete=True,result=response,output_measurements=measurements,group_measurements=groups)
+                    self.save()
                 self.campaign.set_setting('allocation',response['allocation'])
                 self.cache[dispatch]=(time.monotonic(),dict(state='complete',terminal=terminal,pending=pending))
         state=self.cache[dispatch][1]
