@@ -167,9 +167,9 @@ def _requested_moment_model(request):
                        r'(?:\s+model)?(?:\s+(?:including|with|allowing)\s+canting)?')
     # A numeric ceiling alone does not choose collinear or free geometry.
     numeric_moment_bound = (r'(?:'
-                            r'(?:(?:set|use|keep)\s+)?(?:(?:a|the)\s+)?(?:maximum|max)\s+(?:magnetic\s+)?moment\s*'
+                            r'(?:(?:set|use|keep)\s+)?(?:(?:a|the)\s+)?(?:maximum|max)\s+(?:ordered\s+)?(?:magnetic\s+)?moment\s*'
                             r'(?:(?:to|of|=|:)\s*)?|'
-                            r'bound\s+(?:(?:each|every|all|the)\s+)?(?:magnetic\s+)?moments?\s+to\s+)'
+                            r'bound\s+(?:(?:each|every|all|the)\s+)?(?:ordered\s+)?(?:magnetic\s+)?moments?\s+to\s+)'
                             r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*'
                             r'(?:mu[_ -]?b|[\u00b5\u03bc]b|bohr(?:\s+magnetons?)?|micro[- ]?bohr\s+magnetons?)?'
                             r'(?:\s+per\s+(?:(?:selected|magnetic)\s+)?(?:atom|site|[a-z]{1,2}\d*))?')
@@ -287,7 +287,8 @@ def _requested_moment_model(request):
     if len(requested) > 1:
         raise ValueError('The request specifies conflicting moment models; clarify whether moments may cant or must remain collinear')
     if ambiguous:
-        raise ValueError('The magnetic geometry instruction needs an explicit choice: use moment_model=symmetry_allowed or moment_model=collinear, and remove conflicting or ambiguous geometry instructions')
+        detail = '; '.join(ambiguous[:3])[:400]
+        raise ValueError('The magnetic geometry instruction needs an explicit choice: use moment_model=symmetry_allowed or moment_model=collinear, and remove conflicting or ambiguous geometry instructions. Review this wording: ' + detail)
     return next(iter(requested), None)
 
 

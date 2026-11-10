@@ -321,6 +321,22 @@ def test_reviewed_geometry_is_never_overwritten_by_request_extraction(source,int
         payload('Collinear only',source,declared={'moment_model':'symmetry_allowed'})
 
 
+@pytest.mark.parametrize('bound', [
+    'Set the maximum ordered moment to 9 microBohr magnetons.',
+    'Bound each ordered magnetic moment to 9 Bohr magnetons.',
+])
+def test_ordered_moment_magnitude_bound_does_not_change_geometry(source, bound):
+    assert payload('Use moment_model=symmetry_allowed. ' + bound, source)['declared']['moment_model'] == 'symmetry_allowed'
+    assert payload('Use moment_model=collinear. ' + bound, source)['declared']['moment_model'] == 'collinear'
+    assert 'moment_model' not in payload(bound, source)['declared']
+
+
+def test_unrecognized_geometry_error_identifies_the_clause_to_revise(source):
+    request = 'Use moment_model=symmetry_allowed. Rotate the moments around the selected direction.'
+    with pytest.raises(ValueError, match='Review this wording: rotate the moments around the selected direction'):
+        payload(request, source)
+
+
 @pytest.mark.parametrize('user_request,expected',[
     ('Allow all symmetry-allowed magnetic degrees of freedom.', 'symmetry_allowed'),
     ('Allow all symmetry-allowed moment components.', 'symmetry_allowed'),
