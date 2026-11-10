@@ -329,9 +329,25 @@ def test_invalid_saved_watch_filter_does_not_read_or_hide_current_choices(app):
 def test_restore_controls_explain_stopped_inspection_and_draft_separation(app):
     ui = app.layout.html
     assert "Restore a saved Live watch (stopped)" in ui
-    assert "Inspect selected checkpoint" in ui
+    assert "Recheck selected checkpoint" in ui
+    checkpoint_control = ui[ui.index('<VAutocomplete v-model="live_restore_dataset_id"'):]
+    assert '@update:modelValue="trigger(' in checkpoint_control.split('/>', 1)[0]
     assert "Optional IPTS number" in ui
     assert "The editable setup draft remains separate" in ui
+
+
+def test_selecting_a_saved_watch_previews_it_without_a_second_click(app):
+    checkpoint(app.service)
+
+    async def scenario():
+        await app.list_saved_live_watches()
+        await app.inspect_saved_live_watch("checkpoint-1")
+
+    asyncio.run(scenario())
+    assert app.server.state.live_restore_dataset_id == "checkpoint-1"
+    assert app.server.state.live_restore_ready
+    assert any(row["label"] == "Saved runs" for row in app.server.state.live_restore_rows)
+    assert app._powgen_controller is None
 
 
 @pytest.mark.parametrize("mutation,match", [

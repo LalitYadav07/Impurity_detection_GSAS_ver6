@@ -129,6 +129,37 @@ def test_live_beamline_switch_clears_incompatible_inputs_and_results():
     assert state.powgen_instrument_source == 'automatic' and state.powgen_bank_scope == 'all'
 
 
+def test_switching_draft_beamline_preserves_stopped_watch(monkeypatch):
+    from radar_pd_nova.powgen_controller import PowgenExperimentSettings
+    app = RadarPdNovaApp()
+    state = app.server.state
+    state.powgen_ipts = '32378'
+    state.powgen_scientific_rows = [{'run_id': 'PG3_42'}]
+    state.powgen_results_refresh_available = True
+    state.experiment_result_view = 'webmon'
+    controller = SimpleNamespace(settings=PowgenExperimentSettings(
+        ipts='IPTS-32378', history_id='history', configuration_dataset_id='old-config',
+        wavelength_angstrom=''))
+    app._powgen_controller = controller
+    monkeypatch.setattr(app, '_sync_powgen_rows', lambda **_: pytest.fail('draft switch rebuilt the watch'))
+    monkeypatch.setattr(app, '_init_scan_interpretation', lambda: pytest.fail('draft switch erased watch interpretation'))
+    monkeypatch.setattr(app, 'webmon_pause_stream', lambda: pytest.fail('draft switch paused watch acquisition'))
+
+    state.live_beamline = 'NOM'
+    app._live_beamline_changed()
+
+    assert app._powgen_controller is controller
+    assert state.powgen_scientific_rows == [{'run_id': 'PG3_42'}]
+    assert state.experiment_result_view == 'webmon'
+    assert state.powgen_dashboard_title == 'POWGEN · IPTS-32378'
+    assert state.powgen_dashboard_scope_changed
+    assert state.powgen_ipts == ''
+    assert state.powgen_instrument_dataset_id == ''
+    asyncio.run(app.start_powgen_monitoring())
+    assert app._powgen_controller is controller
+    assert 'Clear workspace' in state.error_message
+
+
 def test_live_beamline_cannot_change_while_monitoring():
     app = RadarPdNovaApp.__new__(RadarPdNovaApp)
     state = _State(powgen_monitoring=True, live_beamline='NOM')
@@ -1158,6 +1189,16 @@ def test_powgen_configuration_preview_shows_summary_and_exact_yaml() -> None:
     assert "- Fe" in state.powgen_configuration_yaml
     assert "instrument_mode: tof" in state.powgen_configuration_yaml
     assert "created_utc" not in state.powgen_configuration_yaml
+
+
+def test_saved_tof_configuration_warns_before_hb2a_use() -> None:
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(live_beamline='HB2A', history_configuration_datasets=[])
+    app.server = SimpleNamespace(state=state)
+    app._set_powgen_configuration_preview('ages-config', AnalysisConfig(
+        radiation='neutron', instrument_mode='tof', sample_elements=['Er'], limits=(10000, 80000)))
+    assert 'HB-2A needs neutron cw settings' in state.powgen_configuration_error
+    assert state.powgen_configuration_summary
 
 
 def test_standard_configuration_preview_shows_summary_and_exact_yaml() -> None:

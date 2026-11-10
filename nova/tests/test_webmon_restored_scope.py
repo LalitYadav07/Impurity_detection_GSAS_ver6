@@ -87,13 +87,22 @@ def test_matching_active_watch_keeps_same_source_and_no_extra_dispatch(view, dra
 
 
 @pytest.mark.parametrize('draft', ['9999', 'IPTS-9999', 'IPTS-', '../2767', 0, False])
-def test_conflicting_or_invalid_nonblank_draft_fails_before_read(view, monkeypatch, draft):
+def test_conflicting_or_invalid_draft_cannot_retarget_saved_watch(view, monkeypatch, draft):
     view.server.state.powgen_ipts = draft
     view._webmon_start_scope = None
-    monkeypatch.setattr(view._webmon, 'runs', lambda *a: pytest.fail('No source read'))
+    calls = record_reads(monkeypatch, view._webmon)
     view.webmon_refresh()
-    assert 'another History or IPTS' in view.server.state.webmon_message
-    assert not view.server.state.webmon_context_ready
+    assert view.server.state.webmon_run == '8'
+    assert {ipts for _, ipts in calls} == {'IPTS-2767'}
+
+
+def test_different_draft_beamline_does_not_hide_saved_powgen_acquisition(view, monkeypatch):
+    view.server.state.live_beamline = 'NOM'
+    view.server.state.powgen_ipts = 'IPTS-9999'
+    calls = record_reads(monkeypatch, view._webmon)
+    view.webmon_refresh()
+    assert view.server.state.webmon_run == '8'
+    assert {ipts for _, ipts in calls} == {'IPTS-2767'}
 
 
 def test_wrong_history_is_rejected_even_when_draft_is_blank(view, monkeypatch):
@@ -102,7 +111,7 @@ def test_wrong_history_is_rejected_even_when_draft_is_blank(view, monkeypatch):
     view._webmon_start_scope = None
     monkeypatch.setattr(view._webmon, 'runs', lambda *a: pytest.fail('No foreign source read'))
     view.webmon_refresh()
-    assert 'another History or IPTS' in view.server.state.webmon_message
+    assert 'another Galaxy History' in view.server.state.webmon_message
     assert not view.server.state.webmon_context_ready
 
 
@@ -231,7 +240,7 @@ def test_clear_during_published_lookup_cannot_republish_old_catalog(view):
     assert view.server.state.webmon_message == 'Workspace cleared'
 
 
-def test_draft_change_away_and_back_cannot_revive_old_read_owner(view):
+def test_draft_change_away_and_back_preserves_saved_watch_owner(view):
     view.server.state.powgen_ipts = ''
     view._webmon_start_scope = None
     view.webmon_refresh()
@@ -240,5 +249,5 @@ def test_draft_change_away_and_back_cannot_revive_old_read_owner(view):
     view.webmon_scope_changed()
     view.server.state.powgen_ipts = ''
     view.webmon_scope_changed()
-    assert not view._webmon_scope_current(owner)
-    assert not view.server.state.webmon_accepted
+    assert view._webmon_scope_current(owner)
+    assert view.server.state.webmon_run == '8'

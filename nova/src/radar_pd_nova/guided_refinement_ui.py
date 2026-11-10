@@ -22,7 +22,7 @@ def guided_setup(app):
             '[{source:rf_source,source_sha256:rf_edit_source_sha,operation:rf_edit_operation,phase:rf_edit_phase,name:rf_edit_name,cif_path:rf_edit_cif_path,cif_text:rf_edit_cif_text,banks:rf_edit_banks,scale:rf_edit_scale,reason:rf_edit_reason}]'),
             disabled=('rf_busy || rf_guided_busy || !rf_edit_phase_options.length',),variant='outlined',size='small')
     v.VSelect(label='Recipe setup',v_model=('rf_setup_mode',),items=("[{title:'Guided recipes',value:'guided'},{title:'Expert request',value:'expert'}]",),density='compact',classes='mt-4')
-    with html.Div(v_show="rf_setup_mode === 'guided'",classes='rf-source'):
+    with html.Div(v_show="rf_setup_mode === 'guided'",id='radar-rf-guided',classes='rf-source'):
         html.P('Set up once, then apply the approved stages to compatible selected scans and optionally future arrivals. Occupancy recipes ask whether the held reference applies to the series. Direct answers need no model call.',classes='rf-notice')
         v.VBtn('Start / restart guided setup',click=app.start_guided_refinement,disabled=('rf_busy || rf_guided_busy || !rf_source',),variant='outlined',size='small')
         v.VProgressLinear(v_if='rf_guided_busy',indeterminate=True,color='#287654',classes='my-3')

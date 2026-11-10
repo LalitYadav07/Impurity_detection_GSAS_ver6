@@ -74,7 +74,7 @@ TASKS = [
          ],
          expected="The check reports the intended inputs. A one-scan test creates one analysis; continuous monitoring remains stopped until you start it.",
          details=[("If Start stays disabled",
-                   "Read the blocking reason near the check. Common causes are an unfinished library build, no selected sample/bank, an unreviewed profile mapping, or invalid settings. The Connected indicator only describes the session connection; it does not certify scientific inputs."),
+                   "Use the clickable <b>Next steps</b> controls next to Start monitoring to jump to missing inputs. Read the blocking reason near the check. Common causes are an unfinished library build, no selected sample/bank, an unreviewed profile mapping, or invalid settings. The Connected indicator only describes the session connection; it does not certify scientific inputs."),
                   ("Analyzing a single file instead",
                    "Choose <b>Single pattern</b>. Work through <b>Measurement Type</b>, <b>Candidate Library</b>, <b>Data Collection</b> and the analysis settings. The pattern, profile and optional main-phase CIF can each come from different sources. Select the correct pattern geometry and units, then review the settings before <b>Run analysis on NDIP</b>. Reopen its result through <b>Open Previous Run</b>. The Live assistant is not required for this path.")]),
     dict(id="monitor", group="First Live result", title="Start the series and follow its queue",
@@ -82,7 +82,7 @@ TASKS = [
          shot="15-watch-live-queue", alt="Historical AGES Live queue while analyses are submitted and collected.",
          steps=[
              "Click <b>Start monitoring</b> once. It saves the validated Live configuration and follows the selected existing/new reduced scans while this session runs.",
-             "Use <b>Hide setup</b> for more space. Expand <b>Monitor setup and processing summary</b>; read <b>Queued, running and failed scans</b> and each row’s <b>Current activity</b>.",
+             "The setup rail collapses when you enter the monitor or results. Reopen it from the header; on narrow screens it opens as a drawer. Expand <b>Monitor setup and processing summary</b>; read <b>Queued, running and failed scans</b> and each row’s <b>Current activity</b>.",
              "Open <b>Results</b> as scans finish. Check an unexpected delay in the queue details and Galaxy History before starting another run."
          ],
          expected="The dashboard says Monitoring. Results arrive per completed analysis; preparation, Galaxy waiting, execution and result collection can take different amounts of time.",
@@ -192,12 +192,12 @@ TASKS = [
          diagram="recovery",
          steps=[
              "For one analysis, expand <b>Open Previous Run</b>, search the current History and <b>Refresh from Galaxy</b> if needed.",
-             "For a Live series, open <b>Restore a saved Live watch (stopped)</b>. <b>List saved watches</b>, select a <b>Saved Live checkpoint</b>, <b>Inspect selected checkpoint</b>, then <b>Restore stopped watch</b>.",
+             "For a Live series, open <b>Restore a saved Live watch (stopped)</b>. <b>List saved watches</b>, select a <b>Saved Live checkpoint</b> to preview its identity and restrictions automatically, then <b>Restore stopped watch</b>.",
              "Review the restored identity/counts. Use <b>Refresh saved results</b> to collect existing jobs, or <b>Resume existing watch</b> to resume discovery. For models, use <b>Load saved campaigns</b> and review before <b>Continue saved campaign</b>."
          ],
          expected="Restoring opens saved work with monitoring stopped. It does not submit a new analysis; refreshing and resuming have distinct effects.",
          details=[("A restored watch and the editable draft differ",
-                   "The restored watch keeps its saved experiment and configuration. Changing the setup draft does not retarget it. Review the watch shown above the results; clear the workspace before configuring a separate watch. If recovery is read-only or blocked, inspect its stated restrictions instead of using Start monitoring as a substitute."),
+                   "The restored watch keeps its saved experiment and configuration. Changing the setup draft does not retarget or erase it. Review the <b>Displayed watch</b> status and use <b>Clear workspace for new watch</b> only when you intend to replace the current view. If recovery is read-only or blocked, inspect its stated restrictions instead of using Start monitoring as a substitute."),
                   ("If a connection closes",
                    "Return to the same Galaxy History and open a new RADAR-PD session. Recover published records and inspect ongoing jobs before resuming. The old interactive URL is not a permanent report. Saved artifacts, not the browser tab, are the durable record.")]),
     dict(id="contact", group="Save and recover", title="Contact the developer",

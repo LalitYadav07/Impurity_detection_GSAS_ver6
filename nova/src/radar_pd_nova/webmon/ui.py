@@ -62,20 +62,22 @@ class WebmonMixin(StructuralLiveMixin):
         return getattr(getattr(self,'_webmon',None),'config',{}).get('local_replay') is True
 
     def _webmon_live_scope(self):
-        if str(getattr(self.server.state,'live_beamline','PG3'))!='PG3':
-            raise ValueError('Live acquisition is currently available for the saved POWGEN watch only')
         controller=getattr(self,'_powgen_controller',None)
+        instrument=(getattr(controller.settings,'instrument','') if controller is not None
+            else str(getattr(self.server.state,'live_beamline','PG3')))
+        if instrument!='PG3':
+            raise ValueError('Live acquisition is currently available for the saved POWGEN watch only')
         service=getattr(self,'service',None)
         if controller is None:
             if not self._webmon_is_local() and getattr(service,'galaxy_url',None):
                 raise ValueError('Start or restore a saved Live watch before using live acquisition actions')
             return None  # Explicit local replay and standalone diagnostic adapters.
         scope=WatchScope.from_settings(controller.settings)
-        value=getattr(self.server.state,'powgen_ipts','')
-        draft='' if value is None else str(value).strip()
-        ipts='IPTS-'+draft.upper().removeprefix('IPTS-') if draft else ''
-        if (ipts and ipts!=scope.ipts) or (service is not None and str(service.history_id)!=scope.history_id):
-            raise ValueError('The saved Live watch belongs to another History or IPTS')
+        # The displayed watch is immutable until explicitly replaced. The
+        # editable Live draft may target a different IPTS or beamline; it must
+        # neither retarget nor invalidate this saved acquisition scope.
+        if service is not None and str(service.history_id)!=scope.history_id:
+            raise ValueError('The saved Live watch belongs to another Galaxy History')
         return scope
 
     def _webmon_effective_ipts(self):
@@ -87,12 +89,13 @@ class WebmonMixin(StructuralLiveMixin):
 
     def _webmon_scope_snapshot(self):
         s=self.server.state;service=getattr(self,'service',None)
+        scope=self._webmon_live_scope()
         return dict(controller=getattr(self,'_powgen_controller',None),service=service,
-            context=getattr(self,'_result_context',None),scope=self._webmon_live_scope(),
+            context=getattr(self,'_result_context',None),scope=scope,
             generation=getattr(self,'_webmon_scope_generation',0),
             connection=(getattr(service,'galaxy_url',None),getattr(service,'history_id',None),
                 hashlib.sha256(str(getattr(service,'galaxy_key','')).encode()).hexdigest()),
-            form=json.dumps([getattr(s,key,None) for key in ('powgen_ipts','powgen_processing_scope',
+            form='' if scope else json.dumps([getattr(s,key,None) for key in ('powgen_ipts','powgen_processing_scope',
                 'powgen_processing_sample_ids','powgen_bank_scope','powgen_processing_banks')],sort_keys=True))
 
     def _webmon_scope_current(self,owner):
@@ -197,7 +200,10 @@ class WebmonMixin(StructuralLiveMixin):
     def webmon_attach_monitor(self):
         # Called after the normal Live monitor starts; capture is independent of
         # the completion-only reducer. Starting the monitor does not approve fits.
-        if not self._webmon or str(self.server.state.live_beamline) != 'PG3':
+        controller=getattr(self,'_powgen_controller',None)
+        instrument=(controller.settings.instrument if controller is not None
+                    else str(getattr(self.server.state,'live_beamline','PG3')))
+        if not self._webmon or instrument != 'PG3':
             return
         self._webmon_start_scope = str(self._webmon_effective_ipts())
         self.webmon_refresh(quiet=True)
@@ -222,6 +228,7 @@ class WebmonMixin(StructuralLiveMixin):
               .wm-workspace h3 {font-size:16px;margin:0 0 8px;color:#22394d;}
               .wm-top,.wm-controls,.wm-stats,.wm-assumptions {display:grid;gap:12px;align-items:start;}
               .wm-top {grid-template-columns:1fr auto;align-items:center;margin-bottom:12px;}
+              .wm-status {display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 12px;}
               .wm-controls {grid-template-columns:minmax(240px,2fr) minmax(180px,1fr) auto;}
               .wm-stats {grid-template-columns:repeat(4,minmax(0,1fr));margin:12px 0;}
               .wm-stat {padding:12px;border:1px solid #dce3ea;border-radius:8px;background:#f8fafc;}
@@ -250,6 +257,15 @@ class WebmonMixin(StructuralLiveMixin):
                     html.H2('Live acquisition')
                     html.P('POWGEN WebMON source · inspect provisional patterns and reviewed magnetic or structural models.')
                 v.VChip('Archived-data replay',v_if='webmon_local',size='small',variant='outlined')
+            with html.Div(classes='wm-status',raw_attrs=['role="status"']):
+                v.VChip(text=("webmon_follow_latest ? 'Following latest scan' : 'Pinned to scan ' + (webmon_run || 'none')",),
+                        v_if='!!webmon_run',prepend_icon=("webmon_follow_latest ? 'mdi-skip-next-circle-outline' : 'mdi-pin-outline'",),
+                        size='small',variant='tonal',color='#dff2e8')
+                v.VChip(text=("webmon_stream_active ? 'Automatic analysis on' : 'Automatic analysis off'",),
+                        prepend_icon=("webmon_stream_active ? 'mdi-play-circle-outline' : 'mdi-pause-circle-outline'",),
+                        size='small',variant='tonal',color=("webmon_stream_active ? '#dff2e8' : '#eef2ef'",))
+                v.VChip('New revision needs review',v_if='webmon_stale',prepend_icon='mdi-alert-outline',
+                        size='small',variant='tonal',color='#fff2d8')
             with html.Div(classes='wm-controls'):
                 v.VSelect(label='Viewed scan',v_model=('webmon_run',),items=('webmon_runs',),item_title='label',item_value='value',update_modelValue=(self.webmon_select,'[$event]'),density='compact',hide_details=True)
                 v.VCheckbox(label='Follow latest matching scan',v_model=('webmon_follow_latest',),update_modelValue=(self.webmon_follow_changed,'[$event]'),density='compact',hide_details=True)
@@ -336,8 +352,10 @@ class WebmonMixin(StructuralLiveMixin):
                         with html.Div(v_for='metric in webmon_fit_metrics',key='metric.id',style='font-size:13px;padding:3px 0'):
                             html.Span('{{ metric.text }}',style=('metric.style',))
                         with html.Div(classes='wm-plot'):self._webmon_fit=plotly.Figure(display_mode_bar=True)
-                        html.P('Shared zoom across fit, reflection ticks, residual and fit-difference panels. Δ fit is relative to the first selected setting, in supplied σ units; it is not a discrimination probability. Each color has its own pointwise 95% credible envelope of the mean curve, using all saved posterior draws. These omit observation noise and fixed-baseline uncertainty; a narrow envelope can still be wrong.')
-                        html.P('Intensity stays in TOF-normalized units ×10⁶ for d and Q views. N: nuclear reflections; M1, M2, …: magnetic reflections in comparison order. Ticks show nonzero calculated reflections at each saved best sample; hover for phase and hkl. Separate nuclear/background curves are not available.')
+                        with html.Details(classes='wm-method-details'):
+                            html.Summary('Interpret Δ fit, uncertainty envelopes and reflection ticks')
+                            html.P('Shared zoom across fit, reflection ticks, residual and fit-difference panels. Δ fit is relative to the first selected setting, in supplied σ units; it is not a discrimination probability. Each color has its own pointwise 95% credible envelope of the mean curve, using all saved posterior draws. These omit observation noise and fixed-baseline uncertainty; a narrow envelope can still be wrong.')
+                            html.P('Intensity stays in TOF-normalized units ×10⁶ for d and Q views. N: nuclear reflections; M1, M2, …: magnetic reflections in comparison order. Ticks show nonzero calculated reflections at each saved best sample; hover for phase and hkl. Separate nuclear/background curves are not available.')
                     with html.Div(classes='wm-card'):
                         html.H3('Moment uncertainty')
                         v.VSelect(label='Inspect setting',v_model=('webmon_model',),items=('webmon_models',),item_title='title',item_value='value',update_modelValue=(self.webmon_show_model,'[$event]'),density='compact')
@@ -406,7 +424,6 @@ class WebmonMixin(StructuralLiveMixin):
         self.server.state.webmon_preparation_notice=getattr(self,'_prepared_selection_caption',lambda:'')()
         s=self.server.state;owner=None
         try:
-            if str(s.live_beamline)!='PG3':raise ValueError('WebMON is currently available for POWGEN only')
             if not self._webmon:raise ValueError('No source/checkpoint adapter configured for this server')
             if self._webmon_start_scope and str(self._webmon_effective_ipts()).removeprefix('IPTS-')!=self._webmon_start_scope.removeprefix('IPTS-'):raise ValueError('IPTS changed; stop and restart the experiment monitor')
             owner=self._webmon_adopt_scope();scope=owner['scope']
