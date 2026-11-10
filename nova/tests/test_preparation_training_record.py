@@ -29,7 +29,8 @@ def fixture(tmp_path,metadata):
 
 
 def metadata(**values):
-    result=dict(epochs=3,history=[dict(epoch=i) for i in range(1,4)],selected_epoch=2,seconds=77.5)
+    result=dict(schema='radar-three-curve-structural-ranking-model/v1',
+        epochs=3,history=[dict(epoch=i) for i in range(1,4)],selected_epoch=2,seconds=77.5)
     result.update(values);return result
 
 
@@ -67,6 +68,7 @@ def test_lossless_packed_history_keeps_all_completed_epochs(tmp_path):
 
 
 @pytest.mark.parametrize('change',[
+    dict(schema='unknown-model/v1'),dict(schema=None),dict(schema=[]),dict(schema={}),
     dict(epochs=True),dict(epochs=2),dict(selected_epoch=4),dict(selected_epoch=True),
     dict(history=[dict(epoch=1),dict(epoch=3)]),dict(history=[dict(epoch=True)]),
     dict(seconds=-1),dict(seconds=float('nan')),

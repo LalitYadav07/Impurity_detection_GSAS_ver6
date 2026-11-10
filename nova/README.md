@@ -36,6 +36,31 @@ the actual CPU and memory allocation. See
 [`docs/unified_live_refinement.md`](../docs/unified_live_refinement.md) for source
 identity, native-kernel and release contracts.
 
+## Experiment preparation (development)
+
+Use **Prepare experiment** in the header to inspect a nuclear parent CIF and
+each expected instrument-bank profile, choose a finite commensurate model scope,
+and prepare reusable calculations before collecting a scan. **Libraries and
+recovery** shows preparation stages, queued work, failures and portable exports.
+Recover the original History checkpoint to reconnect existing jobs; importing a
+portable ZIP creates an independent library.
+
+Native structural examples run on the CPU worker. New three-curve model training
+uses the managed CUDA training tool automatically and requires an NDIP destination
+that reserves and exposes one usable GPU. Setting a worker count or registering
+the tool does not allocate hardware. Device initialization failure stops training
+with its saved inputs retained; no CPU fallback is submitted. Earlier CPU-owned
+jobs keep their original producer and continuation identity.
+
+For a completed or imported model, **Training record** reads the saved device,
+completed epochs, selected checkpoint and trainer time on demand. Missing fields
+remain unrecorded. Trainer time excludes Galaxy queueing, image startup and
+transfer. Held-out simulation validation and actual-scan native fit qualification
+remain separate. Prepared rankings prioritize the reviewed candidates; they do
+not establish a unique subgroup or remove untested alternatives. The CUDA route
+and full experimental handoff still require NDIP hardware acceptance before a
+user-facing preparation release.
+
 The **User guide** header button opens the bundled screenshot walkthrough in a
 new tab. The guide is served below the current session path, so opening it does
 not navigate away from the analysis or require a separate documentation server.

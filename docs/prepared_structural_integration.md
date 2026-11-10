@@ -208,11 +208,22 @@ Direct local Mac training can use the MPS GPU with owned CPU/device random
 state and atomic recovery checkpoints. It checks GPU-to-CPU logits and mode
 estimates before exporting portable CPU inference weights. Exact local device
 recovery and transported numerical-worker continuations are different: existing
-segmented/transported worker training remains CPU-owned and allocation-guarded.
-A faster measured GPU update is not an end-to-end preparation-time guarantee.
-The shared backend currently implements CPU and MPS placement only; NDIP CUDA
-training and GPU job routing are not implemented or qualified. Visible GPU
-hardware alone does not prove that a CUDA worker can initialize or run.
+CPU-owned jobs retain their original producer and continuation identity.
+The development backend now also implements CUDA training, device-owned
+optimizer checkpoints and checked portable CPU export. New three-curve
+preparations route to a separate managed CUDA trainer, with one training job
+admitted at a time per History. Native pattern generation remains on its CPU
+worker. A CUDA initialization failure stops before training and retains the
+inputs; it does not submit a CPU fallback. The installed-image and transport
+tests do not qualify real NDIP GPU execution. A CUDA-enabled NDIP probe reported
+zero usable GPUs, so the site destination and device exposure still require
+qualification before a user-facing release. A faster measured GPU update is
+not an end-to-end preparation-time guarantee.
+
+The preparation library's **Training record** control reads recorded device,
+completed history, checkpoint epoch and trainer time without loading model
+weights. It distinguishes partial or missing history from completed training.
+Recorded trainer time excludes Galaxy queueing, image startup and transfer.
 
 Paired example generation draws shared parent cells before testing individual
 children. Child trajectories are now admitted at those fixed parent contexts,

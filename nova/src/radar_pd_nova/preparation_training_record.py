@@ -37,6 +37,10 @@ def describe(library,entry):
     def invalid(_):raise ValueError('Training metadata contains a nonfinite value')
     model=restore(json.loads(raw,parse_constant=invalid))
     if not isinstance(model,dict):raise ValueError('Training metadata must be an object')
+    schema=model.get('schema')
+    if not isinstance(schema,str) or schema not in {'radar-three-curve-structural-ranking-model/v1',
+            'radar-structural-ranking-model/v3','radar-structural-ranking-model/v4'}:
+        raise ValueError('This model format has no recognized training record')
     epochs=model.get('epochs');history=model.get('history');selected=model.get('selected_epoch')
     if epochs is not None and (type(epochs)is not int or not 1<=epochs<=1000):
         raise ValueError('Recorded training epochs are invalid')
