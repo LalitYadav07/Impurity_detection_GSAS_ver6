@@ -3189,7 +3189,7 @@ def plot_gpx_fit_with_ticks(
 ):
     """
     Publication-grade plot with two panels:
-      Top: Observed (points), Calculated (red), and Residual (offset blue) vs native x (2θ or TOF)
+      Top: Observed (points), Calculated (red), and Residual (scaled and offset green) vs native x (2θ or TOF)
       Bottom: Bragg tick rows, one row per phase, labeled "PhaseID — Wt%"
 
     - Keeps function signature unchanged.
@@ -3452,9 +3452,11 @@ def plot_gpx_fit_with_ticks(
     }
 
     with plt.rc_context(rc):
-        # Create figure with golden ratio proportions
-        fig = plt.figure(figsize=(12, 7.4), constrained_layout=True)
-        gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[4.5, 1.5], hspace=0.02)
+        # Give every phase a readable tick row without allowing long compound
+        # descriptions to consume the diffraction panel's horizontal space.
+        phase_panel_height = max(1.4, 0.48 * len(phase_order))
+        fig = plt.figure(figsize=(12, 5.6 + phase_panel_height), constrained_layout=True)
+        gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[5.0, phase_panel_height], hspace=0.02)
         ax = fig.add_subplot(gs[0, 0])
         ax_ticks = fig.add_subplot(gs[1, 0], sharex=ax)
 
@@ -3462,9 +3464,7 @@ def plot_gpx_fit_with_ticks(
         # Top panel: Obs/Calc/Residual with enhanced styling
         # ---------------------------
         
-        # Add subtle background gradient for depth
-        ax.axhspan(ax.get_ylim()[0], ax.get_ylim()[1], 
-                   facecolor='white', alpha=1.0, zorder=0)
+        ax.set_facecolor('white')
         
         # Observed: sophisticated scatter plot
         if downsample <= 2:
@@ -3496,8 +3496,8 @@ def plot_gpx_fit_with_ticks(
         base = y_min - 0.18 * yr
         
         # Fill area for residuals (more visually appealing)
-        ax.fill_between(x, base, base + resid * scale, 
-                        color="#2ca02c", alpha=0.3, label="Difference",
+        ax.fill_between(x, base, base + resid * scale,
+                        color="#2ca02c", alpha=0.3, label=f"Difference (×{scale:.2g}, offset)",
                         zorder=1)
         ax.plot(x, base + resid * scale, color="#2ca02c", lw=0.8, 
                 zorder=2, alpha=0.8)
@@ -3521,9 +3521,9 @@ def plot_gpx_fit_with_ticks(
             title_parts.append(f"Shown = {displayed_points:,}")
         
         metrics_str = "  •  ".join(title_parts)
-        file_name = out_png.rsplit('/', 1)[-1].replace('_', ' ').replace('.png', '')
-        ax.set_title(f"{file_name}\n{metrics_str}", 
-                    fontsize=12, fontweight='bold', pad=15)
+        file_name = "RADAR-PD refinement"
+        ax.set_title(f"{file_name}\n{metrics_str}",
+                    fontsize=12, fontweight='bold', pad=40)
         
         # Grid styling
         ax.grid(True, axis='y', alpha=0.3, linestyle='-', linewidth=0.5)
@@ -3533,9 +3533,10 @@ def plot_gpx_fit_with_ticks(
         ax.minorticks_on()
         ax.tick_params(which="major", length=6, width=1.0)
         ax.tick_params(which="minor", length=3, width=0.6)
+        ax.tick_params(axis='x', which='both', labelbottom=False)
         
         # Enhanced legend with custom styling
-        leg = ax.legend(loc="upper right", frameon=True, ncol=3, 
+        leg = ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), frameon=True, ncol=3,
                        handlelength=2.0, columnspacing=1.5,
                        borderaxespad=0.8, fancybox=True,
                        shadow=False, framealpha=0.95)
@@ -3558,8 +3559,8 @@ def plot_gpx_fit_with_ticks(
             ax_ticks.set_yticks(range(nph))
             
             # Color scheme - professional palette
-            colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', 
-                     '#ff7f00', '#ffff33', '#a65628', '#f781bf']
+            colors = ['#D55E00', '#0072B2', '#009E73', '#CC79A7',
+                      '#E69F00', '#56B4E9', '#333333', '#777777']
             if nph > 8:
                 import matplotlib.cm as cm
                 cmap = plt.get_cmap('tab20')
@@ -3573,7 +3574,9 @@ def plot_gpx_fit_with_ticks(
                 
                 # Prefer provided custom labels
                 raw_label = phase_labels.get(nm) if phase_labels else None
-                label = f"{phase_display_label(nm, raw_label)}{wt_str}"
+                from textwrap import fill
+                label = fill(f"{phase_display_label(nm, raw_label or nm)}{wt_str}",
+                             width=40, break_long_words=True, break_on_hyphens=False)
                 ylabels.append(label)
             
             ax_ticks.set_yticklabels(ylabels)
@@ -3667,16 +3670,6 @@ def plot_gpx_fit_with_ticks(
                      ha='right', va='top', fontsize=8,
                      color='#666666', style='italic')
         
-        # Ensure proper spacing for long labels
-        try:
-            max_label_len = max((len(lbl) for lbl in ylabels), default=0)
-            if max_label_len > 25:
-                fig.subplots_adjust(left=0.20)
-            elif max_label_len > 20:
-                fig.subplots_adjust(left=0.16)
-        except Exception:
-            pass
-
         # Save with high quality settings
         from pathlib import Path as _P
         _P(out_png).parent.mkdir(parents=True, exist_ok=True)
