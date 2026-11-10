@@ -148,12 +148,14 @@ class PreparationQueue:
                 if path.exists():job['handle']=validate_handle(self.runtime,json.loads(path.read_text()))
             except (OSError,ValueError):pass
             uncertain=bool(job['handle'] and job['handle']['submission_started'])
-            from .preparation_training_runtime import TrainingCapacityPending
+            from .preparation_training_runtime import TrainingCapacityPending,TrainingContractUnsupported
             job.update(phase='needs_recovery' if uncertain else 'awaiting_submission',
                 reason=('Recovering the existing Galaxy dispatch; no duplicate will be submitted.' if uncertain
-                    else str(exc) if isinstance(exc,TrainingCapacityPending)
+                    else str(exc) if isinstance(exc,(TrainingCapacityPending,TrainingContractUnsupported))
                     else 'Submission is waiting for inputs or its durable History checkpoint ('+type(exc).__name__+').'))
-            self._save(state);return
+            unsupported=isinstance(exc,TrainingContractUnsupported) and not uncertain
+            if unsupported:state['paused']=True;self._paused.set()
+            self._save(state,remote=unsupported);return
         job.update(handle=handle,phase='submitted' if handle['job'] else 'needs_recovery',reason='')
         self._save(state,remote=True)
 

@@ -430,9 +430,8 @@ class PreparationMixin:
             queue=store._queues.get(s.prep_library)
             queue_state=queue.snapshot() if queue else None
             paused=queue_state['paused'] if queue_state else True
-            continuing={member['entry']:job['reason'] for job in (queue_state or {}).get('jobs',[])
-                for member in job['members']
-                if job['outcomes'].get(member['entry'],{}).get('reason')=='training_checkpoint_available'}
+            from .preparation_labels import training_progress
+            continuing=training_progress(library,queue_state)
             unfinished=bool(counts['pending'] or counts['preparing'])
             s.prep_can_pause=bool(unfinished and queue and not paused)
             from gpx_recipe.preparation.structural_dependencies import ready
@@ -462,11 +461,13 @@ class PreparationMixin:
                 if library.document.get('storage') and model['kind']=='structural-examples':
                     reason=(reason+' ' if reason else '')+'Training arrays archived; checksums retained.'
                 if model['kind']=='structural-training' and row['state']=='preparing' and not reason:
-                    reason=continuing.get(row['id'],'Training job submitted; a completed model will appear after all epochs and held-out checks.')
+                    reason=continuing.get(row['id'],'Training preparation is in progress. Recover its saved queue to inspect Galaxy status.')
                 if model['kind']=='structural-training' and row['state']=='pending' and not reason:
                     keys=model['settings']['dependencies']
                     completed=sum(library.row(key)['state']=='prepared' for key in keys)
-                    reason=f'Waiting for native training patterns: {completed} / {len(keys)} blocks prepared.'
+                    reason=(('Training patterns ready. Resume preparation to start training.' if paused else
+                             'Training patterns ready; waiting for a training slot.') if completed==len(keys) else
+                            f'Waiting for native training patterns: {completed} / {len(keys)} blocks prepared.')
                     failed=sum(library.row(key)['state'] in {'failed','cancelled','unsupported'} for key in keys)
                     if failed:reason+=f" {failed} {'block needs' if failed==1 else 'blocks need'} attention before training can start."
                 if s.prep_entry_filter!='all' and row['state']!=s.prep_entry_filter:continue

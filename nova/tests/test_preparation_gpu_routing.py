@@ -12,12 +12,12 @@ from gpx_recipe.symmetry.compiler import file_sha
 from radar_pd_nova.models import RunStatus
 from radar_pd_nova.native_operations import capture,handle_path,validate_handle,SCHEMA,BOUND_SCHEMA
 from radar_pd_nova.preparation_training_runtime import (
-    PreparationRuntime,TRAINING_TOOL_ID,TRAINING_OPERATION,TrainingCapacityPending,
+    PreparationRuntime,TRAINING_TOOL_ID,TRAINING_OPERATION,TrainingCapacityPending,TrainingContractUnsupported,
 )
 from radar_pd_nova.refinement_runtime import RuntimeUnavailable
 from test_model_runtime import Service
 from test_native_operations import inputs as inspect_inputs,reply
-from test_structural_training_jobs import inputs as training_inputs
+from test_structural_training_jobs import inputs as legacy_training_inputs
 
 
 def setup(tmp_path,monkeypatch):
@@ -31,7 +31,13 @@ def setup(tmp_path,monkeypatch):
     monkeypatch.setattr(service,'submit_utility',submit)
     router=PreparationRuntime(tmp_path/'runtime',service,poll_seconds=.001)
     patch_runtime(router,service,monkeypatch)
-    request,_=training_inputs(tmp_path/'capture')
+    from test_structural_paired_preparation import inputs as paired_inputs
+    from gpx_recipe.preparation.structural_jobs import create_plan,validate_training
+    example,directory=paired_inputs(tmp_path/'capture')
+    plan=tmp_path/'capture/plan.json';create_plan(example['source'],[directory],plan)
+    request=validate_training(dict(source=example['source'],instrument=example['instrument'],grid=example['grid'],
+        plan=str(plan),destination=str(tmp_path/'capture/trained'),
+        settings=dict(representation=example['settings']['representation'])))
     descriptor=dict(id='training-parent',dataset_id='original-parent',source_path=request['source'],
         source_sha256=file_sha(request['source']))
     return router,service,request,descriptor
@@ -69,6 +75,36 @@ def test_inspection_keeps_the_existing_cpu_producer(tmp_path,monkeypatch):
     assert result['schema']==SCHEMA and 'tool_id' not in result
     assert service.submissions[0]['tool_id']==router.model.tool_id
     assert not router.training.state['dispatches']
+
+
+def test_an_old_eight_channel_plan_cannot_silently_run_on_cpu_under_a_gpu_label(tmp_path,monkeypatch):
+    router,service,_,_=setup(tmp_path,monkeypatch)
+    request,_=legacy_training_inputs(tmp_path/'legacy')
+    source=dict(id='legacy-parent',dataset_id='legacy-source',source_path=request['source'],
+        source_sha256=file_sha(request['source']))
+    before=len(service.data)
+    with pytest.raises(TrainingContractUnsupported,match='create a new preparation'):
+        submit_training(router,request,source)
+    assert len(service.data)==before and not service.submissions
+
+
+def test_legacy_training_queue_pauses_with_a_durable_reason_before_any_gpu_upload(tmp_path,monkeypatch):
+    from test_structural_preparation_dependencies import library_inputs,complete_examples
+    from radar_pd_nova.preparation_queue import PreparationQueue
+    router,service,_,_=setup(tmp_path,monkeypatch)
+    library,originals=library_inputs(tmp_path/'old-library')
+    complete_examples(library,originals,tmp_path/'old-examples')
+    parent=library.root/library.document['specification']['source']
+    source=dict(id='legacy-parent',source_sha256=file_sha(parent),source_path=str(parent),dataset_id='legacy-source')
+    snapshots=[]
+    queue=PreparationQueue(library.root/'queue',library,router,source=source,checkpoint=snapshots.append)
+    queue.resume();before=len(service.data);status=queue.tick()
+    assert status['queue']['paused'] and not service.submissions and len(service.data)==before
+    assert status['queue']['jobs'][0]['phase']=='awaiting_submission'
+    assert 'create a new preparation' in status['queue']['jobs'][0]['reason']
+    assert snapshots[-1]['paused'] and snapshots[-1]['jobs'][0]['handle'] is None
+    again=queue.tick()
+    assert again['queue']==status['queue'] and not service.submissions
 
 
 def test_unacknowledged_gpu_post_is_recovered_after_viewer_loss_without_another_submission(tmp_path,monkeypatch):

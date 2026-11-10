@@ -19,9 +19,22 @@ class TrainingCapacityPending(RuntimeUnavailable):
     pass
 
 
+class TrainingContractUnsupported(ValueError):
+    pass
+
+
 class CudaTrainingRuntime(GalaxyModelRuntime):
     tool_id=TRAINING_TOOL_ID
     native_handle_tool_id=TRAINING_TOOL_ID
+
+    def validate_native_request(self,operation,payload):
+        from gpx_recipe.preparation.structural_training_blocks import REPRESENTATION
+        settings=payload.get('settings') if isinstance(payload,dict) else None
+        if (operation!=TRAINING_OPERATION or not isinstance(settings,dict)
+                or settings.get('representation')!=REPRESENTATION):
+            raise TrainingContractUnsupported('GPU training requires the current three-curve preparation. '
+                'This older training plan cannot run on the GPU trainer; create a new preparation. '
+                'Its saved models and original jobs remain available.')
 
     def wait_capacity(self,cancel=None):
         if cancel and cancel.is_set():raise RuntimeUnavailable('Training submission paused before dispatch')
@@ -31,6 +44,7 @@ class CudaTrainingRuntime(GalaxyModelRuntime):
     def _submit(self,action,source,request,asset_id,key,*,cancel=None):
         if action!='native' or request.get('operation')!=TRAINING_OPERATION:
             raise ValueError('The GPU preparation runtime accepts only reviewed structural training')
+        self.validate_native_request(request['operation'],request.get('payload'))
         return super()._submit(action,source,request,asset_id,key,cancel=cancel)
 
 

@@ -65,6 +65,8 @@ def validate_handle(runtime, value):
         raise ValueError('Native handle contains an invalid scientific request')
     validate_native_payload(request.get('operation'), request.get('payload'))
     validate_native_timeout(request['operation'],request['timeout'])
+    guard=getattr(runtime,'validate_native_request',None)
+    if guard is not None:guard(request['operation'],request['payload'])
     context=dict(history_id=value['history_id'],source=source,request=request)
     if bound:
         if request['operation']!='preparation-structural-training':
@@ -108,6 +110,8 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
     if selector is not None:runtime=selector(operation)
     from .model_runtime import EMPTY_PACKET_NAME, EMPTY_PACKET_SHA256
     validate_native_payload(operation, payload)
+    guard=getattr(runtime,'validate_native_request',None)
+    if guard is not None:guard(operation,payload)
     root=Path(root).resolve();root.mkdir(parents=True, exist_ok=True)
     payload=copy.deepcopy(payload);files=[]
     for field in ['source','child','instrument','plan','anchor_snapshot','snapshot']:

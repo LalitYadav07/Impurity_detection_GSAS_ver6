@@ -10,6 +10,33 @@ from gpx_recipe.preparation.library import confined
 from gpx_recipe.symmetry.isodistort_forms import _method1_catalog_group
 
 
+def training_progress(library,state):
+    """Describe acknowledged queue state, never infer device execution."""
+    result={}
+    for job in (state or {}).get('jobs',[]):
+        for member in job['members']:
+            key=member['entry']
+            if library.row(key)['model']['kind']!='structural-training':continue
+            if job['phase']=='collected':
+                if job['outcomes'].get(key,{}).get('reason')=='training_checkpoint_available':
+                    result[key]=job['reason']
+                continue
+            if job['reason']:
+                result[key]=job['reason'];continue
+            handle=job.get('handle') or {};acknowledged=handle.get('job') or {}
+            if not acknowledged:
+                result[key]=('Recovering the existing training submission; no duplicate will be started.'
+                    if handle.get('submission_started') else
+                    'Preparing training inputs; no training job has been acknowledged yet.')
+            elif acknowledged.get('status')=='running':
+                result[key]='Training job running in Galaxy. The model appears after all epochs and held-out checks.'
+            elif acknowledged.get('status')=='ok':
+                result[key]='Training job finished; collecting and verifying its model or continuation checkpoint.'
+            else:
+                result[key]='Training job queued in Galaxy; waiting for its compute allocation.'
+    return result
+
+
 def scope_labels(library):
     name=library.document['specification'].get('scope')
     if not name:return {}

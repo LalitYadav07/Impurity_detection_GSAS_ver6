@@ -7,6 +7,35 @@ import pytest
 from radar_pd_nova.preparation_labels import entry_label,scope_labels,native_dimensions,training_description,training_validation
 
 
+@pytest.mark.parametrize('phase,started,status,reason,expected',[
+    ('awaiting_submission',False,None,'','no training job has been acknowledged'),
+    ('needs_recovery',True,None,'','Recovering the existing training submission'),
+    ('submitted',True,'queued','','queued in Galaxy'),
+    ('submitted',True,'running','','running in Galaxy'),
+    ('submitted',True,'ok','','collecting and verifying'),
+    ('awaiting_submission',False,None,'Waiting for the current GPU training job to finish.','current GPU training job'),
+    ('awaiting_submission',False,None,'This older training plan cannot run on the GPU trainer.','older training plan'),
+])
+def test_training_status_distinguishes_local_preparation_queue_and_running_work(phase,started,status,reason,expected):
+    from radar_pd_nova.preparation_labels import training_progress
+    library=SimpleNamespace(row=lambda key:dict(model=dict(kind='structural-training' if key=='train' else 'structural-examples')))
+    job=dict(phase=phase,reason=reason,members=[dict(entry='train'),dict(entry='examples')],outcomes={},
+        handle=dict(submission_started=started,job=None if status is None else dict(status=status)))
+    result=training_progress(library,dict(jobs=[job]))
+    assert list(result)==['train'] and expected in result['train']
+    assert 'trained on GPU' not in result['train']
+
+
+def test_latest_active_training_segment_replaces_the_previous_checkpoint_message():
+    from radar_pd_nova.preparation_labels import training_progress
+    library=SimpleNamespace(row=lambda _:dict(model=dict(kind='structural-training')))
+    old=dict(phase='collected',reason='20 epochs checkpointed',members=[dict(entry='train')],
+        outcomes=dict(train=dict(reason='training_checkpoint_available')))
+    active=dict(phase='submitted',reason='',members=[dict(entry='train')],outcomes={},
+        handle=dict(submission_started=True,job=dict(status='running')))
+    assert 'running in Galaxy' in training_progress(library,dict(jobs=[old,active]))['train']
+
+
 def test_children_of_one_irrep_show_their_declared_subgroup_and_k():
     one=dict(kind='structural',settings=dict(candidate=dict(id='one',irrep='GM3+',modes=['a']*16)))
     two=dict(kind='structural',settings=dict(candidate=dict(id='two',irrep='GM3+',modes=['a']*27)))
