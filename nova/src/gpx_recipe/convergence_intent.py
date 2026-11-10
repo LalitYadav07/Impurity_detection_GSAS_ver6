@@ -17,8 +17,8 @@ CEILING = re.compile(
     re.I,
 )
 RETAIN = re.compile(
-    r"\b(?:keep|retain|preserve)\b[^.;\n]{0,90}\b(?:convergence|shift\s*/\s*sigma)\b"
-    r"|\b(?:same|original|previous|existing|unchanged)\s+(?:final[- ]cycle\s+)?"
+    r"\b(?:keep|retain|preserve|leave)\b[^.;\n]{0,90}\b(?:convergence|shift\s*/\s*sigma)\b"
+    r"|\b(?:use|apply|with)\s+(?:the\s+)?(?:same|original|previous|existing)\s+(?:final[- ]cycle\s+)?"
     r"(?:convergence\s+(?:threshold|criterion|criteria|screen|requirement)|shift\s*/\s*sigma\s+(?:limit|threshold|ceiling))",
     re.I,
 )
@@ -54,7 +54,10 @@ def bind_convergence(request, previous, model_signature):
         if limit is not None:
             stages.append(dict(stage=section['stage'], maximum=limit))
     source = 'explicit request' if global_limit is not None or stages else None
-    retaining = bool(RETAIN.search(mask_quoted(request)))
+    unquoted = mask_quoted(request)
+    retaining = any(not re.search(r"\b(?:do\s+not|don't|never|not\s+to|avoid)\s*$",
+                                 unquoted[max(0, match.start()-30):match.start()], re.I)
+                    for match in RETAIN.finditer(unquoted))
     if retaining and global_limit is None and not questions:
         prior_stages = previous.get('stages', []) if isinstance(previous, dict) else []
         eligible = (isinstance(previous, dict) and previous.get('model_signature') == model_signature

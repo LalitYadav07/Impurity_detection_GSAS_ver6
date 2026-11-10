@@ -165,6 +165,38 @@ def test_end_session_pauses_queued_refinements_even_without_future_enrollment():
     assert workspace.checkpoints == 1
 
 
+def test_shutdown_reports_which_recovery_component_is_being_saved():
+    app = RadarPdNovaApp()
+    messages = []
+
+    async def preparation():
+        messages.append(app.server.state.session_save_message)
+
+    async def webmon():
+        messages.append(app.server.state.session_save_message)
+
+    async def models():
+        messages.append(app.server.state.session_save_message)
+
+    class Workspace(_Workspace):
+        def checkpoint(self):
+            messages.append(app.server.state.session_save_message)
+            super().checkpoint()
+
+    app._preparation_shutdown = preparation
+    app.webmon_shutdown = webmon
+    app._pause_model_campaigns = models
+    app._refinement_workspace = Workspace()
+    asyncio.run(app._stop_session_enrollment())
+    assert messages == [
+        'Saving experiment-preparation recovery state.',
+        'Saving live-acquisition recovery state.',
+        'Saving model-comparison results and pending work.',
+        'Saving refinement recipes and their completed results.',
+    ]
+    assert app.server.state.session_save_message == 'Recovery checkpoints saved.'
+
+
 def test_recovery_respects_clear_cutoff_until_user_restores_old_runs():
     app = RadarPdNovaApp()
     now = datetime.now(timezone.utc)

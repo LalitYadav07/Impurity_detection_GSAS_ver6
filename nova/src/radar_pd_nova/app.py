@@ -414,6 +414,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.end_session_dialog = False
         state.session_closing = False
         state.session_exit_ready = False
+        state.session_save_message = "Saving recovery state."
         # The pinned client sets this key when the connection closes. Register
         # it before mounting so its reactive callback already exists.
         state.trame_error_report_msg = ""
@@ -1034,7 +1035,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         "Stop Live monitoring and queued/future refinement work, release loaded run and plot data, and reset the IPTS setup. Already-submitted Galaxy jobs continue. Saved results and refinement receipts remain in History and can be reopened."
                     )
                     vuetify.VCardText(
-                        "Saving recovery state before clearing. Please keep this session open.",
+                        "{{ session_save_message }} Please keep this session open.",
                         v_if="workspace_clearing",
                         role="status",
                     )
@@ -1050,7 +1051,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     vuetify.VCardText(
                         "Release this interactive container and return to Galaxy. Live monitoring and queued/future refinement work stop. Already-submitted Galaxy jobs continue and their results remain in History."
                     )
-                    html.Div("Saving the latest recovery checkpoints. Submitted scientific jobs continue independently.",
+                    html.Div("{{ session_save_message }} Submitted scientific jobs continue independently.",
                              v_if="session_closing && !session_exit_ready", classes="pa-4")
                     with html.Div(v_if="session_exit_ready", classes="pa-4", role="status"):
                         html.P("Recovery checkpoints saved. Returning to Galaxy…")
@@ -1087,10 +1088,18 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         return ""
 
     async def _stop_session_enrollment(self) -> None:
+        def report(message):
+            self.server.state.session_save_message = message
+            self.server.state.flush()
+
+        report("Saving experiment-preparation recovery state.")
         shutdown=getattr(self,'_preparation_shutdown',None)
         if callable(shutdown):await shutdown()
+        report("Saving live-acquisition recovery state.")
         await self.webmon_shutdown()
+        report("Saving model-comparison results and pending work.")
         await self._pause_model_campaigns()
+        report("Saving the scan-monitor recovery state.")
         monitor_task = self._powgen_monitor_task
         was_draining_monitor = monitor_task is not None and not monitor_task.done()
         if self.server.state.powgen_monitoring:
@@ -1110,6 +1119,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             self._powgen_checkpoint_error = None
         workspace = getattr(self, "_refinement_workspace", None)
         if workspace is not None:
+            report("Saving refinement recipes and their completed results.")
             pending_experiments = {
                 recipe["experiment"] for recipe in workspace.state["recipes"].values()
                 if recipe.get("armed")
@@ -1126,6 +1136,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             checkpoint_task = self._refinement_checkpoint_task
             if checkpoint_task is not None and not checkpoint_task.done():
                 await checkpoint_task
+        report("Recovery checkpoints saved.")
 
     def _acknowledge_session_navigation(self, nonce: str) -> bool:
         event = getattr(self, "_session_navigation_ack", None)

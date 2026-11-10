@@ -54,6 +54,19 @@ def test_progress_only_compares_the_selected_leader_to_its_own_baseline():
     assert 'change -21.000' in text and 'baseline 20.000' not in text
 
 
+def test_multiple_scans_do_not_compete_for_one_lowest_rwp_headline():
+    cold=dict(protocol='cold',source='cold-source',candidate='a',name='Cold model',kind='magnetic',
+              execution_state='terminal',native_verified=True,has_view=True,rwp=12.,
+              status='valid',baseline_rwp=53.)
+    warm=dict(cold,protocol='warm',source='warm-source',name='Warm model',rwp=6.,baseline_rwp=6.01)
+    text=model_progress([cold,warm])
+    assert '2 / 2 scan/model embeddings processed' in text
+    assert '2 scans shown; select a scan' in text
+    assert 'Lowest' not in text and 'Warm model' not in text
+    assert 'nuclear baseline 53.000%' in model_progress([cold])
+    assert 'nuclear baseline 6.010%' in model_progress([warm])
+
+
 def test_failed_model_progress_does_not_look_like_a_waiting_first_fit():
     rows=[dict(protocol='one',candidate='a',name='A',execution_state='terminal',
                native_verified=False,has_view=False,status='technical_failure')]

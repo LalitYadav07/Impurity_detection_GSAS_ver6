@@ -115,6 +115,17 @@ def test_unspecified_or_quoted_numbers_are_not_guessed_as_a_ceiling():
         assert bound['global_maximum'] is None and bound['questions'] == []
 
 
+@pytest.mark.parametrize('text', [
+    'Do not retain the previous convergence threshold.',
+    "Don't keep the original convergence screen.",
+    'Never use the previous convergence threshold.',
+    'The original convergence threshold was not specified.',
+])
+def test_negated_or_descriptive_retention_does_not_force_a_previous_limit(text):
+    bound = bind_convergence(text, plan(.5), 'model')
+    assert bound['global_maximum'] is None and bound['questions'] == []
+
+
 @pytest.mark.parametrize('text', ['shift/sigma <= 0.5; shift/sigma <= 0.1.', 'shift/sigma <= 0.', 'shift/sigma <= 2.'])
 def test_conflicting_or_invalid_limits_require_clarification(text):
     assert bind_convergence(text, None, 'model')['questions']

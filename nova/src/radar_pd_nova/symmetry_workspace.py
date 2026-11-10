@@ -647,6 +647,9 @@ def model_progress(rows):
     qualified=[r for r in fits if r.get('status')=='valid']
     leader=min(qualified or fits,key=lambda r:r['rwp']) if fits else None
     text=f'{complete} / {len(models)} scan/model embeddings processed · {evaluated} with checked native fits'
+    sources={row['source'] for row in rows if row.get('source')}
+    if len(sources)>1:
+        return text+f' · {len(sources)} scans shown; select a scan to compare its models and Rwp'
     if leader:
         label='Lowest Rwp passing fit checks' if qualified else 'Lowest checked Rwp, needs review'
         text+=f" · {label}: {leader['name']} · Rwp {leader['rwp']:.3f}%"
