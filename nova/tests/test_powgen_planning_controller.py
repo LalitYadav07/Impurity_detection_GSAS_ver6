@@ -9,6 +9,7 @@ import threading
 import zipfile
 
 import numpy as np
+import pytest
 
 from radar_pd_nova.planning_controller import PlanningMixin
 
@@ -447,3 +448,28 @@ def test_stale_native_completion_cannot_restore_results(tmp_path,monkeypatch):
     assert calls==[{'cif':'unused'}]
     assert not s.plan_current and not s.plan_result_ready and not s.plan_busy
     assert instance._planning_output is None and instance._planning_cancel is None
+
+
+@pytest.mark.parametrize('mode',['profile_only','current_cycle','historical_estimate'])
+def test_completed_simulation_message_matches_returned_prediction_mode(tmp_path,monkeypatch,mode):
+    instance,s=app();instance.service=SimpleNamespace(output_root=tmp_path)
+    instance._planning_request=lambda:{'cif':'unused'}
+    plots=[]
+    receipt=dict(mode=mode,warnings=[],configuration='control',intensity_unit='shape',phases=[],
+        isotope_options={},isotope_selection={},looks=[] if mode=='profile_only' else [
+            {'cumulative_seconds':60.,'cumulative_charge_uah':25.}])
+    def execute(request,directory,event):
+        output=Path(directory)/'simulation';output.mkdir()
+        (output/'result.json').write_text(json.dumps(receipt))
+        return receipt
+    monkeypatch.setattr(instance,'_planning_execute',execute)
+    monkeypatch.setattr(instance,'_planning_plot',lambda **_:plots.append(mode))
+    asyncio.run(instance._run_planning_simulation())
+    assert not s.plan_error and not s.plan_busy and s.plan_current and s.plan_result_ready
+    assert plots==[mode]
+    if mode=='profile_only':
+        assert s.plan_message=='Shape preview ready. Inspect the predicted peak positions and relative intensities.'
+        assert s.plan_look_options==[{'title':'Expected profile','value':0}]
+    else:
+        assert s.plan_message=='Simulation ready. Select an exposure to compare its counting noise.'
+        assert s.plan_look_options==[{'title':'60 s · 25 μAh','value':0}]

@@ -856,7 +856,9 @@ class PlanningMixin(PlanningStorageMixin):
             self._planning_isotope_rows(receipt)
             s.plan_look_options=[{'title':exposure_label(look),'value':i}
                                  for i,look in enumerate(receipt['looks'])] or [{'title':'Expected profile','value':0}]
-            s.plan_look=0;s.plan_message='Simulation ready. Select an exposure to compare its counting noise.'
+            s.plan_look=0
+            s.plan_message=('Shape preview ready. Inspect the predicted peak positions and relative intensities.'
+                if receipt['mode']=='profile_only' else 'Simulation ready. Select an exposure to compare its counting noise.')
             self._planning_plot()
         except Exception as exc:
             if generation==self._planning_generation:
