@@ -866,7 +866,9 @@ class RefinementMixin(GuidedRefinementMixin):
             if self._recipe_preparation_current(owner):
                 self._sync_recipe_preparation_progress();self.server.state.flush()
         def progress(event):loop.call_soon_threadsafe(publish,event)
-        options=dict(progress=progress,failure_policy=getattr(self.server.state,'rf_failure_policy',None))
+        # Guided plans retain their declared policy. The expert-only selector
+        # can still contain a prior choice after the user changes setup mode.
+        options=dict(progress=progress,failure_policy=None if 'guided' in owner else getattr(self.server.state,'rf_failure_policy',None))
         if 'guided' in owner:options['guided']=owner['guided']
         work=asyncio.create_task(asyncio.to_thread(w.prepare,experiment,source,request,**options))
         try:

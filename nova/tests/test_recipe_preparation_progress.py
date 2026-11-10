@@ -67,10 +67,12 @@ def test_guided_plan_uses_shared_progress_without_calling_luna(tmp_path):
     def no_model(*args,**kwargs):raise AssertionError('Guided choices must not call a model')
     w._planner=no_model
     app=App(w);app.server.state.rf_setup_mode='guided';app.server.state.rf_request=plan['request']
+    app.server.state.rf_failure_policy='continue_independent'  # Stale, hidden expert selection.
     owner=dict(workspace=w,selection=('exp','1',plan['request'],'guided'),
                source_sha256=context['source']['sha256'],guided=setup)
     result=asyncio.run(app._prepare_recipe_with_progress(owner))
     assert result['status']=='ready' and result['plan']==plan
+    assert result['plan'].get('failure_policy','stop')=='stop'
     assert 'Preparation complete' in app.server.state.rf_preparation_progress
     assert result['origin']=='Guided rules · deterministic recipe'
     assert [c[0] for c in rt.calls]==['inspect','preview']
