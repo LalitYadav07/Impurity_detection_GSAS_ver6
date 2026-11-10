@@ -145,6 +145,7 @@ def refinement_dashboard(app):
                 with html.Div(v_for='stage in rf_cards',key='stage.id',classes='rf-stage'):
                     html.H4('{{ stage.number }}. {{ stage.title }}')
                     html.P('{{ stage.cycles }} cycles · refine:',classes='rf-notice')
+                    html.P('{{ stage.convergence }}',v_if='!!stage.convergence',classes='rf-notice')
                     with html.Details(open=("stage.number === 1",)):
                         html.Summary('Complete free set ({{ stage.free.length }} targets)')
                         with html.Ul():html.Li('{{ target }}',v_for='target in stage.free',key='target')

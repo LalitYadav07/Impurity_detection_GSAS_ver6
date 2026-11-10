@@ -1,6 +1,20 @@
 from radar_pd_nova.refinement_controller import recipe_cards
 
 
+def test_convergence_criterion_is_visible_outside_collapsed_edits():
+    from pathlib import Path
+    import radar_pd_nova.refinement_ui as ui
+    context = dict(phases=[], histograms=[dict(key='h0', name='PWDR control')])
+    stage = dict(id='one', title='Background', cycles=30,
+                 free=[dict(kind='background', histogram='h0')], constraints=[],
+                 convergence=dict(max_shift_over_sigma=.5))
+    card = recipe_cards(dict(stages=[stage]), context)[0]
+    assert '|shift/sigma| ≤ 0.5' in card['convergence']
+    assert all('shift/sigma' not in value for value in card['edits'])
+    source = Path(ui.__file__).read_text()
+    assert source.index("html.P('{{ stage.convergence }}'") < source.index("html.Summary('Complete free set")
+
+
 def test_oxygen_displacement_bounds_show_phase_atom_and_physical_units():
     context = {'phases': [{'key': 'p5', 'name': 'NMC333', 'histograms': ['h'],
                           'atoms': [{'label': 'O1', 'element': 'O', 'adp_type': 'I'}]}],

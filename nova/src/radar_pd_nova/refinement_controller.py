@@ -372,10 +372,11 @@ def recipe_cards(plan, context, *, physical_banks=None):
             changes.append(f"{phases.get(bound['phase'], bound['phase'])} / {bound['atom']}: "
                            f"{bound['lower']:g} ≤ {parameter} ≤ {bound['upper']:g}{unit}")
         changes.extend(explicit_edit_lines(stage, context, physical_banks=physical_banks))
-        if stage.get('convergence'):
-            changes.append(f"Require native convergence, no abort, and complete final-cycle |shift/sigma| ≤ {stage['convergence']['max_shift_over_sigma']:g}.")
+        convergence = (f"Convergence check: native solver converged, no abort, and complete final-cycle "
+                       f"|shift/sigma| ≤ {stage['convergence']['max_shift_over_sigma']:g}."
+                       if stage.get('convergence') else '')
         cards.append(dict(id=stage['id'],number=number,title=stage['title'],cycles=stage['cycles'],free=[label(t) for t in stage['free']],
-            held=[held(t) for t in row['newly_fixed']],edits=changes))
+            held=[held(t) for t in row['newly_fixed']],edits=changes,convergence=convergence))
     return cards
 
 
