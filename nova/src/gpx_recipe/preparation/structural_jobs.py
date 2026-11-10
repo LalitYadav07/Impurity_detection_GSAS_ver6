@@ -434,6 +434,8 @@ def execute_training(request):
     from .structural_ranker import train
     request = validate_training(request); settings = request['settings']
     if __import__('os').environ.get('RADAR_PREPARATION_TRAINING_DEVICE')=='cuda':
+        if settings.get('representation')!=REPRESENTATION:
+            raise ValueError('CUDA training requires the current three-curve preparation; create a new preparation for this older CPU training plan')
         from .structural_training_backend import cuda_backend
         cuda_backend()
     plan_path = Path(request['plan']).resolve(); plan_sha = file_sha(plan_path); plan = read_plan(plan_path)

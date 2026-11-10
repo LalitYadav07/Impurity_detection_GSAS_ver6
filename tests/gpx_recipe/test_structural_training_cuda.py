@@ -8,6 +8,25 @@ torch=pytest.importorskip('torch')
 from gpx_recipe.preparation import structural_training_backend as backend
 
 
+@pytest.mark.parametrize('kind,label',[('cpu','CPU'),('mps','MPS'),('cuda','CUDA')])
+def test_recovery_description_names_its_actual_device(kind,label):
+    text=backend.recovery_scope(kind)
+    assert label in text and 'checkpoints are not model-library artifacts' in text
+    if kind=='cuda':assert 'MPS' not in text
+
+
+def test_managed_cuda_rejects_a_legacy_cpu_trainer_before_device_initialization(tmp_path,monkeypatch):
+    from test_structural_training_jobs import inputs
+    from gpx_recipe.preparation.structural_jobs import execute_training
+    request,_=inputs(tmp_path/'legacy')
+    monkeypatch.setenv('RADAR_PREPARATION_TRAINING_DEVICE','cuda')
+    monkeypatch.setattr(backend,'cuda_backend',lambda:pytest.fail('Reject the old trainer before initializing CUDA'))
+    with pytest.raises(ValueError,match='current three-curve preparation'):
+        execute_training(request)
+    from pathlib import Path
+    assert not Path(request['destination']).exists()
+
+
 @pytest.mark.parametrize('operation',['preparation-structural-training','preparation-reference'])
 def test_galaxy_native_launch_keeps_gpu_binding_only_for_training_without_credentials(tmp_path,monkeypatch,operation):
     import importlib.util
@@ -154,6 +173,7 @@ def test_real_cuda_shared_training_recovers_exactly_and_exports_cpu_weights(tmp_
         assert recovered[name]==reference[name]
     assert torch.equal(before,torch.cuda.get_rng_state(0))
     assert recovered['training_device_transport']['device']=='cuda'
+    assert 'CUDA' in recovered['training_recovery']['scope'] and 'MPS' not in recovered['training_recovery']['scope']
     ranker=Ranker(tmp_path/'recovered')
     assert next(ranker.model.parameters()).device.type=='cpu'
     assert json.loads((tmp_path/'recovered/model.json').read_text())['channels']==3

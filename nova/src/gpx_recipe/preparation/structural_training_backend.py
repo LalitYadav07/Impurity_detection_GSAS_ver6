@@ -1,7 +1,7 @@
 """Execution placement for one shared three-curve training algorithm.
 
-CPU worker continuations keep their existing format. A local MPS run owns
-both CPU and device random state; it cannot resume silently on another device.
+CPU worker continuations keep their existing format. MPS and CUDA runs own
+both CPU and device random state; they cannot resume silently on another device.
 The trained tensor layout and portable CPU inference remain unchanged.
 """
 from contextlib import contextmanager
@@ -10,6 +10,15 @@ from pathlib import Path
 import sys
 
 from . import structural_training_checkpoint as cpu_checkpoint
+
+
+def recovery_scope(kind):
+    if kind not in ('cpu','mps','cuda'):raise ValueError('Unknown structural training execution device')
+    return {
+        'cpu':'Owned CPU optimizer state, retained locally or restored from a bound worker continuation; checkpoints are not model-library artifacts',
+        'mps':'Owned MPS and CPU optimizer/random state; local exact-device recovery; checkpoints are not model-library artifacts',
+        'cuda':'Owned CUDA and CPU optimizer/random state; checked CUDA worker continuation; checkpoints are not model-library artifacts',
+    }[kind]
 
 
 def device(model):

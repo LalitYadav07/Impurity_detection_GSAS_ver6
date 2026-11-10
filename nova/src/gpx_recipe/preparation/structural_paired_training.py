@@ -339,8 +339,7 @@ def train(cohort,destination,*,epochs=60,seed=89113,threads=4,_segment_seconds=N
             seconds=previous_seconds+time.monotonic()-began,history=history,
             training_recovery=dict(identity=run_identity,warmup_completed_on_resume=warmup_done,
                 epochs_completed_on_resume=completed_epochs,
-                scope=('Owned CPU optimizer state, retained locally or restored from a bound worker continuation; checkpoints are not model-library artifacts'
-                    if engine.kind=='cpu' else 'Owned MPS and CPU optimizer/random state; local exact-device recovery; checkpoints are not model-library artifacts')))
+                scope=backend.recovery_scope(engine.kind)))
         if transport is not None:metadata['training_device_transport']=transport
         if 'partition_anchor' in cohort:metadata['partition_anchor']=cohort['partition_anchor']
         if 'mode_projection_coverage' in cohort:metadata['mode_projection_coverage']=cohort['mode_projection_coverage']
