@@ -1,6 +1,7 @@
 """Use the pinned upstream GUI and observe its successful project saves."""
 from GSASII import GSASIIGUI, GSASIIpath
 from project_tracking import ProjectTracker, install_save_tracking
+from plot_window_lifecycle import install_plot_window_lifecycle
 
 
 def main():
@@ -10,7 +11,8 @@ def main():
         # Upstream calls this after wx/native setup and GUI-module imports,
         # immediately before creating the frame. Keep its ordinary behavior.
         original()
-        from GSASII import GSASIImiscGUI, GSASIIctrlGUI
+        from GSASII import GSASIImiscGUI, GSASIIctrlGUI, GSASIIdataGUI, GSASIIplot
+        install_plot_window_lifecycle(GSASIIdataGUI.GSASII, GSASIIplot.G2PlotNoteBook)
         install_save_tracking(GSASIImiscGUI, ProjectTracker.environment(),
                               report_error=lambda frame, message: GSASIIctrlGUI.G2MessageBox(
                                   frame, message, 'Galaxy project preservation'))

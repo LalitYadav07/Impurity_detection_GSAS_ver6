@@ -141,6 +141,7 @@ jobs:
               sleep 0.1
             done
             /opt/conda/bin/python /opt/gsasii-gui/smoke_save_as.py /tmp/public-save-as-smoke
+            /opt/conda/bin/python /opt/gsasii-gui/smoke_plot_window.py /tmp/public-plot-window-smoke
           '
 
       - name: Set up Node for the real noVNC client check
