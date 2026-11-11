@@ -51,14 +51,60 @@ def test_training_status_distinguishes_local_preparation_queue_and_running_work(
     assert 'trained on GPU' not in result['train']
 
 
-def test_latest_active_training_segment_replaces_the_previous_checkpoint_message():
+def test_latest_active_training_segment_preserves_the_verified_checkpoint_progress():
     from radar_pd_nova.preparation_labels import training_progress
     library=SimpleNamespace(row=lambda _:dict(model=dict(kind='structural-training')))
     old=dict(phase='collected',reason='20 epochs checkpointed',members=[dict(entry='train')],
         outcomes=dict(train=dict(reason='training_checkpoint_available')))
     active=dict(phase='submitted',reason='',members=[dict(entry='train')],outcomes={},
         handle=dict(submission_started=True,job=dict(status='running')))
-    assert 'running in Galaxy' in training_progress(library,dict(jobs=[old,active]))['train']
+    message=training_progress(library,dict(jobs=[old,active]))['train']
+    assert message.startswith('20 epochs checkpointed Current segment: ')
+    assert 'running in Galaxy' in message
+
+
+@pytest.mark.parametrize('started,status,expected',[
+    (False,None,'no training job has been acknowledged'),
+    (True,None,'Recovering the existing training submission'),
+    (True,'queued','queued in Galaxy'),
+    (True,'ok','collecting and verifying'),
+])
+def test_saved_training_progress_stays_visible_during_continuation_handoffs(started,status,expected):
+    from radar_pd_nova.preparation_labels import training_progress
+    library=SimpleNamespace(row=lambda _:dict(model=dict(kind='structural-training')))
+    old=dict(phase='collected',reason='Verified 36 / 60 epochs.',members=[dict(entry='train',attempt=1)],
+        outcomes=dict(train=dict(reason='training_checkpoint_available')))
+    active=dict(phase='submitted',reason='',members=[dict(entry='train',attempt=1)],outcomes={},
+        handle=dict(submission_started=started,job=None if status is None else dict(status=status)))
+    message=training_progress(library,dict(jobs=[old,active]))['train']
+    assert message.startswith('Verified 36 / 60 epochs. Current segment: ')
+    assert expected in message
+
+
+def test_explicit_training_retry_does_not_claim_a_previous_attempts_epochs():
+    from radar_pd_nova.preparation_labels import training_progress
+    library=SimpleNamespace(row=lambda _:dict(model=dict(kind='structural-training')))
+    old=dict(phase='collected',reason='Verified 36 / 60 epochs.',members=[dict(entry='train',attempt=1)],
+        outcomes=dict(train=dict(reason='training_checkpoint_available')))
+    active=dict(phase='submitted',reason='',members=[dict(entry='train',attempt=2)],outcomes={},
+        handle=dict(submission_started=True,job=dict(status='running')))
+    message=training_progress(library,dict(jobs=[old,active]))['train']
+    assert 'running in Galaxy' in message
+    assert '36 / 60' not in message and 'Current segment' not in message
+
+
+def test_training_progress_keeps_entries_and_later_checkpoints_separate():
+    from radar_pd_nova.preparation_labels import training_progress
+    library=SimpleNamespace(row=lambda _:dict(model=dict(kind='structural-training')))
+    def saved(key,epochs):
+        return dict(phase='collected',reason=f'Verified {epochs} / 60 epochs.',
+            members=[dict(entry=key,attempt=1)],outcomes={key:dict(reason='training_checkpoint_available')})
+    def active(key):
+        return dict(phase='submitted',reason='',members=[dict(entry=key,attempt=1)],outcomes={},
+            handle=dict(submission_started=True,job=dict(status='running')))
+    result=training_progress(library,dict(jobs=[saved('one',20),saved('two',8),saved('one',36),active('one'),active('two')]))
+    assert result['one'].startswith('Verified 36 / 60 epochs.')
+    assert result['two'].startswith('Verified 8 / 60 epochs.')
 
 
 def test_children_of_one_irrep_show_their_declared_subgroup_and_k():

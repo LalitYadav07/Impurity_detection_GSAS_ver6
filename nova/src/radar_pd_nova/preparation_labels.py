@@ -38,28 +38,36 @@ def queue_activity_label(state):
 
 def training_progress(library,state):
     """Describe acknowledged queue state, never infer device execution."""
-    result={}
+    result={};checkpoints={}
     for job in (state or {}).get('jobs',[]):
         for member in job['members']:
             key=member['entry']
             if library.row(key)['model']['kind']!='structural-training':continue
+            lineage=(key,member.get('attempt'))
             if job['phase']=='collected':
                 if job['outcomes'].get(key,{}).get('reason')=='training_checkpoint_available':
+                    checkpoints[lineage]=job['reason']
                     result[key]=job['reason']
                 continue
             if job['reason']:
-                result[key]=job['reason'];continue
-            handle=job.get('handle') or {};acknowledged=handle.get('job') or {}
-            if not acknowledged:
-                result[key]=('Recovering the existing training submission; no duplicate will be started.'
-                    if handle.get('submission_started') else
-                    'Preparing training inputs; no training job has been acknowledged yet.')
-            elif acknowledged.get('status')=='running':
-                result[key]='Training job running in Galaxy. The model appears after all epochs and held-out checks.'
-            elif acknowledged.get('status')=='ok':
-                result[key]='Training job finished; collecting and verifying its model or continuation checkpoint.'
+                message=job['reason']
             else:
-                result[key]='Training job queued in Galaxy; waiting for its compute allocation.'
+                handle=job.get('handle') or {};acknowledged=handle.get('job') or {}
+                if not acknowledged:
+                    message=('Recovering the existing training submission; no duplicate will be started.'
+                        if handle.get('submission_started') else
+                        'Preparing training inputs; no training job has been acknowledged yet.')
+                elif acknowledged.get('status')=='running':
+                    message='Training job running in Galaxy. The model appears after all epochs and held-out checks.'
+                elif acknowledged.get('status')=='ok':
+                    message='Training job finished; collecting and verifying its model or continuation checkpoint.'
+                else:
+                    message='Training job queued in Galaxy; waiting for its compute allocation.'
+            # A continuation owns a new Galaxy job, not a new logical attempt.
+            # Keep its last verified checkpoint visible without presenting it
+            # as live epoch telemetry or carrying it into an explicit retry.
+            previous=checkpoints.get(lineage)
+            result[key]=(previous+' Current segment: '+message) if previous else message
     return result
 
 
