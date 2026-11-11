@@ -391,6 +391,29 @@ def build_gpx_index(
     }
 
 
+def _attach_recipe_model(index: dict, portal: Path, final_source: str) -> None:
+    """Publish one source-bound model preview alongside the final checkpoint.
+
+    This reuses the running Analyze worker instead of launching a new Galaxy
+    inspection per scan. Other checkpoints and legacy results stay unverified.
+    An unavailable recipe preview must not discard valid scientific outputs.
+    """
+    selected = next((p for p in index['projects'] if p.get('source_path') == final_source), None)
+    if not selected or not selected.get('collection_path') or not selected.get('published_sha256'):
+        return
+    try:
+        from gpx_recipe.compatibility import capture
+        value = capture(portal / selected['collection_path'], expected_sha256=selected['published_sha256'])
+    except Exception as exc:
+        selected['recipe_model_status'] = 'unavailable'
+        selected['recipe_model_reason'] = str(exc)
+        return
+    for project in index['projects']:
+        if project.get('published_sha256') == value['source_sha256']:
+            project['recipe_model'] = value
+            project['recipe_model_status'] = 'inspected'
+
+
 def _copy_collections(
     run_dir: Path,
     portal: Path,
@@ -945,7 +968,6 @@ def collect_outputs(
             project["published_size_bytes"] = output_record.get("size_bytes")
             if output_record.get('acquisition_handoff') is not None:
                 project['acquisition_handoff'] = output_record['acquisition_handoff']
-    atomic_write_json(portal / "gpx_index.json", gpx_index)
     summary, hypotheses, phases, hypothesis_stage = _summary_sources(run_root, mode)
     lattice, final_rwp, scientific_warnings = [], None, []
     convergence = {}
@@ -997,6 +1019,8 @@ def collect_outputs(
         except Exception as exc:
             scientific_warnings.append({'code': 'phase_composition_review_unavailable',
                 'message': f'Could not compare the fitted phase compositions: {exc}'})
+        _attach_recipe_model(gpx_index, portal, final_gpx.relative_to(run_root).as_posix())
+    atomic_write_json(portal / "gpx_index.json", gpx_index)
     if lattice:
         lattice_path = portal / "tables" / "Final_lattice_parameters.csv"
         lattice_path.parent.mkdir(parents=True, exist_ok=True)

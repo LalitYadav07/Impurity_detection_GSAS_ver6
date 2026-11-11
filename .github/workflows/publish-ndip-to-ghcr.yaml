@@ -192,7 +192,7 @@ jobs:
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
           cd /validation/tests &&
-          python -m unittest test_lattice_nudger_regressions test_refiner_regressions test_db_pack_regressions test_ndip_lattice_covariance_native test_ndip_export_schema test_gsas_signed_fxye_native test_main_phase_identity test_image_scientific_contract test_library_cli_intake test_library_fingerprint_guard'
+          RADAR_REQUIRE_STRUCTURAL_NATIVE=1 python -m unittest test_recipe_model_native test_lattice_nudger_regressions test_refiner_regressions test_db_pack_regressions test_ndip_lattice_covariance_native test_ndip_export_schema test_gsas_signed_fxye_native test_main_phase_identity test_image_scientific_contract test_library_cli_intake test_library_fingerprint_guard'
 
       - name: Verify shared scientific worker allocation
         shell: bash

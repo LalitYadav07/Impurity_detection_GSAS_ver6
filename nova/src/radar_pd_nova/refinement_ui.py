@@ -167,6 +167,15 @@ def refinement_dashboard(app):
                         html.P('Public GPT-6 Luna Standard rates on 2026-10-28: $0.10 per million ordinary input tokens, $0.01 cached input, $0.125 cache writes, and $0.50 output. Requests above 272,000 input tokens use the published long-context multipliers. This is not an ORNL Azure billing record.')
                         html.A('Published Luna rates',href='https://developers.openai.com/api/docs/models/gpt-6-luna',target='_blank',rel='noopener noreferrer')
                 v.VAlert(v_if='rf_approved',text=('rf_recipe_summary',),type='success',variant='tonal',density='compact',classes='mt-3')
+                with html.Div(v_if='rf_compatibility_rows.length',classes='rf-source mt-3',id='radar-rf-compatibility'):
+                    html.H4('Selected scan compatibility')
+                    html.P('{{ rf_compatibility_summary }}',classes='rf-notice',role='status')
+                    v.VAlert(v_if='rf_compatibility_blocked',text='Some selected scans have a different model. Under Apply recipe to, choose Selected saved results or Selected samples to keep a compatible subset. Prepare a separate recipe for the other model.',type='warning',variant='tonal',density='compact')
+                    with html.Details():
+                        html.Summary('Inspect scan models and reasons')
+                        with html.Ul(classes='rf-notice'):
+                            html.Li('{{ row.scan }} · {{ row.status_label }} · {{ row.phases }}. {{ row.reason }}',v_for='row in rf_compatibility_rows',key='row.id')
+                    html.P('Older results without a current model inspection remain unverified here. Their native worker checks compatibility before refining; the preview does not override that check.',classes='rf-notice')
                 with html.Div(v_if='!rf_plan_ready && !rf_busy && !rf_guided_busy',classes='rf-next-steps',raw_attrs=['aria-label="Steps needed before recipe approval"']):
                     html.Strong('NEXT STEPS')
                     v.VBtn('Choose a representative GPX',v_if='!rf_source',click="window.document.getElementById('radar-rf-source')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
@@ -175,7 +184,7 @@ def refinement_dashboard(app):
                     v.VBtn('Build the guided plan',v_if="!!rf_source && !rf_questions.length && rf_setup_mode === 'guided'",click="window.document.getElementById('radar-rf-guided')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
                     v.VBtn('Generate or revise the plan',v_if="!!rf_source && !rf_questions.length && rf_setup_mode === 'expert' && !!rf_request.trim()",click="window.document.getElementById('radar-rf-generate')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
                 with html.Div(classes='rf-actions'):
-                    v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token]'),disabled=('!rf_plan_ready || rf_busy || rf_guided_busy || rf_approved',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')
+                    v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token]'),disabled=('!rf_plan_ready || rf_busy || rf_guided_busy || rf_approved || rf_compatibility_blocked',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')
                     v.VBtn('Start refinement',click=app.start_refinement_queue,disabled=('!rf_approved || rf_busy || rf_guided_busy',),variant='flat',color='#15543c',prepend_icon='mdi-play')
                 html.P("{{ rf_approved ? 'Approved. Start refinement submits the reviewed plan to the selected scans.' : 'Approve recipe and scope records your review; it does not start calculations.' }}",classes='rf-notice mt-3')
                 html.P('{{ rf_transfer_notice }}',classes='rf-notice mt-4')

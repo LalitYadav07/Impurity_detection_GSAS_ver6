@@ -457,6 +457,7 @@ class RefinementMixin(GuidedRefinementMixin):
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
             rf_failure_policy='stop',rf_failure_policy_explicit=False,rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_question_answer='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
+            rf_compatibility_rows=[],rf_compatibility_summary='',rf_compatibility_blocked=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=2,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_stage='final',rf_trend_stage_options=[],rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',rf_trend_temperature_span=True,
@@ -793,6 +794,16 @@ class RefinementMixin(GuidedRefinementMixin):
         same_request=same_request and self._refinement_setup_matches(draft)
         s.rf_approved=bool(recipe and same_request and recipe['selection_token']==self._refinement_selection_token and draft.get('source_id')==s.rf_source)
         s.rf_plan_ready=bool(same_request and draft.get('status')=='ready' and draft.get('source_id')==s.rf_source)
+        s.rf_compatibility_rows=[];s.rf_compatibility_summary='';s.rf_compatibility_blocked=False
+        if s.rf_plan_ready and getattr(s,'rf_existing',False):
+            from gpx_recipe.compatibility import preview
+            scope=self._refinement_scope()
+            sources=[source for source in w.sources(s.rf_experiment) if scope.matches(source)]
+            report=preview(sources,draft['context'])
+            s.rf_compatibility_rows=report['rows']
+            s.rf_compatibility_summary=(f"{report['compatible']} match the recipe model · "
+                f"{report['incompatible']} need a separate recipe · {report['unverified']} not yet checked")
+            s.rf_compatibility_blocked=bool(report['incompatible'])
         s.rf_recipe_summary=(f"Recipe {recipe['version']} · {len(recipe['baseline'])} captured results"+(' · future matches included' if recipe['future'] else '')) if recipe else ''
         plan=draft.get('plan') or {}
         s.rf_transfer_notice=(

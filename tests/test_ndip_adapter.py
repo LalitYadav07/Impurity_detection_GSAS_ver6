@@ -423,6 +423,35 @@ def test_normalized_outputs_publish_handoff_projects_and_archive_all_checkpoints
     assert any(name.startswith("ndip/plots/") for name in names)
 
 
+def test_recipe_preview_inspects_final_published_bytes_once_and_covers_identical_aliases(tmp_path, monkeypatch):
+    from ndip_outputs import _attach_recipe_model
+    from gpx_recipe import compatibility
+    calls=[]
+    def capture(path, *, expected_sha256):
+        calls.append((path,expected_sha256))
+        return dict(source_sha256=expected_sha256,model_signature='native')
+    monkeypatch.setattr(compatibility,'capture',capture)
+    records=[dict(source_path='final.gpx',published_sha256='a'*64,collection_path='gpx/final.gpx'),
+             dict(source_path='same.gpx',published_sha256='a'*64,collection_path='gpx/alias.gpx'),
+             dict(source_path='earlier.gpx',published_sha256='b'*64,collection_path='gpx/earlier.gpx')]
+    _attach_recipe_model(dict(projects=records),tmp_path,'final.gpx')
+    assert calls==[(tmp_path/'gpx/final.gpx','a'*64)]
+    assert records[0]['recipe_model']==records[1]['recipe_model']
+    assert 'recipe_model' not in records[2]
+
+
+def test_recipe_preview_unavailability_does_not_discard_analysis(tmp_path, monkeypatch):
+    from ndip_outputs import _attach_recipe_model
+    from gpx_recipe import compatibility
+    def unavailable(*a,**k):raise ValueError('unsupported native model')
+    monkeypatch.setattr(compatibility,'capture',unavailable)
+    record=dict(source_path='final.gpx',published_sha256='a'*64,collection_path='gpx/final.gpx')
+    _attach_recipe_model(dict(projects=[record]),tmp_path,'final.gpx')
+    assert record['recipe_model_status']=='unavailable'
+    assert record['recipe_model_reason']=='unsupported native model'
+    assert record['published_sha256']=='a'*64 and 'recipe_model' not in record
+
+
 def test_working_project_does_not_claim_to_be_a_main_only_anchor(tmp_path: Path) -> None:
     run = tmp_path / "run"
     projects = run / "Technical" / "GSAS_Projects"

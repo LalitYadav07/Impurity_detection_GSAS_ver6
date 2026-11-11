@@ -404,6 +404,13 @@ class RefinementWorkspace:
             current=self.state['sources'].get(draft['source_id'])
             if not current or current.get('source_sha256')!=draft['context']['source']['sha256']:
                 raise ValueError('The representative GPX changed after planning; regenerate and review the recipe')
+            if existing:
+                from gpx_recipe.compatibility import preview
+                compatibility=preview([self.state['sources'][row['id']] for row in snapshot['baseline']],draft['context'])
+                incompatible=[row for row in compatibility['rows'] if row['status']=='incompatible']
+                if incompatible:
+                    first=incompatible[0]
+                    raise ValueError(f"{len(incompatible)} selected scans need a separate recipe. {first['scan']}: {first['reason']} Choose only compatible saved results, or prepare another recipe for the different model.")
             receipt=approve_plan(draft['plan'],draft['context'],draft.get('preview') or {},approver=approver)
             receipt['execution_policy_sha256']=token
             recipe_id=digest([plan_hash(draft['plan']),token])[:24]
@@ -430,6 +437,11 @@ class RefinementWorkspace:
             return job
         job=dict(id=key,recipes=[recipe['id']],recipe_id=recipe['id'],source=copy.deepcopy(source),status='queued',
                  queued_utc=utc(),attempts=0,message='Waiting for the refinement worker',remote_action=None)
+        from gpx_recipe.compatibility import assess
+        compatibility=assess(source,recipe.get('context') or {'model_signature':recipe['plan'].get('model_signature')})
+        if compatibility['status']=='incompatible':
+            job.update(status='needs_recipe',message=compatibility['reason']+' Prepare a separate recipe for this model.',
+                       finished_utc=utc())
         self.state['jobs'][key]=job;return job
 
     def _enroll_future(self,recipe):
