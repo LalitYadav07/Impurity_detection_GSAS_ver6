@@ -143,6 +143,33 @@ def test_explicit_choice_is_saved_without_auto_enrollment_and_survives_refresh(t
     assert not any('output' in key for key in app.service.calls)
 
 
+def test_switching_candidate_refreshes_open_model_choices_and_discards_context(tmp_path):
+    from types import MethodType
+    from radar_pd_nova.symmetry_controller import SymmetryMixin
+
+    app=rapid_app(tmp_path);state=app.server.state;workspace=app._refinement_workspace
+    app._symmetry_draft=None;app._model_preparations={}
+    state.sx_start_sources=[]
+    for name in ('_symmetry_start_changed','_symmetry_scan_choices','_clear_symmetry_setup_details'):
+        setattr(app,name,MethodType(getattr(SymmetryMixin,name),app))
+    asyncio.run(app._refresh_refinement_sources())
+    state.rf_checkpoint_run='record-1';app._refinement_checkpoint_run_changed()
+    selected=[]
+    for choice in state.rf_checkpoint_options:
+        state.rf_checkpoint_key=choice['value']
+        asyncio.run(app._choose_published_checkpoint())
+        assert not state.rf_checkpoint_error
+        source=workspace.state['sources'][state.rf_source]
+        label=next(entry['title'] for entry in state.sx_start_sources if entry['value']==source['id'])
+        assert source['collection_name'] in label
+        assert state.sx_start_source==source['id']
+        assert app._symmetry_draft is None and state.sx_has_context is False
+        selected.append(source['id'])
+        app._symmetry_draft={'root':str(tmp_path/'previous-native-context')}
+        state.sx_has_context=True
+    assert len(set(selected))==2 and not workspace.state['jobs']
+
+
 @pytest.mark.parametrize('mutation',['record','row','selection','service','workspace'])
 def test_explicit_selection_ignores_stale_async_completion(tmp_path,monkeypatch,mutation):
     import radar_pd_nova.refinement_controller as controller_module

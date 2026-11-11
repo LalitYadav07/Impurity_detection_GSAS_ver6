@@ -181,12 +181,16 @@ class SymmetryMixin(KSearchMixin):
     def _symmetry_scan_choices(self):
         s=self.server.state;w=getattr(self,'_refinement_store',lambda:None)()
         if not w:return
+        # A newly selected manual checkpoint may not have been present during
+        # the last campaign refresh. Publish its label with its selected ID.
+        choices=start_choices(w,s.rf_experiment)
+        s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
         candidates=model_choices(w,s.rf_experiment)
         reference=next(((v,origin) for v,origin in candidates if v['id']==s.sx_start_source),None)
         if not reference:
             s.sx_selectable_scans=[];s.sx_selected_scans=[];return
         source,origin=reference
-        labels={entry['id']:entry['title'] for entry in start_choices(w,s.rf_experiment)}
+        labels={entry['id']:entry['title'] for entry in choices}
         scope=dict(scope=dict(experiment=source['experiment'],sample_key=source['sample_key'],bank=str(source.get('bank') or '')),origin=origin)
         s.sx_selectable_scans=[dict(value=v['id'],title=labels[v['id']]) for v,kind in candidates if matches(scope,v,kind)]
         allowed={v['value'] for v in s.sx_selectable_scans}
