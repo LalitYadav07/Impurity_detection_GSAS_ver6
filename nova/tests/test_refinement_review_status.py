@@ -12,7 +12,7 @@ import pytest
 
 from gpx_recipe.convergence import SCHEMA
 from radar_pd_nova.refinement_controller import RefinementMixin, refinement_activity_label
-from radar_pd_nova.refinement_messages import refinement_review_status,retain_review_evidence,review_notices
+from radar_pd_nova.refinement_messages import refinement_review_status,retain_review_evidence,review_notices,final_stage_criterion
 from radar_pd_nova.refinement_plots import trend_figure
 from radar_pd_nova.refinement_runtime import retain_result_review,verify_result_files,LocalRefinementRuntime,GalaxyRefinementRuntime
 from test_refinement_integration import create,source,approved
@@ -167,7 +167,7 @@ def test_real_runtime_collection_retains_verified_diagnostics_without_changing_n
     import radar_pd_nova.refinement_runtime as module
     original=tmp_path/'source.gpx';original.write_bytes(b'original')
     source_info={'source_path':str(original),'source_sha256':hashlib.sha256(b'original').hexdigest()}
-    plan={'stages':[{'convergence':{'max_shift_over_sigma':.1}}]}
+    plan={'stages':[{'id':'last','convergence':{'max_shift_over_sigma':.1}}]}
     def artifacts(directory):
         directory=Path(directory);directory.mkdir(exist_ok=True)
         final=b'final';sha=hashlib.sha256(final).hexdigest()
@@ -199,6 +199,29 @@ def test_real_runtime_collection_retains_verified_diagnostics_without_changing_n
     assert output['review_evidence']['criteria']=={'max_shift_over_sigma':.1}
     assert 'review_evidence' not in json.loads((directory/'response.json').read_text())
     assert (directory/'final.gpx').read_bytes()==b'final'
+
+
+def test_final_review_uses_retained_stage_not_rejected_or_skipped_tail(tmp_path):
+    view={'source_sha256':'final','convergence':diagnostics(native_converged=True,last_cycle_max_shift_over_sigma=.2)}
+    path=tmp_path/'view.json';path.write_text(json.dumps(view))
+    output=dict(status='completed',source_sha256='source',output_sha256='final',
+        final_view='view.json',files={'view.json':hashlib.sha256(path.read_bytes()).hexdigest()},
+        stages=[{'id':'retained','gpx':'retained.gpx'}],rejected_stages=['rejected','skipped'])
+    plan={'stages':[{'id':'retained','convergence':{'max_shift_over_sigma':.5}},
+                    {'id':'rejected','convergence':{'max_shift_over_sigma':.1}},
+                    {'id':'skipped','convergence':{'max_shift_over_sigma':.01}}]}
+    assert final_stage_criterion(output,plan)=={'max_shift_over_sigma':.5}
+    retain_result_review(tmp_path,output,plan)
+    assert output['review_evidence']['criteria']=={'max_shift_over_sigma':.5}
+    assert refinement_review_status(output)['needs_review']  # Recovery warning remains.
+
+
+def test_missing_or_ambiguous_final_stage_does_not_invent_a_criterion():
+    assert final_stage_criterion({}, {'stages':[{'id':'future','convergence':{'max_shift_over_sigma':.1}}]}) is None
+    output={'stages':[{'id':'saved'}]}
+    assert final_stage_criterion(output,{'stages':[{'id':'different'}]}) is None
+    assert final_stage_criterion(output,{'stages':[{'id':'saved'},{'id':'saved'}]}) is None
+    assert final_stage_criterion(output,{'stages':None}) is None
 
 
 def test_queue_counts_and_filters_do_not_double_count_completed_review_jobs(tmp_path):

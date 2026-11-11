@@ -38,6 +38,24 @@ def retain_review_evidence(result, view, criteria=None):
     return True
 
 
+def final_stage_criterion(result, plan):
+    """Use the accepted final stage's criterion, never a rejected later one."""
+    accepted=result.get('stages') or []
+    if not isinstance(accepted,list) or not accepted or not isinstance(accepted[-1],dict):
+        return None
+    identifier=accepted[-1].get('id')
+    if not isinstance(identifier,str) or not identifier:
+        return None
+    declared=plan.get('stages') if isinstance(plan,dict) else None
+    if not isinstance(declared,list):
+        return None
+    matches=[stage for stage in declared
+             if isinstance(stage,dict) and stage.get('id')==identifier]
+    if len(matches)!=1:
+        return None
+    return copy.deepcopy(matches[0].get('convergence'))
+
+
 def refinement_review_status(result):
     """Flag recorded diagnostic failures without inventing a scientific cutoff."""
     if result.get('rejected_stages'):

@@ -21,7 +21,7 @@ from .refinement_plots import empty_figure, fit_figure, trend_figure, electrical
 from .refinement_runtime import configured_runtime, verify_result_files
 from .refinement_sources import RefinementScope, digest, source_from_record
 from .refinement_workspace import RefinementWorkspace
-from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence, galaxy_refinement_activity, review_notices
+from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence, galaxy_refinement_activity, review_notices, final_stage_criterion
 from .results import experiment_axis_options
 from .guided_refinement_controller import GuidedRefinementMixin
 from .refinement_parameters import execution_parameters, parameter_table
@@ -1379,8 +1379,7 @@ class RefinementMixin(GuidedRefinementMixin):
             s.rf_convergence_notice=convergence_notice(view)
             if s.rf_stage=='final':
                 recipe=w.state.get('recipes',{}).get(job.get('recipe_id'),{})
-                stages=(recipe.get('plan') or {}).get('stages') or []
-                criteria=stages[-1].get('convergence') if stages else None
+                criteria=final_stage_criterion(result,recipe.get('plan'))
                 if retain_review_evidence(result,view,criteria):
                     w.save();self._refinement_sync()
             s.rf_output_provenance=refinement_output_provenance(result,s.rf_stage,

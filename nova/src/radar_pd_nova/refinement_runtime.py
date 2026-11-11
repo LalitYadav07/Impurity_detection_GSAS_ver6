@@ -15,7 +15,7 @@ from gpx_recipe.jobs import scientific_environment
 from gpx_recipe.process import run_scientific
 from gpx_recipe.execution import write_json
 from .refinement_sources import file_sha
-from .refinement_messages import retain_review_evidence
+from .refinement_messages import retain_review_evidence, final_stage_criterion
 
 REFINEMENT_TOOL_ID = tool_id('refine_recipe')
 WORKSPACE_LABEL = 'RADAR-PD Refinement workspace'
@@ -54,8 +54,7 @@ def retain_result_review(directory,result,plan=None):
     if result.get('status')!='completed' or not name:return
     root=Path(directory).resolve();path=(root/name).resolve()
     if not path.is_relative_to(root) or name not in result.get('files',{}):return
-    stages=(plan or {}).get('stages') or []
-    criteria=stages[-1].get('convergence') if stages else None
+    criteria=final_stage_criterion(result,plan)
     try:view=json.loads(path.read_text())
     except (OSError,ValueError):return
     retain_review_evidence(result,view,criteria)

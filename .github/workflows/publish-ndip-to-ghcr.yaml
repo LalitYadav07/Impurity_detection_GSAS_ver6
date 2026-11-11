@@ -161,6 +161,7 @@ jobs:
               /validation/test_imported_mode_recipe_native.py \
               /validation/test_native_budget_recipe_native.py \
               /validation/test_guided_numeric_native.py \
+              /validation/test_guided_occupancy_native.py \
               /validation/test_native_budget.py \
               /validation/test_solver_plan_limits.py'
 
