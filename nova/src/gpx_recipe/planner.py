@@ -132,6 +132,8 @@ def build_payload(request, context, previous=None):
                "response_contract": "Use the response_schema's top-level/stage/target fields. Background and stage_extensions fields are optional. Use only their documented syntax; do not add a stage_extensions wrapper to the plan. constraints must always be a list. Use empty arrays for no questions/unsupported/assumptions. depends_on lists earlier stage IDs whose successful result is required; use [] for independent stages. Do not infer dependencies from execution order alone. Set failure_policy to continue_independent when the user requests restoring a rejected stage and continuing independent later stages, or when preserving that explicit policy from the previous plan. Otherwise use stop. Neither policy permits continuing after technical, provenance or active-set errors. Exact context model_signature required. cycles integer 1–30. No extra keys. Every atom flag must be in that atom's allowed_flags. If the user requests a forbidden flag (including X when position_dof=0), explain it in unsupported or questions; never emit that invalid target even if the user insists. Use stages=[] when this prevents the requested refinement."}
     payload.update(previous_plan=previous, user_request=request, explicit_stage_count=explicit_stage_count(request),stage_instruction_cards=literal_stage_cards(request,context))
     payload['convergence_request'] = bind_convergence(request, previous, context['model_signature'])
+    from .convergence import screen_capability
+    payload['native_convergence_capability'] = screen_capability(context)
     payload['native_solver_limits'] = requested_limits(request, context)
     payload['native_solver_instruction'] = (
         'For numeric/analytic Jacobian sources, every new stage needs a finite max_function_evaluations '
@@ -147,6 +149,10 @@ def build_payload(request, context, previous=None):
         'controls or diagnostics. GSAS-II numeric and analytic Jacobian minimizers do not save the '
         'required final-cycle evidence; for those sources ask a concrete question and return stages=[] '
         'if such a screen is requested. Do not drop the user criterion or change the source minimizer. '
+        'Analytic Hessian and Hessian SVD support this evidence; do not confuse analytic Hessian with '
+        'analytic Jacobian. Use native_convergence_capability from the inspected GPX to determine support. '
+        'A prior draft question is not a solver-capability fact. Supported does not guarantee convergence '
+        'or complete evidence: each executed stage is checked by the native worker. '
         'If its questions are unresolved, ask them and return stages=[].')
     atom_cards=natural_atom_only_cards(request,context,payload['explicit_stage_count'])
     if atom_cards:

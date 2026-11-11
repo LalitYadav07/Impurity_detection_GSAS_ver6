@@ -5,6 +5,16 @@ from numbers import Real
 SCHEMA = 'radar-native-convergence/v1'
 
 
+def screen_capability(context):
+    """Report the inspected solver's capability, not a promised fit outcome."""
+    method = str((context.get('controls') or {}).get('deriv type') or '')
+    supported = (True if method in {'analytic Hessian', 'Hessian SVD'} else
+                 False if method in {'numeric', 'analytic Jacobian'} else None)
+    return dict(method=method, final_cycle_shift_over_sigma_supported=supported,
+                basis='Inspected GPX Controls.deriv type',
+                evidence_required='A completed stage must still provide shifts and sigmas for every independent parameter; capability alone does not pass a convergence screen.')
+
+
 def require_screen_support(context):
     """Reject a known-unavailable required diagnostic before running a fit."""
     method = str((context.get('controls') or {}).get('deriv type') or '')

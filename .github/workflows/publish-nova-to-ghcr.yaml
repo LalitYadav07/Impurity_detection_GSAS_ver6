@@ -182,6 +182,7 @@ jobs:
             /scientific-test-support/test_contracts.py \
             /scientific-test-support/test_native_budget.py \
             /scientific-test-support/test_solver_plan_limits.py \
+            /scientific-test-support/test_solver_capability_planning.py \
             /scientific-test-support/test_native_termination.py \
             /scientific-test-support/test_convergence.py \
             /scientific-test-support/test_imported_mode_reset.py \
