@@ -3334,7 +3334,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     size="small",
                 )
                 vuetify.VBtn("Use configuration", click=self.use_selected_configuration, prepend_icon="mdi-file-restore-outline", variant="outlined", size="small")
-                vuetify.VBtn("Diagnostics", click=self.download_diagnostics, prepend_icon="mdi-bug-outline", variant="text", size="small")
+                vuetify.VBtn("Download diagnostics", click=self.download_diagnostics, prepend_icon="mdi-bug-outline", variant="text", size="small")
                 vuetify.VBtn(
                     "Stop",
                     click="cancel_dialog = true",

@@ -135,7 +135,7 @@ TASKS = [
          purpose="Make a controlled change to published GPXs while keeping the original results.",
          shot="23-review-stages", alt="Historical AGES refinement-stage review; current controls add guided and expert setup choices.",
          steps=[
-             "Open <b>Refinement → Recipe</b> and <b>Refresh projects</b>. Select the experiment, <b>Apply recipe to</b> scope, banks and a <b>Representative GPX</b>. Click <b>Inspect starting model</b>.",
+             "Open <b>Refinement → Recipe</b> and <b>Refresh projects</b>. Select the experiment, <b>Apply recipe to</b> scope, banks and a <b>Representative GPX</b>. Click <b>Inspect starting model</b>. Expand <b>Phases and atom labels</b> to check atom names and allowed position changes; hover over a shortened phase name to read it in full.",
              "Choose <b>Recipe setup</b>: <b>Guided recipes</b> asks structured questions; use <b>Start / restart guided setup</b>, <b>Use this answer</b> and <b>Build and check recipe</b>. <b>Expert request</b> accepts a bounded request and <b>Generate recipe</b>.",
              "If clarification is needed, use <b>Answer the questions above</b> and <b>Use answer and revise recipe</b>. Review every stage, fixed parameters, explicit edits, bounds and scope. Click <b>Approve recipe and scope</b>, then <b>Start refinement</b>. Approval and execution are separate actions."
          ],

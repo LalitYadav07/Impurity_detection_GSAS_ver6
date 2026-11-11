@@ -33,6 +33,10 @@ def refinement_dashboard(app):
         .rf-empty{padding:54px 25px;text-align:center;border:1px dashed #c7d8cb;border-radius:8px;color:#667e6d;line-height:1.8}
         .rf-workspace .v-btn{letter-spacing:.3px}.rf-notice{font-size:12px;color:#62766a;line-height:1.6;margin:8px 0}.rf-tabs{margin:15px 0;border-bottom:1px solid #dce6df}
         .rf-context-details{margin:3px 0 10px;color:#62766a;font-size:12px;line-height:1.45}.rf-context-details summary{cursor:pointer;color:#315f48;font-weight:650}.rf-context-details p{margin:6px 0 0}
+        .rf-atom-table table{table-layout:fixed;width:100%}
+        .rf-atom-table th{font-size:11px!important;line-height:1.35;padding:4px!important;white-space:normal;overflow-wrap:normal}
+        .rf-atom-table td{font-size:12px!important;padding:4px!important;white-space:normal;overflow-wrap:anywhere}
+        .rf-atom-phase{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
         .rf-parameter-caveats{font-size:13px;line-height:1.5}.rf-parameter-caveats ul{margin:4px 0;padding-left:20px}.rf-parameter-caveats li+li{margin-top:4px}
         .rf-overlay{position:fixed;inset:80px 18px 28px;z-index:2400;background:white;padding:22px;box-shadow:0 0 0 25px #102e2988;border-radius:10px;overflow:auto}
         @media(max-width:1100px){.rf-grid{grid-template-columns:1fr}.rf-results{grid-template-columns:240px minmax(0,1fr)}.rf-card{padding:17px}}
@@ -122,7 +126,9 @@ def refinement_dashboard(app):
                 with html.Details(v_if='rf_context_atoms.length',classes='mt-2'):
                     html.Summary('Phases and atom labels ({{ rf_context_atoms.length }} sites)',style='cursor:pointer;font-size:13px')
                     v.VTextField(label='Find phase or atom',v_model=('rf_context_search',),density='compact',variant='outlined',hide_details=True,classes='my-3')
-                    v.VDataTable(items=('rf_context_atoms',),search=('rf_context_search',),headers=("[{title:'Phase',key:'phase'},{title:'Atom',key:'atom'},{title:'Element',key:'element'},{title:'ADP',key:'adp'},{title:'Position freedoms',key:'position_dof'}]",),items_per_page=5,density='compact')
+                    with v.VDataTable(items=('rf_context_atoms',),search=('rf_context_search',),headers=("[{title:'Atom',key:'atom',width:'18%'},{title:'Element',key:'element',width:'18%'},{title:'ADP',key:'adp',width:'14%'},{title:'Position freedoms',key:'position_dof',width:'24%'},{title:'Phase',key:'phase',width:'26%'}]",),items_per_page=5,density='compact',classes='rf-atom-table'):
+                        with html.Template(raw_attrs=['v-slot:item.phase="{ item }"']):
+                            html.Span('{{ item.phase }}',title=('item.phase',),classes='rf-atom-phase')
                 guided_setup(app)
                 v.VTextarea(v_show="rf_setup_mode === 'expert'",id='radar-rf-request',label='Refinement request',v_model=('rf_request',),placeholder='Name the phases and exact atom labels. Refine background and scales, then cells and only symmetry-allowed positions. Keep occupancies fixed; release one Uiso site at a time if needed.',rows=7,auto_grow=True,variant='outlined',hide_details=True,classes='mt-4',update_modelValue=app.refinement_policy_edited)
                 with html.Details(v_show="rf_setup_mode === 'expert'",classes='rf-notice mt-2'):
