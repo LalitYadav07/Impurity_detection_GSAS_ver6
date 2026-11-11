@@ -20,6 +20,11 @@ ORIGINAL_FUNCTION_SHA256 = {
     'MagStructureFactor2': '82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6',
     'MagStructureFactorDerv': 'df959b6cb576c83efbea4117f2ad4b73768253310a6188254dd08033e07b72f7',
 }
+DESKTOP_FILE_SHA256 = '5b39f376fa8555e88bfec8496cf5c475b4fdfe7d6d78ac05caaa1363cb617938'
+DESKTOP_FUNCTION_SHA256 = {
+    'MagStructureFactor2': '42e5cad268a08efa8bee0a9dc0f99dcf8a2d0765b22a70e2146ac5ec50a688d0',
+    'MagStructureFactorDerv': 'bb3b63ec70cbcfa5099b6c1cc0d9e9e5ffe5fef56c4404ba3e9339db111c4f6e',
+}
 NUCLEAR_FUNCTION_SHA256 = 'bee9200e0751ec07a84d819a02a6ceff84f9a759a2f99d2725f17c997aca3385'
 NUCLEAR_DERIVATIVE_SHA256 = 'a3985fab5a791bbe60a52b1822545491c48eb1a659e3ea32b3ba23c43a5391c6'
 
@@ -78,24 +83,41 @@ def replace_once(source,old,new):
 
 def corrected_source(source):
     """Return a reviewed source variant, without executing or modifying it."""
-    if sha256(source)!=ORIGINAL_FILE_SHA256:
+    source_sha=sha256(source)
+    desktop=source_sha==DESKTOP_FILE_SHA256
+    if source_sha not in {ORIGINAL_FILE_SHA256,DESKTOP_FILE_SHA256}:
         raise ValueError('Unreviewed GSAS-II source; refusing magnetic-kernel correction')
+    original_functions=DESKTOP_FUNCTION_SHA256 if desktop else ORIGINAL_FUNCTION_SHA256
     patched=source
-    for name in ORIGINAL_FUNCTION_SHA256:
+    for name in original_functions:
         original=function_source(source,name)
-        if sha256(original)!=ORIGINAL_FUNCTION_SHA256[name]:
+        if sha256(original)!=original_functions[name]:
             raise ValueError('The pinned GSAS-II function changed: '+name)
         updated=original
+        arguments=ast.parse(original).body[0].args
+        if arguments.vararg or arguments.kwarg or arguments.kwonlyargs:
+            raise ValueError('The reviewed magnetic call signature changed')
+        call=', '.join(arg.arg for arg in arguments.args)
+        fallback_name='_radar_original_'+name
+        unsupported=(f'        return {fallback_name}({call})' if desktop else
+            "        raise ValueError('Reviewed magnetic geometry supports commensurate PNC/PNT powder only')")
         updated=replace_once(updated,'    g = nl.inv(G)',
-            "    if calcControls[hfx+'histType'] not in ('PNC','PNT'):\n"
-            "        raise ValueError('Reviewed magnetic geometry supports commensurate PNC/PNT powder only')\n"
+            "    if calcControls[hfx+'histType'] not in ('PNC','PNT'):\n"+
+            unsupported+'\n'+
             '    g = nl.inv(G)')
-        if name=='MagStructureFactor2':
+        if desktop:
+            updated=replace_once(updated,'uAmat = G2lat.Gmat2AB(GS)[0]',
+                'uAmat = G2lat.Gmat2AB(nl.inv(Ginv))[0] #direct unit-axis moment components')
+            if name=='MagStructureFactor2':
+                updated=replace_once(updated,'HM = np.inner(Bmat,H)',
+                    'HM = np.inner(Bmat.T,H)')
+        elif name=='MagStructureFactor2':
             updated=replace_once(updated,'uAmat = G2lat.Gmat2AB(GS)[0] #RVD',
                 'uAmat = G2lat.Gmat2AB(nl.inv(Ginv))[0] #direct unit-axis moment components')
         else:
             updated=replace_once(updated,'Kdata = np.inner(Gdata.T,uAmat.T).T',
                 'Kdata = np.inner(Gdata.T,uAmat).T')
+        if name=='MagStructureFactorDerv':
             # U12/U13/U23 occur twice in h^T U h. UijtoU6 stores one
             # off-diagonal entry, so these derivatives need that factor two.
             for index,axis in enumerate(('12','13','23'),start=3):
@@ -115,21 +137,27 @@ def corrected_source(source):
         if updated.count('TMcorr[nxs,:,nxs,:]')!=expected_uses:
             raise ValueError('The thermal-factor consumer layout changed')
         updated=updated.replace('TMcorr[nxs,:,nxs,:]','TMcorr[nxs,:,:,:]')
-        patched=replace_once(patched,original,updated)
+        if desktop:
+            fallback=replace_once(original,'def '+name+'(','def '+fallback_name+'(')
+            patched=replace_once(patched,original,fallback+'\n\n'+updated)
+        else:
+            patched=replace_once(patched,original,updated)
     nuclear = function_source(source, 'StructureFactor2')
     patched = replace_once(patched, nuclear, corrected_nuclear_function(nuclear))
     nuclear_derivative = function_source(source, 'StructureFactorDerv2')
     patched = replace_once(patched, nuclear_derivative,
                            corrected_nuclear_derivative(nuclear_derivative))
     ast.parse(patched)
-    all_original = {**ORIGINAL_FUNCTION_SHA256, 'StructureFactor2': NUCLEAR_FUNCTION_SHA256,
+    all_original = {**original_functions, 'StructureFactor2': NUCLEAR_FUNCTION_SHA256,
                     'StructureFactorDerv2': NUCLEAR_DERIVATIVE_SHA256}
-    record=dict(version=PATCH_VERSION,original_file_sha256=ORIGINAL_FILE_SHA256,
+    record=dict(version=PATCH_VERSION,original_file_sha256=source_sha,
         corrected_file_sha256=sha256(patched),
         original_functions=all_original,
         corrected_functions={name:sha256(function_source(patched,name)) for name in all_original},
         scope='Commensurate PNC/PNT magnetic geometry, symmetry-rotated ADPs, nuclear Friedel intensity averaging and nuclear anisotropic derivatives',
         rationale='Use consistent Cartesian transforms, average nuclear powder intensities over h and -h, and differentiate both off-diagonal Uij contributions')
+    if desktop:
+        record.update(source_variant='desktop-dcd09eb',non_powder_magnetic_fallback_preserved=True)
     return patched,record
 
 

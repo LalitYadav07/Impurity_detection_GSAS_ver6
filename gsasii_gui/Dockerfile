@@ -5,7 +5,7 @@ ARG NOVNC_REF=9e7def8703ac3234c4bae0cd08663f5dd526ee22
 ARG WEBSOCKIFY_VERSION=0.13.0
 ARG GSASII_UID=1000
 ARG GSASII_GID=1000
-ARG RADAR_PD_GSASII_GUI_VERSION=0.1.15
+ARG RADAR_PD_GSASII_GUI_VERSION=0.1.16
 
 LABEL org.opencontainers.image.title="RADAR-PD GSAS-II Interactive" \
       org.opencontainers.image.description="Browser-hosted native GSAS-II desktop for RADAR-PD GPX handoff" \
@@ -79,6 +79,17 @@ RUN /opt/conda/bin/python -m pip install \
         --no-deps \
         "websockify==${WEBSOCKIFY_VERSION}" \
     && /opt/conda/bin/python -c "import GSASII; import wx; print('GSAS-II and wxPython imports succeeded')"
+
+# Share the scientific worker's reviewed powder corrections. Other magnetic
+# radiation/geometry paths retain the exact pinned upstream implementation.
+COPY nova/src/gpx_recipe/symmetry/kernel_patch.py nova/src/gpx_recipe/symmetry/space_group_patch.py /opt/radar-numerics/gpx_recipe/symmetry/
+ENV PYTHONPATH=/opt/radar-numerics
+RUN mkdir -p /opt/gsasii-gui \
+    && /opt/conda/bin/python -m gpx_recipe.symmetry.kernel_patch --apply \
+        > /opt/gsasii-gui/powder-kernel-provenance.json \
+    && /opt/conda/bin/python -m gpx_recipe.symmetry.space_group_patch --apply \
+        > /opt/gsasii-gui/periodic-site-provenance.json
+COPY tests/gpx_recipe/kernel_geometry_control.py tests/gpx_recipe/nuclear_powder_control.py /opt/gsasii-gui/
 
 RUN groupadd --gid "${GSASII_GID}" gsasii \
     && useradd --uid "${GSASII_UID}" --gid gsasii --create-home --shell /bin/bash gsasii \

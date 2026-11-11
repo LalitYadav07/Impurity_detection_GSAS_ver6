@@ -3,6 +3,7 @@
 No fitted patterns, GPXs, private data, credentials or network are used.
 """
 import copy
+import argparse
 import inspect
 import json
 
@@ -11,14 +12,17 @@ from GSASII import GSASIIstrMath as M
 from gpx_recipe.symmetry.kernel_patch import corrected_nuclear_function, corrected_nuclear_derivative
 
 
-def control():
-    scope = dict(M.StructureFactor2.__globals__)
-    exec(compile(corrected_nuclear_function(inspect.getsource(M.StructureFactor2)),
-                 '<reviewed-powder-intensities>', 'exec'), scope)
-    corrected = scope['StructureFactor2']
-    exec(compile(corrected_nuclear_derivative(inspect.getsource(M.StructureFactorDerv2)),
-                 '<reviewed-nuclear-derivatives>', 'exec'), scope)
-    corrected_derivative = scope['StructureFactorDerv2']
+def control(*,installed=False):
+    if installed:
+        corrected,corrected_derivative=M.StructureFactor2,M.StructureFactorDerv2
+    else:
+        scope = dict(M.StructureFactor2.__globals__)
+        exec(compile(corrected_nuclear_function(inspect.getsource(M.StructureFactor2)),
+                     '<reviewed-powder-intensities>', 'exec'), scope)
+        corrected = scope['StructureFactor2']
+        exec(compile(corrected_nuclear_derivative(inspect.getsource(M.StructureFactorDerv2)),
+                     '<reviewed-nuclear-derivatives>', 'exec'), scope)
+        corrected_derivative = scope['StructureFactorDerv2']
     hkl = np.array([[1,0,0], [0,1,0], [0,0,1], [1,1,0], [2,1,1], [-1,2,1]], float)
     cell = np.array([4., 5., 6.])
     metric = np.diag(1 / cell**2)
@@ -78,7 +82,7 @@ def control():
                     error=float(np.max(abs(revised['RefList'][:,9]-expected)))
                     original_error=float(np.max(abs(original['RefList'][:,9]-expected)))
                     assert error<1e-10,(kind,inversion,imaginary,error)
-                    if imaginary and not inversion:assert original_error>1e-4
+                    if imaginary and not inversion and not installed:assert original_error>1e-4
                     derivatives=corrected_derivative(revised,metric,':0:','0::',group,controls,parameters)
                     original_derivatives=M.StructureFactorDerv2(revised,metric,':0:','0::',group,controls,parameters)
                     derivative_errors=[]
@@ -93,14 +97,15 @@ def control():
                         derivative_errors.append(err)
                         if anisotropic and field in ['0::AU12:0','0::AU13:0','0::AU23:0']:
                             original_offdiag_errors.append(float(np.max(abs(original_derivatives[field]-numerical))))
-                    if anisotropic:
+                    if anisotropic and not installed:
                         assert max(original_offdiag_errors)>1e-4
                     rows.append(dict(kind=kind,inversion=inversion,imaginary_scattering=imaginary,
                         adp_mode="anisotropic" if anisotropic else "isotropic",
                         corrected_error=error,original_error=original_error,derivative_errors=derivative_errors,
                         derivative_names=derivative_names,original_offdiag_errors=original_offdiag_errors))
-    return dict(passed=True,cases=rows)
+    return dict(passed=True,cases=rows,installed_functions=installed)
 
 
 if __name__ == '__main__':
-    print(json.dumps(control(),sort_keys=True))
+    parser=argparse.ArgumentParser();parser.add_argument('--installed',action='store_true')
+    print(json.dumps(control(installed=parser.parse_args().installed),sort_keys=True))

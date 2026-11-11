@@ -20,9 +20,6 @@ from GSASII import GSASIIstrMath as M, GSASIIspc as S
 FILE_SHA = '2c9875e52546547b6ac565d1d0f25aabf5f06b1e1aba43fa8dd4cf359353f559'
 FORWARD_SHA = '82076dc0571cad6d6e2882c5f7ced9003f08af94449aa293b0fb4c5c2ae7b9f6'
 DERIVATIVE_SHA = 'df959b6cb576c83efbea4117f2ad4b73768253310a6188254dd08033e07b72f7'
-assert hashlib.sha256(Path(M.__file__).read_bytes()).hexdigest() == FILE_SHA
-assert hashlib.sha256(inspect.getsource(M.MagStructureFactor2).encode()).hexdigest() == FORWARD_SHA
-assert hashlib.sha256(inspect.getsource(M.MagStructureFactorDerv).encode()).hexdigest() == DERIVATIVE_SHA
 
 
 def direct_basis(cell):
@@ -47,15 +44,8 @@ def patched_function(fn, changes):
 
 
 raw_forward, raw_deriv = M.MagStructureFactor2, M.MagStructureFactorDerv
-unit_forward, unit_forward_sha = patched_function(raw_forward, [
-    ('uAmat = G2lat.Gmat2AB(GS)[0] #RVD',
-     'uAmat = G2lat.Gmat2AB(nl.inv(Ginv))[0] #synthetic control: direct unit basis')])
-unit_deriv, unit_deriv_sha = patched_function(raw_deriv, [
-    ('Kdata = np.inner(Gdata.T,uAmat.T).T', 'Kdata = np.inner(Gdata.T,uAmat).T')])
-transpose_forward, transpose_sha = patched_function(raw_forward, [
-    ('uAmat = G2lat.Gmat2AB(GS)[0] #RVD',
-     'uAmat = G2lat.Gmat2AB(nl.inv(Ginv))[0] #synthetic control'),
-    ('Kdata = np.inner(Gdata.T,uAmat).T', 'Kdata = np.inner(Gdata.T,uAmat.T).T')])
+unit_forward=unit_deriv=None
+unit_forward_sha=unit_deriv_sha=transpose_sha=None
 
 HKL = np.array([[1,0,0], [0,1,0], [0,0,1], [1,1,0], [1,0,1],
                 [0,1,1], [1,1,1], [1,-1,1], [2,1,0], [1,2,3], [3,-2,1], [2,2,-1]], dtype=float)
@@ -156,12 +146,26 @@ def scaled_error(actual, expected):
 
 
 def main():
-    global unit_forward,unit_deriv,unit_forward_sha,unit_deriv_sha
+    global unit_forward,unit_deriv,unit_forward_sha,unit_deriv_sha,transpose_sha
     parser=argparse.ArgumentParser()
-    parser.add_argument('--kernel-patch',type=Path,required=True)
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--kernel-patch',type=Path)
+    mode.add_argument('--installed',action='store_true',help='Verify installed functions without constructing replacements')
     args=parser.parse_args()
     patch_record=None
-    if args.kernel_patch:
+    if args.installed:
+        unit_forward,unit_deriv=raw_forward,raw_deriv
+        unit_forward_sha=hashlib.sha256(inspect.getsource(unit_forward).encode()).hexdigest()
+        unit_deriv_sha=hashlib.sha256(inspect.getsource(unit_deriv).encode()).hexdigest()
+        variants={'unit_basis_consistent':(unit_forward,unit_deriv)}
+    else:
+        assert hashlib.sha256(Path(M.__file__).read_bytes()).hexdigest() == FILE_SHA
+        assert hashlib.sha256(inspect.getsource(raw_forward).encode()).hexdigest() == FORWARD_SHA
+        assert hashlib.sha256(inspect.getsource(raw_deriv).encode()).hexdigest() == DERIVATIVE_SHA
+        transpose_forward,transpose_sha=patched_function(raw_forward,[
+            ('uAmat = G2lat.Gmat2AB(GS)[0] #RVD',
+             'uAmat = G2lat.Gmat2AB(nl.inv(Ginv))[0] #synthetic control'),
+            ('Kdata = np.inner(Gdata.T,uAmat).T', 'Kdata = np.inner(Gdata.T,uAmat.T).T')])
         spec=importlib.util.spec_from_file_location('reviewed_kernel_patch',args.kernel_patch)
         patch=importlib.util.module_from_spec(spec);spec.loader.exec_module(patch)
         updated,patch_record=patch.corrected_source(Path(M.__file__).read_text())
@@ -173,17 +177,15 @@ def main():
         unit_forward=compiled['MagStructureFactor2'];unit_deriv=compiled['MagStructureFactorDerv']
         unit_forward_sha=patch_record['corrected_functions']['MagStructureFactor2']
         unit_deriv_sha=patch_record['corrected_functions']['MagStructureFactorDerv']
+        variants={'native':(raw_forward,raw_deriv),'unit_basis_forward_only':(unit_forward,raw_deriv),
+            'transpose_forward_matches_derivative':(transpose_forward,raw_deriv),
+            'unit_basis_consistent':(unit_forward,unit_deriv)}
     # Constant magnetic form factor isolates the geometric polarization factor.
     saved_form_factor = M.G2el.MagScatFac
     M.G2el.MagScatFac = lambda table, sq: np.ones_like(sq)
     results=[];orbits=[];anisotropic=[];derivative_checks=[]
     try:
-        for name,(forward,deriv) in {
-            'native': (raw_forward,raw_deriv),
-            'unit_basis_forward_only': (unit_forward,raw_deriv),
-            'transpose_forward_matches_derivative': (transpose_forward,raw_deriv),
-            'unit_basis_consistent': (unit_forward,unit_deriv),
-        }.items():
+        for name,(forward,deriv) in variants.items():
             for cell_name,cell in CELLS.items():
                 for moment in MOMENTS:
                     calculated,ref,g,params = calculation(forward,cell,moment)
@@ -217,8 +219,9 @@ def main():
                 error,group=S.SpcGroup(symbol)
                 assert not error,(symbol,error)
                 S.SetMagnetic(group)
-            for variant,(forward,deriv) in [('native',(raw_forward,raw_deriv)),
-                                          ('unit_basis_consistent',(unit_forward,unit_deriv))]:
+            orbit_variants=[('unit_basis_consistent',(unit_forward,unit_deriv))]
+            if not args.installed:orbit_variants.insert(0,('native',(raw_forward,raw_deriv)))
+            for variant,(forward,deriv) in orbit_variants:
                 for moment in MOMENTS[:3]:
                     cell=cells[cell_name]
                     calculated,ref,g,params=calculation(forward,cell,moment,group=group,position=position)
@@ -233,9 +236,9 @@ def main():
                         operations=len(group['MagMom']),
                         cartesian_projection_relative_error=scaled_error(calculated,expected),
                         uiso_derivative_relative_error=scaled_error(analytic,(plus-minus)/(2*delta))))
-            if args.kernel_patch:
+            if args.kernel_patch or args.installed:
                 uij=np.array([.01,.012,.015,.002,.001,-.003])
-                for variant,forward in [('native',raw_forward),('unit_basis_consistent',unit_forward)]:
+                for variant,(forward,unused) in orbit_variants:
                     for moment in MOMENTS[:3]:
                         cell=cells[cell_name]
                         calculated,ref,g,params=calculation(forward,cell,moment,group=group,position=position,uij=uij)
@@ -290,10 +293,11 @@ def main():
         for r in anisotropic if r['variant']=='unit_basis_consistent') if anisotropic else None
     derivatives_passed=all(r['relative_error']<1e-5 for r in derivative_checks) if derivative_checks else None
     document=dict(schema='radar-native-moment-geometry-control/v1',
-        source_file_sha256=FILE_SHA,native_forward_sha256=FORWARD_SHA,
-        native_nonmagnetic_derivative_sha256=DERIVATIVE_SHA,
+        source_file_sha256=hashlib.sha256(Path(M.__file__).read_bytes()).hexdigest(),
+        native_forward_sha256=hashlib.sha256(inspect.getsource(raw_forward).encode()).hexdigest(),
+        native_nonmagnetic_derivative_sha256=hashlib.sha256(inspect.getsource(raw_deriv).encode()).hexdigest(),
         synthetic_forward_sha256=unit_forward_sha,synthetic_derivative_sha256=unit_deriv_sha,
-        transpose_control_sha256=transpose_sha,experimental_data_used=False,
+        transpose_control_sha256=transpose_sha,experimental_data_used=False,installed_functions=args.installed,
         scope='P1 and seven full general-position orbits, constant form factor; not an experimental validation',
         corrected_synthetic_checks_passed=passed,corrected_full_orbit_checks_passed=orbit_passed,
         corrected_anisotropic_checks_passed=anisotropic_passed,patch=patch_record,
