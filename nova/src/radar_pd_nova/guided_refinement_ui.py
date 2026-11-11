@@ -44,4 +44,16 @@ def guided_setup(app):
             html.Summary('Recorded setup decisions')
             html.P('{{ rf_guide_summary_notice }}',v_if='!!rf_guide_summary_notice',classes='rf-notice')
             with html.Ul():html.Li('{{ item.question }}: {{ item.answer }}',v_for='item in rf_guide_summary',key='item.question')
+        with html.Details(v_if='rf_guide_complete',classes='mt-3'):
+            html.Summary('Numerical stopping settings',style='cursor:pointer')
+            html.P('Solver: {{ rf_guide_solver_method }}. Source relative-objective tolerance: {{ rf_guide_solver_source_tolerance }}.',classes='rf-notice')
+            v.VTextField(label=("rf_guide_solver_numerical ? 'Maximum residual evaluations per stage' : 'Maximum cycles per stage'",),
+                v_model=('rf_guide_solver_limit',),type='text',inputmode='numeric',density='compact',
+                disabled=('rf_busy || rf_guided_busy',),update_modelValue=app.guided_solver_controls_edited)
+            v.VCheckbox(label='Override the source relative-objective stopping tolerance',v_model=('rf_guide_solver_override',),
+                density='compact',disabled=('rf_busy || rf_guided_busy',),update_modelValue=app.guided_solver_controls_edited)
+            v.VTextField(v_if='rf_guide_solver_override',label='Relative-objective tolerance (for example 1e-5)',
+                v_model=('rf_guide_solver_tolerance',),type='text',inputmode='decimal',density='compact',
+                disabled=('rf_busy || rf_guided_busy',),update_modelValue=app.guided_solver_controls_edited)
+            html.P('Smaller tolerances may take more iterations or stall. This changes native stopping, not the separate final shift/sigma acceptance check. Rebuild and review the recipe after editing.',classes='rf-notice')
         v.VBtn('Build and check recipe',v_if='rf_guide_complete',click=app.compile_guided_refinement,disabled=('rf_busy || rf_guided_busy',),color='#15543c',classes='mt-3')

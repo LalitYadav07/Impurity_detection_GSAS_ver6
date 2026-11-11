@@ -40,7 +40,7 @@ def validate_plan(plan, context):
     uiso_groups = copy.deepcopy(context.get('uiso_equivalence_groups',[]))
     for stage in plan["stages"]:
         from .advanced import STAGE_FIELDS, validate_stage
-        exact_keys(stage, {"id", "title", "cycles", "max_function_evaluations", "free", "background", "constraints", "convergence", "depends_on"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
+        exact_keys(stage, {"id", "title", "cycles", "max_function_evaluations", "relative_objective_tolerance", "free", "background", "constraints", "convergence", "depends_on"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
         if not isinstance(stage["id"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,40}", stage["id"]) or stage["id"].casefold() in stage_ids:
             raise ValueError("Stage IDs must be unique safe identifiers")
         if stage['id'].casefold() in {'baseline','final'}:
@@ -53,6 +53,9 @@ def validate_plan(plan, context):
             raise ValueError("Stage title required")
         if type(stage["cycles"]) is not int or not 1 <= stage["cycles"] <= 30:
             raise ValueError("Stage cycles must be an integer from 1 to 30")
+        if 'relative_objective_tolerance' in stage:
+            from .native_objective import validate_tolerance
+            validate_tolerance(stage['relative_objective_tolerance'])
         from .native_budget import NUMERICAL_METHODS
         method = (context.get('controls') or {}).get('deriv type')
         if method in NUMERICAL_METHODS and 'max_function_evaluations' not in stage:
@@ -231,6 +234,6 @@ def stage_table(plan, context=None):
                      "newly_free": sorted(current - previous), "newly_fixed": sorted(previous - current),
                      "fixed_policy": "Every other ordinary refinement parameter is fixed; original constraints/restraints remain.",
                      "cycles": stage["cycles"], "depends_on": list(stage.get("depends_on", [])), "background": stage.get("background"), "new_constraints": stage["constraints"],
-                     "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture", "convergence", "max_function_evaluations") if stage.get(k)}})
+                     "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture", "convergence", "max_function_evaluations", "relative_objective_tolerance") if stage.get(k)}})
         previous = current
     return rows

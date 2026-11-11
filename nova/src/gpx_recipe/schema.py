@@ -20,6 +20,7 @@ def response_schema(model_signature=None):
     constraint={"anyOf":[obj({"kind":enum("occupancy_sum"),"terms":array(obj({"phase":string,"atom":string,"coefficient":number})),"total":number,"reason":string}),obj({"kind":enum("uiso_equal"),"atoms":array(obj({"phase":string,"atom":string})),"reason":string})]}
     stage=obj({"id":{"type":"string","description":"Unique safe stage identifier; case-insensitive. Do not use reserved names baseline or final."},"title":string,"cycles":integer,"free":array(target),"constraints":array(constraint),
                "max_function_evaluations":nullable({"type":"integer","description":"Native numerical/Jacobian residual-call limit, 1–100000. Required for numeric stages; use null for Hessian stages. The cycles field is not enforced by MINPACK."}),
+               "relative_objective_tolerance":nullable({"type":"number","description":"Explicitly requested native relative-objective stopping tolerance (GSAS-II min dM/M), 1e-12 to 0.01. Use null to preserve the source control. It is not the separate shift/sigma acceptance criterion."}),
                "depends_on":{"type":"array","items":string,"description":"Earlier stage IDs that must have succeeded. Use [] for an independent stage. Sequential order alone is not a dependency."},
                "convergence":nullable(obj({"max_shift_over_sigma":number})),
                "background":nullable(background),"phase_normalization":array(string),
@@ -48,6 +49,8 @@ def normalize_optional_nulls(plan):
         if not isinstance(stage,dict):continue
         if stage.get('max_function_evaluations', 1) is None:
             del stage['max_function_evaluations']
+        if stage.get('relative_objective_tolerance', 1) is None:
+            del stage['relative_objective_tolerance']
         for field,keys in (("bounds",("value",)),("texture",("direction","order","value"))):
             if not isinstance(stage.get(field),list):continue
             for item in stage[field]:

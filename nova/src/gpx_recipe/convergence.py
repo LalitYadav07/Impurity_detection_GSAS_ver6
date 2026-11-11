@@ -77,14 +77,16 @@ def assess_convergence(evidence, maximum):
     elif value > maximum:
         issues.append(('last_cycle_shift_exceeded', f'Final-cycle maximum shift/sigma {value:.5g} exceeds {maximum:g}.'))
     change = evidence.get('relative_objective_change')
-    # HessianLSQ accepts a step with chi2_new <= chi2_old * (1 + ftol),
-    # where ftol is Controls['min dM/M']. Use that recorded tolerance, not
-    # a near-zero threshold that rejects already converged native projects.
-    # Keep legacy evidence conservative when the native tolerance is absent.
+    # HessianLSQ starts each cycle's trial-step acceptance tolerance at ftol
+    # (Controls['min dM/M']) and can double it during damping. This additional
+    # conservative screen uses the recorded BASE tolerance, not an inferred
+    # effective damping threshold. It can therefore require review even when
+    # the native solver declares convergence. Do not mislabel it as a failure
+    # of the solver's own stopping rule or guess a relaxed bound from lambda.
     tolerance = evidence.get('relative_objective_tolerance')
     tolerance = tolerance if finite(tolerance) and tolerance > 0 else 1e-12
     if finite(change) and change < -tolerance:
-        issues.append(('objective_increased', f'The native last-cycle relative objective increased by {-change:.5g}, beyond tolerance {tolerance:.5g}.'))
+        issues.append(('objective_increased', f'The last-cycle relative objective increased by {-change:.5g}, beyond the recorded base tolerance {tolerance:.5g} used by this additional review screen.'))
     reasons = issues + missing
     message = f'Final-cycle maximum shift/sigma {value:.5g} is within {maximum:g}; native convergence reported.' if not reasons else ''
     if not reasons and finite(change) and change < 0:

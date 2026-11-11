@@ -187,6 +187,42 @@ def answer(context, state, question_id, value, *, origin='direct', evidence=None
     return result
 
 
+def solver_settings(context, state):
+    """Read optional, versioned numerical controls without altering science choices."""
+    method = str((context.get('controls') or {}).get('deriv type') or '')
+    numerical = method in NUMERICAL_METHODS
+    settings = state.get('solver_settings')
+    if settings is None:
+        return dict(method=method, maximum=DEFAULT_NUMERICAL_EVALUATIONS if numerical else 12,
+                    relative_objective_tolerance=None)
+    if (not isinstance(settings, dict) or set(settings) != {
+            'schema', 'method', 'maximum', 'relative_objective_tolerance'}
+            or settings['schema'] != 'radar-guided-solver/v1' or settings['method'] != method):
+        raise ValueError('The guided solver settings do not match this native minimizer. Review them again.')
+    maximum = settings['maximum']
+    upper = 100000 if numerical else 30
+    if type(maximum) is not int or not 1 <= maximum <= upper:
+        raise ValueError(f'Enter an integer from 1 to {upper} for the native work limit.')
+    tolerance = settings['relative_objective_tolerance']
+    if tolerance is not None:
+        from .native_objective import validate_tolerance
+        validate_tolerance(tolerance)
+    return dict(method=method, maximum=maximum, relative_objective_tolerance=tolerance)
+
+
+def with_solver_settings(context, state, *, maximum=None, relative_objective_tolerance=None):
+    check_binding(context, state)
+    if next_question(context, state) is not None:
+        raise ValueError('Complete the guided scientific choices before setting numerical controls.')
+    current = solver_settings(context, {})
+    result = deepcopy(state)
+    result['solver_settings'] = dict(schema='radar-guided-solver/v1', method=current['method'],
+        maximum=current['maximum'] if maximum is None else maximum,
+        relative_objective_tolerance=relative_objective_tolerance)
+    solver_settings(context, result)
+    return result
+
+
 def occupancy_spec(context, answers):
     if answers.get('recipe') == 'mixture' or 'sites' not in answers:
         return None
@@ -234,9 +270,14 @@ def build_plan(context, state):
         raise ValueError('Complete the guided questions before compiling a recipe.')
     slots = state['answers']; spec = occupancy_spec(context, slots)
     numerical = (context.get('controls') or {}).get('deriv type') in NUMERICAL_METHODS
+    reviewed_solver = solver_settings(context, state)
     if numerical and state['schema'] != SCHEMA:
         raise ValueError('Restart Guided setup to review numerical stopping checks. This saved guide used a Hessian-only convergence requirement; it will not be weakened silently.')
-    limits = stage_limits(context, hessian_cycles=12)
+    limits = stage_limits(context, hessian_cycles=reviewed_solver['maximum'])
+    if numerical:
+        limits['max_function_evaluations'] = reviewed_solver['maximum']
+    if reviewed_solver['relative_objective_tolerance'] is not None:
+        limits['relative_objective_tolerance'] = reviewed_solver['relative_objective_tolerance']
     base = [dict(kind='background', histogram=h['key']) for h in context['histograms']]
     base += [dict(kind='phase_scale', phase=p['key'], histogram=h['key']) for p in context['phases']
              for h in context['histograms'] if h['name'] in p['histograms']]
@@ -268,11 +309,15 @@ def build_plan(context, state):
     else:
         assumptions.append('All occupancies and atomic coordinates remain fixed; the model composition must already be appropriate.')
     if numerical:
-        assumptions.append(f'Every stage allows at most {DEFAULT_NUMERICAL_EVALUATIONS:,} native residual evaluations and requires successful numerical termination, finite covariance, the reviewed active parameters and physical bounds. Final-cycle Hessian shift/sigma is unavailable; results retain that limitation for scientific review.')
+        assumptions.append(f"Every stage allows at most {reviewed_solver['maximum']:,} native residual evaluations and requires successful numerical termination, finite covariance, the reviewed active parameters and physical bounds. Final-cycle Hessian shift/sigma is unavailable; results retain that limitation for scientific review.")
     else:
         for stage in stages:
             stage['convergence']=dict(max_shift_over_sigma=.5)
-        assumptions.append('Every stage allows at most twelve Hessian cycles and requires reported native convergence, no abort, complete final-cycle shifts and maximum |shift/sigma| ≤ 0.5. This numerical screen does not establish model adequacy.')
+        cycle_text = 'twelve' if reviewed_solver['maximum'] == 12 else str(reviewed_solver['maximum'])
+        assumptions.append(f'Every stage allows at most {cycle_text} Hessian cycles and requires reported native convergence, no abort, complete final-cycle shifts and maximum |shift/sigma| ≤ 0.5. This numerical screen does not establish model adequacy.')
+    tolerance = reviewed_solver['relative_objective_tolerance']
+    assumptions.append('Every stage preserves its starting GPX native relative-objective stopping tolerance.' if tolerance is None else
+        f'Every stage uses the explicitly reviewed native relative-objective stopping tolerance {tolerance:g}. This changes solver stopping, not the final shift/sigma acceptance ceiling. Smaller tolerances can take longer or stall.')
     legacy = state['schema'] == LEGACY_SCHEMA
     plan = dict(schema='radar-gpx-recipe/v1', model_signature=context['model_signature'],
         request=f"Guided {state['schema'].rsplit('/',1)[-1]}: " + RECIPES[slots['recipe']],

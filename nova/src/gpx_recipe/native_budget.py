@@ -66,8 +66,10 @@ def residual_budget(main, maximum):
 
 def iteration_caption(stage, context):
     method = str((context.get('controls') or {}).get('deriv type') or '')
+    tolerance = stage.get('relative_objective_tolerance')
+    suffix = '' if tolerance is None else f' · native relative-objective tolerance {tolerance:g}'
     if method in NUMERICAL_METHODS:
         limit = stage.get('max_function_evaluations')
         return (f'At most {limit:,} residual evaluations · {method} minimizer' if limit is not None
-                else f'{method} minimizer · native tolerance stopping; no evaluation limit recorded')
-    return f"At most {stage['cycles']} cycles"
+                else f'{method} minimizer · native tolerance stopping; no evaluation limit recorded') + suffix
+    return f"At most {stage['cycles']} cycles" + suffix

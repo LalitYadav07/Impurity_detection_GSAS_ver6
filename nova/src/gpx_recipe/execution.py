@@ -188,6 +188,8 @@ def configure(project, stage, context, added_constraints):
             project.add_EqnConstr(constraint["total"], names, multlist=multipliers, override=False)
         added_constraints.add(identity)
     advanced.configure(project, stage, context, phases, hists, added_constraints)
+    from .native_objective import apply as apply_native_objective
+    apply_native_objective(project, stage, context)
     project.set_Controls("cycles", stage["cycles"])
     # Preserve the original constraints, restraints, fit range and calibrated
     # profile. Every stage rebuilds its ordinary free set from zero.

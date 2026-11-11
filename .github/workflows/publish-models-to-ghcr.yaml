@@ -67,6 +67,17 @@ jobs:
             type=gha,scope=model-worker
             type=gha,scope=model-worker-${{ inputs.image_variant || 'models' }}
           cache-to: type=gha,scope=model-worker-${{ inputs.image_variant || 'models' }},mode=max
+      - name: Verify installed scientific source matches the release
+        run: |
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/nova/src/gpx_recipe:/expected:ro" \
+            "$IMAGE" -c '
+          from pathlib import Path
+          from gpx_recipe.symmetry.compiler import package_signature, source_inventory, digest
+          actual = package_signature()
+          assert actual == digest(source_inventory(Path("/expected"))), "Installed scientific source differs from release"
+          print("Verified release scientific implementation", actual)'
+
       - name: Verify production image excludes development fixtures
         run: |
           docker run --rm --entrypoint python \
@@ -166,6 +177,7 @@ jobs:
             /validation/tests/gpx_recipe/test_effects.py \
             /validation/tests/gpx_recipe/test_imported_mode_recipe_native.py \
             /validation/tests/gpx_recipe/test_native_budget_recipe_native.py \
+            /validation/tests/gpx_recipe/test_native_objective_native.py \
             /validation/tests/gpx_recipe/test_guided_numeric_native.py \
             /validation/tests/gpx_recipe/test_guided_occupancy_native.py \
             /validation/tests/gpx_recipe/test_native_budget.py \

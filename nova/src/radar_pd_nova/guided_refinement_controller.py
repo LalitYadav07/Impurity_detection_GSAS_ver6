@@ -2,6 +2,7 @@
 import asyncio
 from copy import deepcopy
 from hashlib import sha256
+import math
 import os
 from pathlib import Path
 import uuid
@@ -21,7 +22,10 @@ class GuidedRefinementMixin:
             rf_guide_answer=None,rf_guide_text='',rf_guide_proposal='',rf_guide_can_accept=False,
             rf_guide_complete=False,rf_guide_summary=[],rf_guide_summary_notice='',rf_transfer_notice='',rf_edit_operation='replace',rf_edit_phase=None,
             rf_edit_name='',rf_edit_cif_path=None,rf_edit_cif_text='',rf_edit_banks=[],rf_edit_scale=1.,rf_edit_reason='',
-            rf_edit_phase_options=[],rf_edit_bank_options=[],rf_edit_source_sha='')
+            rf_edit_phase_options=[],rf_edit_bank_options=[],rf_edit_source_sha='',
+            rf_guide_solver_method='',rf_guide_solver_numerical=False,rf_guide_solver_limit=12,
+            rf_guide_solver_override=False,rf_guide_solver_tolerance='',rf_guide_solver_source_tolerance='Not recorded')
+        self._guided_solver_form=None
         for key,value in defaults.items():setattr(self.server.state,key,value)
 
     def _guided_source_changed(self):
@@ -38,6 +42,7 @@ class GuidedRefinementMixin:
             s.rf_guide_proposal='';s.rf_guide_can_accept=False
             s.rf_guide_answer=None;s.rf_guide_text='';s.rf_edit_phase=None
             s.rf_edit_name='';s.rf_edit_cif_path=None;s.rf_edit_cif_text='';s.rf_edit_banks=[];s.rf_edit_scale=1.;s.rf_edit_reason=''
+            self._guided_solver_fields(context)
         s.rf_edit_source_sha=(context.get('source') or {}).get('sha256','')
         s.rf_edit_phase_options=[dict(title=phase_label(p),value=p['key']) for p in context.get('phases',[])]
         banks=source.get('metadata',{}).get('physical_banks',{})
@@ -74,11 +79,41 @@ class GuidedRefinementMixin:
         s.rf_guide_text='';s.rf_guide_proposal='';s.rf_guide_can_accept=False;self._guided_proposal=None
         s.rf_guide_summary=guided.decision_summary(context,self._guided_state)
         s.rf_guide_summary_notice=''
+        self._guided_solver_fields(context)
         if persist:
             with self._refinement_workspace.lock:
                 self._refinement_workspace.state.setdefault('guided_setups',{})[s.rf_source]=deepcopy(self._guided_state)
                 self._refinement_workspace.save()
         s.flush()
+
+    def _guided_solver_fields(self, context):
+        s=self.server.state
+        values=guided.solver_settings(context,self._guided_state or {})
+        s.rf_guide_solver_method=values['method'] or 'Native Hessian'
+        s.rf_guide_solver_numerical=values['method'] in guided.NUMERICAL_METHODS
+        s.rf_guide_solver_limit=values['maximum']
+        tolerance=values['relative_objective_tolerance']
+        source=(context.get('controls') or {}).get('min dM/M')
+        s.rf_guide_solver_source_tolerance=f'{source:g}' if type(source) in (int,float) and math.isfinite(source) else 'Not recorded'
+        s.rf_guide_solver_override=tolerance is not None
+        s.rf_guide_solver_tolerance=f'{tolerance:g}' if tolerance is not None else s.rf_guide_solver_source_tolerance
+        self._guided_solver_form=self._guided_solver_form_key()
+
+    def _guided_solver_form_key(self):
+        s=self.server.state
+        return tuple(str(getattr(s,k,'')) for k in ('rf_guide_solver_limit','rf_guide_solver_override','rf_guide_solver_tolerance'))
+
+    def guided_solver_controls_edited(self,*_,**__):
+        s=self.server.state
+        if s.rf_busy or s.rf_guided_busy or self._guided_state is None:return
+        current=self._guided_solver_form_key()
+        if current==self._guided_solver_form:return
+        self._guided_solver_form=current
+        self._refinement_hold_enrollment()
+        if self._refinement_workspace:
+            self._refinement_workspace.discard_draft(s.rf_experiment)
+        s.rf_message='Numerical controls changed. Build and check the recipe again before approval.'
+        self._refinement_sync();s.flush()
 
     def start_guided_refinement(self,**_):
         s=self.server.state;w=self._refinement_workspace
@@ -168,7 +203,21 @@ class GuidedRefinementMixin:
         if s.rf_busy or s.rf_guided_busy:return
         try:
             context=self._guided_context();state=deepcopy(self._guided_state)
+            raw=getattr(s,'rf_guide_solver_limit',None)
+            maximum=None
+            if raw is not None:
+                try:value=float(raw)
+                except (TypeError,ValueError):raise ValueError('Enter an integer native work limit.') from None
+                if isinstance(raw,bool) or not math.isfinite(value) or not value.is_integer():
+                    raise ValueError('Enter an integer native work limit.')
+                maximum=int(value)
+            override=getattr(s,'rf_guide_solver_override',False)
+            if type(override) is not bool:raise ValueError('Choose whether to override the source stopping tolerance.')
+            try:tolerance=float(s.rf_guide_solver_tolerance) if override else None
+            except (TypeError,ValueError):raise ValueError('Enter a numeric relative-objective tolerance, for example 1e-5.') from None
+            state=guided.with_solver_settings(context,state,maximum=maximum,relative_objective_tolerance=tolerance)
             plan=guided.build_plan(context,state);source_id=s.rf_source;experiment=s.rf_experiment;epoch=self._guided_epoch
+            self._guided_state=state
             s.rf_request=plan['request'];s.rf_guided_busy=True;s.rf_error='';s.rf_message='Checking the guided recipe against the native model. Approval and Start refinement are still required.';s.flush()
             owner=dict(workspace=w,selection=(experiment,source_id,plan['request'],getattr(s,'rf_setup_mode','guided')),
                        source_sha256=context['source']['sha256'],guided=state)

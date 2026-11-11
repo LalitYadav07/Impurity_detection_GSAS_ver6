@@ -97,6 +97,6 @@ def test_objective_notice_distinguishes_native_tolerance_from_material_increase(
     evidence=dict(schema=SCHEMA,native_converged=True,last_cycle_complete=True,
                   last_cycle_max_shift_over_sigma=.02,relative_objective_change=-1e-7,
                   relative_objective_tolerance=.001)
-    assert 'within the recorded native tolerance 0.001' in convergence_notice(dict(convergence=evidence))
+    assert 'within the recorded base tolerance 0.001' in convergence_notice(dict(convergence=evidence))
     evidence['relative_objective_change']=-.002
-    assert 'beyond the recorded native tolerance 0.001' in convergence_notice(dict(convergence=evidence))
+    assert 'beyond the recorded base tolerance 0.001' in convergence_notice(dict(convergence=evidence))

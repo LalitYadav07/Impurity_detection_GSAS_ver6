@@ -62,6 +62,17 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:nova-buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:nova-buildcache,mode=max
 
+      - name: Verify installed scientific source matches the release
+        run: |
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/nova/src/gpx_recipe:/expected:ro" \
+            "${IMAGE_NAME}:nova-${GITHUB_SHA}" -c '
+          from pathlib import Path
+          from gpx_recipe.symmetry.compiler import package_signature, source_inventory, digest
+          actual = package_signature()
+          assert actual == digest(source_inventory(Path("/expected"))), "Installed scientific source differs from release"
+          print("Verified release scientific implementation", actual)'
+
       - name: Verify production image excludes development fixtures
         run: |
           docker run --rm --entrypoint python \

@@ -65,6 +65,17 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache-v2
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:ndip-buildcache-v2,mode=max
 
+      - name: Verify installed scientific source matches the release
+        run: |
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/nova/src/gpx_recipe:/expected:ro" \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+          from pathlib import Path
+          from gpx_recipe.symmetry.compiler import package_signature, source_inventory, digest
+          actual = package_signature()
+          assert actual == digest(source_inventory(Path("/expected"))), "Installed scientific source differs from release"
+          print("Verified release scientific implementation", actual)'
+
       - name: Verify production image excludes development fixtures
         run: |
           docker run --rm --entrypoint python \
@@ -162,6 +173,7 @@ jobs:
               /validation/test_imported_mode_reset.py \
               /validation/test_imported_mode_recipe_native.py \
               /validation/test_native_budget_recipe_native.py \
+              /validation/test_native_objective_native.py \
               /validation/test_guided_numeric_native.py \
               /validation/test_guided_occupancy_native.py \
               /validation/test_native_budget.py \

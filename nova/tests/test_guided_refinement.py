@@ -47,6 +47,59 @@ def test_mixture_has_no_occupancy_or_atom_releases(context):
     assert plan['stages'][1]['title']=='Selected unit cells'
 
 
+def test_guided_native_controls_do_not_weaken_scientific_acceptance(context):
+    context['controls']={'deriv type':'analytic Hessian','min dM/M':.001}
+    original=complete(context,'mixture')
+    edited=guided.with_solver_settings(context,original,maximum=20,relative_objective_tolerance=1e-5)
+    plan=guided.build_plan(context,edited)
+    assert 'solver_settings' not in original
+    assert all(s['cycles']==20 and s['relative_objective_tolerance']==1e-5 for s in plan['stages'])
+    assert all(s['convergence']=={'max_shift_over_sigma':.5} for s in plan['stages'])
+    assert not any('F' in t.get('flags','') for s in plan['stages'] for t in s['free'])
+
+
+def test_guided_numerical_controls_preserve_evaluation_semantics(context):
+    context['controls']={'deriv type':'numeric','min dM/M':.001}
+    state=guided.with_solver_settings(context,complete(context,'mixture'),maximum=2000,relative_objective_tolerance=1e-5)
+    plan=guided.build_plan(context,state)
+    assert all(s['cycles']==1 and s['max_function_evaluations']==2000 for s in plan['stages'])
+    assert all('convergence' not in s for s in plan['stages'])
+    assert any('2,000' in text for text in plan['assumptions'])
+
+
+@pytest.mark.parametrize('maximum,tolerance',[(0,None),(31,None),(True,None),(12,float('nan')),(12,0.)])
+def test_invalid_guided_solver_controls_cannot_build(context,maximum,tolerance):
+    with pytest.raises(ValueError):
+        guided.with_solver_settings(context,complete(context,'mixture'),maximum=maximum,relative_objective_tolerance=tolerance)
+
+
+def test_guided_solver_settings_are_bound_to_native_method(context):
+    context['controls']={'deriv type':'analytic Hessian','min dM/M':.001}
+    state=guided.with_solver_settings(context,complete(context,'mixture'),maximum=20)
+    context['controls']['deriv type']='numeric'
+    with pytest.raises(ValueError,match='native minimizer'):
+        guided.solver_settings(context,state)
+
+
+def test_guided_solver_edit_survives_unrelated_source_refresh(context):
+    from types import SimpleNamespace
+    from radar_pd_nova.guided_refinement_controller import GuidedRefinementMixin
+    calls=[]
+    class App(GuidedRefinementMixin):
+        def _refinement_hold_enrollment(self):calls.append('hold')
+        def _refinement_sync(self):self._guided_source_changed()
+    app=App()
+    app.server=SimpleNamespace(state=SimpleNamespace(rf_source='s1',rf_experiment='exp',rf_busy=False,flush=lambda:None))
+    app._init_guided_refinement()
+    app._refinement_workspace=SimpleNamespace(state=dict(sources={'s1':dict(context=context,source_sha256='source-a')},
+        guided_setups={'s1':complete(context,'mixture')}),discard_draft=lambda experiment:calls.append(experiment))
+    app._guided_source_changed()
+    app.server.state.rf_guide_solver_limit=20
+    app.guided_solver_controls_edited()
+    assert calls==['hold','exp']
+    assert app.server.state.rf_guide_solver_limit==20
+
+
 @pytest.mark.parametrize('method',['numeric','analytic Jacobian'])
 def test_numerical_guide_reviews_supported_stopping_before_building(context,method):
     context['controls']={'deriv type':method}

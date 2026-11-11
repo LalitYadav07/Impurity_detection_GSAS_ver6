@@ -219,7 +219,7 @@ def convergence_notice(view):
         detail = f'The last-cycle objective increased by {-change:.5g} relative'
         if finite(tolerance) and tolerance > 0:
             relation = 'within' if -change <= tolerance else 'beyond'
-            detail += f', {relation} the recorded native tolerance {tolerance:.5g}'
+            detail += f', {relation} the recorded base tolerance {tolerance:.5g}'
         parts.append(detail+'.')
     parts.append('Compare these diagnostics with the reviewed convergence criteria. '
                  'Conditional uncertainties do not establish model adequacy or calibration accuracy.')
