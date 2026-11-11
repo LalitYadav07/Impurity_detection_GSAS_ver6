@@ -10,6 +10,32 @@ from gpx_recipe.preparation.library import confined
 from gpx_recipe.symmetry.isodistort_forms import _method1_catalog_group
 
 
+def queue_activity(state):
+    """Distinguish an owned intent from an acknowledged Galaxy job."""
+    counts=dict(accepted=0,reconciling=0,waiting=0)
+    for job in (state or {}).get('jobs',[]):
+        if job['phase']=='collected':continue
+        handle=job.get('handle') or {}
+        if handle.get('job'):counts['accepted']+=1
+        elif handle.get('submission_started'):counts['reconciling']+=1
+        else:counts['waiting']+=1
+    return counts
+
+
+def queue_activity_label(state):
+    counts=queue_activity(state);parts=[]
+    if counts['accepted']:
+        n=counts['accepted']
+        parts.append(f"{n} accepted Galaxy {'job awaiting' if n==1 else 'jobs awaiting'} results")
+    if counts['reconciling']:
+        n=counts['reconciling']
+        parts.append(f"{n} {'submission being' if n==1 else 'submissions being'} checked")
+    if counts['waiting']:
+        n=counts['waiting']
+        parts.append(f"{n} {'batch waiting' if n==1 else 'batches waiting'} to submit")
+    return ' · '.join(parts)+'.' if parts else 'No Galaxy jobs awaiting results.'
+
+
 def training_progress(library,state):
     """Describe acknowledged queue state, never infer device execution."""
     result={}

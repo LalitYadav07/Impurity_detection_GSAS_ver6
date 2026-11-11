@@ -120,7 +120,7 @@ def libraries_panel(app):
         html.P('Choose a saved library above to inspect or reuse it. Clearing the workspace keeps these libraries but removes the active selection.',
             v_if='!prep_library && prep_library_options.length',classes='text-body-2')
         html.P('{{ prep_library_kind }} · {{ prep_coverage }}',v_if='!!prep_library',classes='text-body-2')
-        html.P('{{ prep_active_jobs }} active Galaxy jobs attached to this workspace.',v_if='!!prep_library',classes='text-caption')
+        html.P('{{ prep_job_status }}',v_if='!!prep_library && !!prep_job_status',classes='text-caption')
         with html.Div(v_if='!!prep_library',classes='d-flex flex-wrap my-3',style='gap:8px'):
             v.VBtn('Pause new batches',click=app.pause_preparation,disabled=('prep_busy || !prep_can_pause',),variant='outlined',size='small',prepend_icon='mdi-pause')
             v.VBtn('Resume pending work',click=app.resume_preparation,disabled=('prep_busy || !prep_can_resume',),variant='outlined',size='small',prepend_icon='mdi-play')

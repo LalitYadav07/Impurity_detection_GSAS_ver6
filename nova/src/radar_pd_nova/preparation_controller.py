@@ -51,7 +51,7 @@ def download_url(base,dataset):
 class PreparationMixin:
     def _init_preparation(self):
         self._preparation_workspace=None;self._prep_driver=None;self._prep_tasks=set();self._prep_stopping=False
-        self._prep_banks={};self._prep_bank_names={};self._prep_queue_errors={}
+        self._prep_banks={};self._prep_bank_names={};self._prep_queue_errors={};self._prep_recovering=set()
         self._prep_context=None;self._prep_catalogs=[];self._prep_discovered_identity=None
         self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
         self._prep_input_revision=0
@@ -68,6 +68,7 @@ class PreparationMixin:
             prep_opd_policy='all',prep_construct_limit='100',prep_discovery_rows=[],
             prep_discovery_ready=False,prep_candidate_count=0,prep_selected_banks=[],prep_inspected_banks=[],
             prep_parallel_jobs=PREPARATION_JOBS,prep_library='',prep_library_options=[],prep_entries=[],prep_coverage='',prep_active_jobs=0,
+            prep_job_status='',
             prep_library_kind='',prep_can_pause=False,prep_can_resume=False,
             prep_page=1,prep_pages=1,prep_entry_filter='all',prep_stage_filter='all',prep_stage_rows=[],
             prep_entry_search='',prep_table_count=0,
@@ -420,11 +421,21 @@ class PreparationMixin:
                 previous=self._prep_queue_errors.pop(key,None)
                 if previous and s.prep_error==previous:
                     s.prep_error=next(reversed(self._prep_queue_errors.values()),'')
-                busy=busy or bool(result['active'] or (not result['queue']['paused'] and not result['coverage']['complete']))
+                from .preparation_labels import queue_activity
+                activity=queue_activity(result['queue'])
+                busy=busy or bool(activity['accepted'] or activity['reconciling']
+                    or (not result['queue']['paused'] and not result['coverage']['complete']))
+                if key in self._prep_recovering and not s.prep_busy:
+                    self._prep_recovering.discard(key)
+                    if key==s.prep_library and not result['coverage']['complete']:
+                        count=result['coverage']['counts']['prepared']
+                        s.prep_message=f'Recovered {count} prepared entries from the original jobs. '+(
+                            'Preparation remains paused. Resume pending work when ready.' if result['queue']['paused'] else
+                            'Pending preparation is continuing.')
                 if key==s.prep_reference and self._prep_loaded_reference!=key and result['coverage']['all_prepared']:
                     await self._prep_load_reference(key)
                 if key==s.prep_library:
-                    s.prep_active_jobs=result['active'];self._preparation_table_changed()
+                    self._preparation_table_changed()
                     if result.get('blocked_training') and not result['active'] and not s.prep_busy:
                         s.prep_message='Ranking-model training is waiting for failed pattern blocks. Retry the entries needing attention, then resume preparation. Completed blocks remain available.'
                     elif result['coverage']['complete'] and not s.prep_busy:
@@ -439,7 +450,7 @@ class PreparationMixin:
             await asyncio.sleep(2)
 
     def _preparation_library_changed(self,**_):
-        s=self.server.state;s.prep_page=1;s.prep_download_href='';s.prep_active_jobs=0
+        s=self.server.state;s.prep_page=1;s.prep_download_href='';s.prep_active_jobs=0;s.prep_job_status=''
         s.prep_training_record_open=False;s.prep_training_record=None
         if s.prep_library:self._preparation_store().registry.select(s.prep_library)
         invalidate = getattr(self, '_symmetry_unapprove', None)
@@ -509,13 +520,16 @@ class PreparationMixin:
         s.prep_can_pause=False;s.prep_can_resume=False
         if not s.prep_library:
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
-            s.prep_coverage='';s.prep_library_kind='';s.prep_stage_rows=[]
+            s.prep_coverage='';s.prep_library_kind='';s.prep_stage_rows=[];s.prep_active_jobs=0;s.prep_job_status=''
             return
         try:
             store=self._preparation_store()
             library=store.registry.get(s.prep_library);coverage=library.coverage();counts=coverage['counts']
             queue=store._queues.get(s.prep_library)
             queue_state=queue.snapshot() if queue else None
+            from .preparation_labels import queue_activity,queue_activity_label
+            s.prep_active_jobs=queue_activity(queue_state)['accepted']
+            s.prep_job_status=queue_activity_label(queue_state)
             paused=queue_state['paused'] if queue_state else True
             from .preparation_labels import training_progress
             continuing=training_progress(library,queue_state)
@@ -578,6 +592,7 @@ class PreparationMixin:
             s.prep_entries=visible
         except (OSError,ValueError) as exc:
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1;s.prep_stage_rows=[]
+            s.prep_active_jobs=0;s.prep_job_status=''
             s.prep_error=str(exc)
 
     def show_preparation_training_record(self,entry_id,**_):
@@ -604,8 +619,11 @@ class PreparationMixin:
 
     def resume_preparation(self,**_):
         async def resume():
-            await asyncio.to_thread(self._preparation_store().start,self.server.state.prep_library,
+            key=self.server.state.prep_library
+            await asyncio.to_thread(self._preparation_store().start,key,
                 maximum_jobs=finite_number(self.server.state.prep_parallel_jobs,integer=True))
+            if self.server.state.prep_library==key:
+                self.server.state.prep_message='Preparation resumed. Completed results are retained; unfinished entries will continue.'
             self._prep_start_driver()
         return self._prep_action(resume(),'Resuming pending preparation')
 
@@ -614,6 +632,8 @@ class PreparationMixin:
             store=self._preparation_store();key=self.server.state.prep_library
             await asyncio.to_thread(store.registry.get(key).retry,entry)
             await asyncio.to_thread(store.start,key,maximum_jobs=finite_number(self.server.state.prep_parallel_jobs,integer=True))
+            if self.server.state.prep_library==key:
+                self.server.state.prep_message='The selected entry is ready to retry. Preparation is continuing; completed results are retained.'
             self._prep_start_driver()
         return self._prep_action(retry(),'Retrying the selected failed entry')
 
@@ -635,6 +655,7 @@ class PreparationMixin:
         async def recover():
             key=await asyncio.to_thread(self._preparation_store().recover,identifier(self.server.state.prep_saved))
             self.server.state.prep_library=key;self.server.state.prep_tab='libraries';self._prep_refresh()
+            self._prep_recovering.add(key)
             self.server.state.prep_message=(
                 'Restored the saved queue. Checking its original jobs and artifacts; '
                 'no new calculations will be submitted until you resume pending work.')
@@ -700,7 +721,7 @@ class PreparationMixin:
         if tasks:await asyncio.gather(*tasks,return_exceptions=True)
         self._prep_tasks.clear();self._prep_driver=None
         self._preparation_workspace=None
-        self._prep_banks={};self._prep_bank_names={};self._prep_queue_errors={}
+        self._prep_banks={};self._prep_bank_names={};self._prep_queue_errors={};self._prep_recovering=set()
         self._prep_context=None;self._prep_catalogs=[];self._prep_discovered_identity=None
         self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
         self._prep_profile_handoff=None;self._prep_range_axis='native';self._prep_input_revision+=1

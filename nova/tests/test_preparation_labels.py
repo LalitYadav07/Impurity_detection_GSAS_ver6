@@ -7,6 +7,31 @@ import pytest
 from radar_pd_nova.preparation_labels import entry_label,scope_labels,native_dimensions,training_description,training_validation
 
 
+@pytest.mark.parametrize('phase,handle,expected',[
+    ('awaiting_submission',None,dict(accepted=0,reconciling=0,waiting=1)),
+    ('awaiting_submission',dict(submission_started=False,job=None),dict(accepted=0,reconciling=0,waiting=1)),
+    ('needs_recovery',dict(submission_started=True,job=None),dict(accepted=0,reconciling=1,waiting=0)),
+    ('submitted',dict(submission_started=True,job=dict(status='queued')),dict(accepted=1,reconciling=0,waiting=0)),
+    ('submitted',dict(submission_started=True,job=dict(status='running')),dict(accepted=1,reconciling=0,waiting=0)),
+    ('submitted',dict(submission_started=True,job=dict(status='ok')),dict(accepted=1,reconciling=0,waiting=0)),
+    ('collected',dict(submission_started=True,job=dict(status='ok')),dict(accepted=0,reconciling=0,waiting=0)),
+])
+def test_queue_status_does_not_claim_an_unsubmitted_intent_is_a_galaxy_job(phase,handle,expected):
+    from radar_pd_nova.preparation_labels import queue_activity
+    assert queue_activity(dict(jobs=[dict(phase=phase,handle=handle)]))==expected
+
+
+def test_queue_status_label_keeps_submission_uncertainty_and_completed_receipts_distinct():
+    from radar_pd_nova.preparation_labels import queue_activity_label
+    state=dict(jobs=[dict(phase='submitted',handle=dict(job=dict(status='ok'))),
+        dict(phase='needs_recovery',handle=dict(submission_started=True,job=None)),
+        dict(phase='awaiting_submission',handle=None),
+        dict(phase='collected',handle=dict(job=dict(status='ok')))])
+    assert queue_activity_label(state)==(
+        '1 accepted Galaxy job awaiting results · 1 submission being checked · 1 batch waiting to submit.')
+    assert queue_activity_label(None)=='No Galaxy jobs awaiting results.'
+
+
 @pytest.mark.parametrize('phase,started,status,reason,expected',[
     ('awaiting_submission',False,None,'','no training job has been acknowledged'),
     ('needs_recovery',True,None,'','Recovering the existing training submission'),

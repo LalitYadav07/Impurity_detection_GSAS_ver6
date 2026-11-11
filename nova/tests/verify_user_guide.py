@@ -107,6 +107,8 @@ def verify_content(root: Path, expected_version: str | None = None) -> dict:
         assert ((path.suffix == ".png" and raw.startswith(b"\x89PNG\r\n\x1a\n")) or
                 (path.suffix == ".jpg" and raw.startswith(b"\xff\xd8\xff"))), capture_id
     pages = {}
+    assert set(manifest['pages']) == {name for name in actual_files if name.endswith('.html')}, \
+        'Every bundled guide page must remain registered and checked'
     for name in manifest["pages"]:
         assert name in manifest["files"], name
         text = (root / name).read_text()
@@ -133,6 +135,8 @@ def verify_content(root: Path, expected_version: str | None = None) -> dict:
         for image in page.images:
             assert image.get("alt", "").strip(), (name, image)
     main = pages["index.html"]
+    if 'experiment-planner.html' in pages:
+        assert 'experiment-planner.html' in main.refs, 'The planner guide must remain reachable from the main guide'
     assert main.meta["radar-pd-guide-version"] == expected_version
     assert main.tasks == manifest["tasks"] and len(main.tasks) == len(set(main.tasks))
     assert all(target in main.ids for target in main.copy_targets)

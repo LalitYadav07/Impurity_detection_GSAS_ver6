@@ -365,6 +365,53 @@ def test_recovery_explains_receipt_checks_before_starting_collection(app,monkeyp
     assert 'until you resume pending work' in s.prep_message
 
 
+def test_completed_recovery_of_paused_work_replaces_checking_message_and_stops_idle_polling(app,monkeypatch):
+    application,store,key,_=app;s=application.server.state
+    s.prep_library=key;s.prep_message='Checking its original jobs and artifacts'
+    application._prep_recovering.add(key);calls=[]
+    queue_state=dict(paused=True,jobs=[dict(phase='awaiting_submission',handle=None)])
+    def tick(**_):
+        calls.append(True)
+        return dict(active=1,queue=queue_state,coverage=dict(complete=False,all_prepared=False,counts=dict(prepared=24)))
+    store._queues={key:SimpleNamespace(tick=tick)}
+    monkeypatch.setattr(application,'_preparation_table_changed',lambda:None)
+    monkeypatch.setattr(application,'_prep_refresh',lambda:None)
+    async def no_idle_poll(*_):raise AssertionError('A paused undispatched intent is not an active Galaxy job')
+    monkeypatch.setattr(module.asyncio,'sleep',no_idle_poll)
+    asyncio.run(application._prep_drive())
+    assert calls==[True] and not application._prep_recovering
+    assert s.prep_message=='Recovered 24 prepared entries from the original jobs. Preparation remains paused. Resume pending work when ready.'
+
+
+def test_paused_acknowledged_job_is_still_collected(app,monkeypatch):
+    application,store,key,_=app;s=application.server.state;s.prep_library=key
+    calls=[];sleeps=[]
+    def tick(**_):
+        calls.append(True)
+        phase='submitted' if len(calls)==1 else 'collected'
+        return dict(active=int(phase=='submitted'),queue=dict(paused=True,jobs=[dict(phase=phase,
+            handle=dict(job=dict(status='running' if phase=='submitted' else 'ok')))]),
+            coverage=dict(complete=False,all_prepared=False,counts=dict(prepared=1)))
+    store._queues={key:SimpleNamespace(tick=tick)}
+    monkeypatch.setattr(application,'_preparation_table_changed',lambda:None)
+    monkeypatch.setattr(application,'_prep_refresh',lambda:None)
+    async def next_observation(*_):sleeps.append(True)
+    monkeypatch.setattr(module.asyncio,'sleep',next_observation)
+    asyncio.run(application._prep_drive())
+    assert len(calls)==2 and sleeps==[True]
+
+
+def test_resuming_preparation_confirms_completion_instead_of_leaving_action_title(app,monkeypatch):
+    application,store,key,service=app;s=application.server.state;s.prep_library=key
+    monkeypatch.setattr(store,'start',lambda *_,**__:None)
+    async def resume():
+        application.resume_preparation()
+        await asyncio.gather(*tuple(application._prep_tasks))
+    asyncio.run(resume())
+    assert not s.prep_busy and not service.submissions
+    assert s.prep_message=='Preparation resumed. Completed results are retained; unfinished entries will continue.'
+
+
 def test_outdated_reference_replaces_old_completion_message_with_revalidation_action(app,tmp_path):
     application,store,key,service=app;s=application.server.state
     finish_inspection(store,key,service,tmp_path,old_implementation=True)

@@ -204,20 +204,24 @@ def build(root: Path) -> dict:
         prompt = ""
         if task.get("prompt"):
             prompt = f'<div class="prompt"><div class="prompt-head"><strong>Example text to adapt</strong><button type="button" data-copy="prompt-{e(task["id"])}">Copy example</button></div><pre id="prompt-{e(task["id"])}">{e(task["prompt"])}</pre><p>{e(task["prompt_note"])}</p></div>'
+        notice = f'<p>{task["notice"]}</p>' if task.get("notice") else ""
         next_link = f'<a href="#{e(TASKS[number]["id"])}">Next: {e(TASKS[number]["title"])} →</a>' if number < len(TASKS) else '<a href="#downloads">Example files →</a>'
         cards.append(f'''<article class="task" id="{e(task['id'])}" data-task="{e(task['id'])}">
 <div class="task-head"><p class="kicker">{e(task['group'])} · {number:02}</p><h2>{e(task['title'])}</h2><p>{e(task['purpose'])}</p></div>
-<div class="task-body">{visual(task, captures, version)}<div class="directions"><ol class="steps">{steps}</ol><div class="expected"><strong>What you should see</strong><p>{task['expected']}</p></div>{prompt}</div></div>
+<div class="task-body">{visual(task, captures, version)}<div class="directions"><ol class="steps">{steps}</ol><div class="expected"><strong>What you should see</strong><p>{task['expected']}</p></div>{notice}{prompt}</div></div>
 <div class="task-details">{details}</div><div class="task-footer"><a href="#top">Back to start ↑</a>{next_link}</div></article>''')
     downloads = "".join(f'<div class="download-item"><a href="inputs/{e(name)}" download>{e(title)}</a><p>{e(note)}</p></div>' for name, title, note in DOWNLOADS)
     help_items = "".join(f'<details><summary>{e(title)}</summary><div class="detail-body"><p>{text}</p></div></details>' for title, text in TROUBLESHOOTING)
+    planner = (root / "experiment-planner.html").is_file()
+    planner_link = '<a class="utility" href="experiment-planner.html">Simulate an experiment</a>' if planner else ''
+    planner_route = '<a class="route" href="experiment-planner.html"><strong>I am planning an experiment</strong><span>Predict a POWGEN pattern and compare counting times. No IPTS required.</span></a>' if planner else ''
     html = f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="radar-pd-guide-version" content="{e(version)}"><title>RADAR-PD {e(version)} — user guide</title><link rel="stylesheet" href="guide.css"></head>
 <body id="top"><a class="skip" href="#main">Skip to guide</a><header class="page-head"><a class="brand" href="#top">RADAR-PD user guide</a><span class="version">Guide for application {e(version)}<br>Updated 11 November 2026</span></header>
-<div class="shell"><aside class="sidebar"><label for="task-search">Find a task or control</label><input id="task-search" type="search" placeholder="Try profile, restore, error bars…" aria-controls="main"><nav aria-label="Guide tasks">{''.join(nav)}</nav><a class="utility" href="#downloads">Example files</a><a class="utility" href="#help">Troubleshooting</a><a class="utility" href="reference-0.4.34.html">Archived AGES walkthrough</a><p class="nav-note">Keep your RADAR-PD session open while reading. This guide opens in a separate tab.</p></aside>
+<div class="shell"><aside class="sidebar"><label for="task-search">Find a task or control</label><input id="task-search" type="search" placeholder="Try profile, restore, error bars…" aria-controls="main"><nav aria-label="Guide tasks">{''.join(nav)}</nav>{planner_link}<a class="utility" href="#downloads">Example files</a><a class="utility" href="#help">Troubleshooting</a><a class="utility" href="reference-0.4.34.html">Archived AGES walkthrough</a><p class="nav-note">Keep your RADAR-PD session open while reading. This guide opens in a separate tab.</p></aside>
 <main id="main"><section class="intro"><p class="kicker">From your data to an inspected result</p><h1>Start with one result.<br>Then follow your experiment.</h1><p class="lead">Choose your starting point, check the inputs, and inspect the fit. Refinement and model searches are optional next steps.</p>
-<div class="routes"><a class="route" href="#live-setup"><strong>I have an IPTS</strong><span>Use Live and the guided setup. Existing scans work too.</span></a><a class="route" href="#single-pattern"><strong>I have a diffraction file</strong><span>Use Single pattern with a matching profile and candidate library.</span></a><a class="route" href="#recover"><strong>I have saved work</strong><span>Restore results or a stopped watch from the same Galaxy History.</span></a></div>
-<p class="scope-note"><b>A first Live result:</b> follow tasks 1–6. The instructions use current {e(version)} controls. Each screenshot identifies its own version and date; the public AGES images document the older 0.4.34 example.</p></section>
+<div class="routes">{planner_route}<a class="route" href="#live-setup"><strong>I have an IPTS</strong><span>Use Live and the guided setup. Existing scans work too.</span></a><a class="route" href="#single-pattern"><strong>I have a diffraction file</strong><span>Use Single pattern with a matching profile and candidate library.</span></a><a class="route" href="#recover"><strong>I have saved work</strong><span>Restore results or a stopped watch from the same Galaxy History.</span></a></div>
+<p class="scope-note"><b>A first Live result:</b> open the workspace, use the guided setup, choose inputs, check one scan, then start monitoring. The instructions use current {e(version)} controls. Each screenshot identifies its own version and date; the public AGES images document the older 0.4.34 example.</p></section>
 <p id="search-status" class="search-status" role="status" aria-live="polite"></p><p id="search-empty" class="empty" hidden>No matching task. Try a visible control name or clear the search.</p>
 {''.join(cards)}
 <section class="downloads" id="downloads"><p class="kicker">Reference material</p><h2>Example files and the archived walkthrough</h2><p>These files belong to the recorded POWGEN IPTS-2767 Al₂O₃/MgO example. They demonstrate formats and choices; review them for your own experiment.</p><div class="download-grid">{downloads}</div><p>Prepare CIFs from a source you may use. Licensed ICSD exports are not included.</p><div class="reference-callout"><a href="reference-0.4.34.html"><b>Open the complete 0.4.34 AGES walkthrough →</b></a><br>17 screenshot-led lessons and 253 field-by-field choices, preserved as a dated reference. Its recorded results are historical evidence; current procedures are above.</div></section>
@@ -231,7 +235,7 @@ def build(root: Path) -> dict:
     files = {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
              for path in sorted(root.rglob("*")) if path.is_file() and path.name != "manifest.json"}
     manifest = dict(schema="radar-pd-user-guide/v2", application_version=version,
-                    pages=["index.html", "reference-0.4.34.html"],
+                    pages=["index.html", "reference-0.4.34.html"] + (["experiment-planner.html"] if planner else []),
                     reference_version="0.4.34", reference_statistics=dict(lessons=17, options=253, rendered_options=254, screenshot_templates=53),
                     tasks=[task["id"] for task in TASKS],
                     screenshots=len([name for name in files if name.startswith("assets/")]),
