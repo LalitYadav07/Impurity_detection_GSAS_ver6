@@ -100,7 +100,7 @@ def model_exploration(app):
         html.P('Qualified fits appear first when available. All failed, unresolved and physically rejected trials remain inspectable.',v_if='!sx_setup && sx_groups.length',classes='rf-notice')
         with html.Div(v_if='sx_setup || !sx_campaign',classes='rf-card sx-setup'):
             html.H3('Explore models from a completed GPX')
-            html.P('Enter a commensurate k vector, or use the magnetic k survey below. Review hypotheses before native refinement.',classes='rf-notice')
+            html.P("{{ !sx_has_context ? 'Choose a completed scan and inspect its exact parent. Then select magnetic models or structural displacement modes.' : sx_kind === 'magnetic' ? 'Choose magnetic atoms and ionic form factors. Enter a commensurate k vector or run the magnetic k survey, then review candidate models before refinement.' : 'Choose the structural parent and, when available, a before-transition reference. Enter the distortion k vector and review the structural candidates before refinement.' }}",classes='rf-notice')
             with html.Div(classes='rf-toolbar'):
                 html.P('{{ sx_preparation_notice }}',v_if='!!sx_preparation_notice',classes='rf-notice')
                 v.VBtn('Choose or prepare calculations',click=app.open_preparation_workspace,
@@ -109,6 +109,8 @@ def model_exploration(app):
                 scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources',
                     placeholder='Type a run number, temperature or recipe stage',persistent_placeholder=True)
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')
+            with html.Div(v_if='sx_has_context',classes='rf-toolbar'):
+                select('Exploration','sx_kind',"[{title:'Magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
             with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
                 html.Summary('Describe a magnetic model search')
                 html.P('Describe magnetic sites, ions and physical bounds. If k is unknown, request a data-based k survey; review its candidates before discovery. State whether moments may cant and whether to refine a shared nuclear/magnetic intensity scale.',classes='rf-notice')
@@ -120,7 +122,6 @@ def model_exploration(app):
                 html.P('{{ sx_planning_cost }}',v_if='!!sx_planning_cost',classes='rf-notice')
                 html.P('{{ note }}',v_for='note in sx_planning_notes',classes='rf-notice')
             with html.Div(v_if='sx_has_context',classes='sx-settings'):
-                select('Exploration','sx_kind',"[{title:'Magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
                 html.P('For structural distortions, enter the distortion k vector in the parent basis. Use 0, 0, 0 for a zone-center distortion with unchanged translation periodicity. The magnetic k survey and magnetic setup assistant do not configure structural searches.',v_if="sx_kind === 'structural'",classes='rf-notice')
                 select('Moment model','sx_moment_model',"[{title:'Collinear moments',value:'collinear'},{title:'Symmetry-allowed components · can cant',value:'symmetry_allowed'}]",v_if="sx_kind === 'magnetic'")
                 select('Magnetic optimizer','sx_magnetic_optimizer',"[{title:'Fast checked optimizer · fixed nuclear model',value:'profiled_quadratic'},{title:'GSAS-II Hessian',value:'gsas_hessian'}]",v_if="sx_kind === 'magnetic'")
