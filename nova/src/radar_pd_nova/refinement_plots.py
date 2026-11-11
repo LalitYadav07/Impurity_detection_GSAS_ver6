@@ -273,7 +273,7 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute',show_
                     suffix=' · '+histogram_series_label(group[0]['final'],group[0]['source'],hkey) if len(histograms)>1 else ''
                     review_options=(dict(hovertext=review_hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>') if source_key=='final' else {})
                     symbols=['x' if value else marker for value in needs_review] if source_key=='final' and any(needs_review) else marker
-                    figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+suffix+(' · original' if source_key=='baseline' else ' · polished'+review_suffix),line=dict(color=color,dash=line,width=1.3),marker=dict(symbol=symbols,size=6),error_x=error_x,customdata=[j['id'] for j in group],connectgaps=False,**review_options))
+                    figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=label+suffix+(' · original' if source_key=='baseline' else ' · polished'+review_suffix),line=dict(color=color,dash=line,width=1.3),marker=dict(symbol=symbols,size=6),error_x=error_x,customdata=[j.get('trend_point',j['id']) for j in group],connectgaps=False,**review_options))
             continue
         if metric=='phase_fractions':
             phases={p['key']:p for row in group for p in row['final'].get('parameters',[]) if p['kind']=='weight'}
@@ -285,7 +285,7 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute',show_
                 figure.add_trace(go.Scatter(x=x,y=values,mode='lines+markers',name=phase+' · '+label+review_suffix,line=dict(color=COLORS[(index+phase_index)%len(COLORS)],width=1.3),
                     marker=dict(symbol=['x' if value else 'circle' for value in needs_review],size=6),
                     hovertext=review_hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>',
-                    error_x=error_x,customdata=[j['id'] for j in group],connectgaps=False))
+                    error_x=error_x,customdata=[j.get('trend_point',j['id']) for j in group],connectgaps=False))
             continue
         values=[];errors=[];statuses=[];unit='';parameter=None
         for row in group:
@@ -323,7 +323,7 @@ def trend_figure(rows,*,metric='rwp',x_key='run_number',display='absolute',show_
             marker=dict(size=6,symbol=['x' if value else 'circle' for value in needs_review]),
             error_y=dict(type='data',array=errors,visible=display=='absolute' and any(e is not None for e in errors)),
             error_x=error_x,
-            customdata=[j['id'] for j in group],connectgaps=False,
+            customdata=[j.get('trend_point',j['id']) for j in group],connectgaps=False,
             hovertext=hover,hovertemplate='%{x}<br>%{y}<br>%{hovertext}<extra>%{fullData.name}</extra>'))
     figure.update_layout(template='plotly_white',height=430,margin=dict(l=75,r=25,t=55,b=60),legend=dict(orientation='h',y=1.18),
         xaxis=dict(title=x_title if groups else 'Scan number',type=x_type if groups else 'linear'),yaxis=dict(title=title),

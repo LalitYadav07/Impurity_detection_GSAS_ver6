@@ -1155,6 +1155,30 @@ class RefinementMixin(GuidedRefinementMixin):
         self.server.state.rf_follow=False
         self._refinement_schedule(self._select_refinement_job(str(uid)),'radar-refinement-select')
 
+    def select_refinement_trend_point(self,event,**_):
+        """Open only the checkpoint represented by the clicked, current point."""
+        s=self.server.state;w=self._refinement_workspace
+        if not w or s.rf_result_tab!='trends' or not isinstance(event,dict):return
+        points=event.get('points') or []
+        if not isinstance(points,list):return
+        point=points[0].get('customdata') if points and isinstance(points[0],dict) else None
+        if not isinstance(point,dict) or not isinstance(point.get('job_id'),str):return
+        job=w.state['jobs'].get(point.get('job_id'))
+        if not job or job['source']['experiment']!=s.rf_experiment:return
+        rid=point.get('recipe_id');stage=point.get('stage')
+        result=job.get('result') or {}
+        item=next((row for row in result.get('stages',[]) if row['id']==stage),{})
+        view=result.get('final_view') if stage=='final' else item.get('view')
+        valid=(rid in job['recipes'] and (s.rf_recipe_filter=='all' or rid==s.rf_recipe_filter)
+               and point.get('trend_stage')==s.rf_trend_stage
+               and point.get('source_sha256')==job['source'].get('source_sha256')
+               and bool(view) and point.get('view_sha256')==(result.get('files') or {}).get(view))
+        if not valid:
+            s.rf_message='This trend has changed. Select a point from the updated plot.';s.flush();return
+        s.rf_follow=False
+        self._refinement_schedule(self._select_refinement_job(job['id'],requested_stage=stage,show_fit=True),
+                                  'radar-refinement-trend-select')
+
     def _read_refinement_view(self,job,name):
         root=Path(job['result']['directory']).resolve();path=(root/name).resolve()
         expected=job['result']['files'].get(name)
@@ -1167,7 +1191,7 @@ class RefinementMixin(GuidedRefinementMixin):
             if len(self._refinement_view_cache)>30:self._refinement_view_cache.pop(next(iter(self._refinement_view_cache)))
         return self._refinement_view_cache[stamp]
 
-    async def _select_refinement_job(self,uid):
+    async def _select_refinement_job(self,uid,*,requested_stage=None,show_fit=False):
         s=self.server.state;w=self._refinement_workspace
         owner=object();self._refinement_selection_owner=owner
         if not uid:
@@ -1207,9 +1231,12 @@ class RefinementMixin(GuidedRefinementMixin):
         positions=refinement_stage_positions(result,recipe_plan)
         s.rf_stages=([dict(title='Final refined result',value='final')] if result.get('final_view') else [])+[
             dict(title=(f"{positions[v['id']]}. " if v['id'] in positions else '')+v['title'],value=v['id']) for v in stages]
+        if requested_stage is not None and requested_stage not in {row['value'] for row in s.rf_stages}:
+            s.rf_error='This checkpoint is no longer available. Refresh the trend and choose a current point.';s.flush();return
         baseline=None
         if s.rf_stages:
-            if not result.get('final_view'):s.rf_stage=s.rf_stages[-1]['value']
+            if requested_stage is not None:s.rf_stage=requested_stage
+            elif not result.get('final_view'):s.rf_stage=s.rf_stages[-1]['value']
             try:
                 baseline=await asyncio.to_thread(self._read_refinement_view,job,result['baseline_view'])
                 if not current():return
@@ -1229,10 +1256,13 @@ class RefinementMixin(GuidedRefinementMixin):
         s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name,
             filename=refinement_artifact_filename(job,name,w.state.get('recipes',{})))
             for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
-        s.rf_download=(result.get('final_gpx') or (stages[-1]['gpx'] if stages else (s.rf_downloads[0]['value'] if s.rf_downloads else '')))
+        selected_gpx=(result.get('final_gpx') if s.rf_stage=='final' else
+                      next((row['gpx'] for row in stages if row['id']==s.rf_stage),None))
+        s.rf_download=selected_gpx or (s.rf_downloads[0]['value'] if s.rf_downloads else '')
         if result:s.rf_selected_message=refinement_status_message(result,baseline,source=job['source'])
         if not current():return
         s.rf_has_output=baseline is not None
+        if show_fit and s.rf_has_output:s.rf_result_tab='fit'
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
 
     def _refinement_stage_changed(self,**_):
@@ -1314,35 +1344,66 @@ class RefinementMixin(GuidedRefinementMixin):
         s=self.server.state;w=self._refinement_workspace
         if not w:return
         try:
-            rows=[];eligible=0
-            stage_options={'final':'Final recipe output'}
-            for candidate_job in w.state['jobs'].values():
-                if candidate_job['source']['experiment']!=s.rf_experiment:continue
-                if s.rf_recipe_filter!='all' and s.rf_recipe_filter not in candidate_job['recipes']:continue
-                for stage in (candidate_job.get('result') or {}).get('stages',[]):
-                    stage_options.setdefault(stage['id'],stage.get('title') or stage['id'])
-            s.rf_trend_stage_options=[dict(value=k,title=v) for k,v in stage_options.items()]
-            selected_stage=getattr(s,'rf_trend_stage','final')
-            for job in w.state['jobs'].values():
-                if job['source']['experiment']!=s.rf_experiment or job['status'] not in {'completed','needs_review'}:continue
-                if s.rf_recipe_filter!='all' and s.rf_recipe_filter not in job['recipes']:continue
-                eligible+=1
-                result=job['result']
+            rows=[];eligible=0;no_final=0;missing_stage=0;unavailable=0
+            jobs=[job for job in w.state['jobs'].values()
+                  if job['source']['experiment']==s.rf_experiment
+                  and (s.rf_recipe_filter=='all' or s.rf_recipe_filter in job['recipes'])]
+            stage_options={'final':dict(title='Final recipe output',recipe_id=None,stage_id=None)}
+            for job in jobs:
                 rid=s.rf_recipe_filter if s.rf_recipe_filter!='all' else job['recipe_id']
+                recipe=w.state['recipes'].get(rid,{})
+                result=job.get('result') or {}
+                positions=refinement_stage_positions(result,recipe.get('plan'))
+                for stage in result.get('stages',[]):
+                    # Stage IDs are only unique within one recipe. Do not
+                    # combine unrelated "stage1" checkpoints in one trend.
+                    key=json.dumps([rid,stage['id']],separators=(',',':'))
+                    number=f"{positions[stage['id']]}. " if stage['id'] in positions else ''
+                    title=f"Recipe {recipe.get('version',rid)} · {number}{stage.get('title') or stage['id']}"
+                    stage_options.setdefault(key,dict(title=title,recipe_id=rid,stage_id=stage['id']))
+            selected_stage=getattr(s,'rf_trend_stage','final')
+            selection_notice=''
+            if selected_stage not in stage_options:
+                legacy=[key for key,value in stage_options.items() if value['stage_id']==selected_stage]
+                selected_stage=legacy[0] if len(legacy)==1 else 'final'
+                s.rf_trend_stage=selected_stage
+                if not legacy:selection_notice=' The previous stage is unavailable in this selection; showing final outputs.'
+                elif len(legacy)>1:selection_notice=' Choose the recipe-specific retained stage above; stage names differ between recipes.'
+            s.rf_trend_stage_options=[dict(value=key,title=value['title']) for key,value in stage_options.items()]
+            selection=stage_options[selected_stage]
+            selected_jobs=[job for job in jobs if selection['recipe_id'] is None or selection['recipe_id'] in job['recipes']]
+            for job in selected_jobs:
+                if job['status'] not in {'completed','needs_review'}:continue
+                eligible+=1
+                result=job.get('result') or {}
+                rid=selection['recipe_id'] or (s.rf_recipe_filter if s.rf_recipe_filter!='all' else job['recipe_id'])
                 try:
                     compact=result.get('trend_views') or {}
-                    baseline=compact.get('baseline') or self._read_refinement_view(job,result['baseline_view'])
                     if selected_stage=='final':
-                        if not result.get('final_view') and not compact.get('final'):continue
+                        if not result.get('final_view') and not compact.get('final'):
+                            if result.get('final_gpx'):unavailable+=1
+                            else:no_final+=1
+                            continue
                         final=compact.get('final') or self._read_refinement_view(job,result['final_view'])
                     else:
-                        stage=next((r for r in result.get('stages',[]) if r['id']==selected_stage),None)
-                        if not stage:continue
+                        stage=next((r for r in result.get('stages',[]) if r['id']==selection['stage_id']),None)
+                        if not stage:
+                            missing_stage+=1
+                            continue
                         final=self._read_refinement_view(job,stage['view'])
+                    baseline=compact.get('baseline') or self._read_refinement_view(job,result['baseline_view'])
+                    view=result.get('final_view') if selected_stage=='final' else stage['view']
+                    point=dict(job_id=job['id'],recipe_id=rid,stage=selection['stage_id'] or 'final',
+                        trend_stage=selected_stage,source_sha256=job['source'].get('source_sha256'),
+                        view_sha256=(result.get('files') or {}).get(view))
                     rows.append(dict(id=job['id'],source=job['source'],recipe_id=rid,recipe_label='Recipe '+str(w.state['recipes'][rid]['version']),baseline=baseline,final=final,
-                        review=refinement_review_status(result)))
-                except (OSError,ValueError):continue
-            s.rf_trend_notice=f'{len(rows)} of {eligible} processed results shown for {stage_options.get(selected_stage,selected_stage)}. Retained stages are intermediate checkpoints, not accepted final refinements.'+(' Recover missing saved artifacts to complete this trend.' if len(rows)<eligible else '')
+                        review=refinement_review_status(result),trend_point=point))
+                except (OSError,ValueError,KeyError):unavailable+=1
+            s.rf_trend_notice=f"{len(rows)} of {eligible} processed results shown for {selection['title']}."+selection_notice
+            if selected_stage!='final':s.rf_trend_notice+=' Retained stages are intermediate checkpoints, not accepted final refinements.'
+            if no_final:s.rf_trend_notice+=f' {no_final} result(s) have no accepted final GPX. Select a retained stage above to inspect their earlier fits.'
+            if missing_stage:s.rf_trend_notice+=f' {missing_stage} result(s) do not contain this stage.'
+            if unavailable:s.rf_trend_notice+=f' {unavailable} saved result(s) could not be loaded. Recover their saved artifacts.'
             options={'rwp':'Rwp · original and polished'}
             for row in rows:
                 for p in row['final'].get('parameters',[]):
@@ -1355,6 +1416,13 @@ class RefinementMixin(GuidedRefinementMixin):
             if s.rf_trend_axis not in {v['value'] for v in s.rf_trend_axes}:s.rf_trend_axis='run_number'
             figure=trend_figure(rows,metric=s.rf_trend_metric,x_key=s.rf_trend_axis,display=s.rf_trend_display,
                 show_temperature_span=getattr(s,'rf_trend_temperature_span',True))
+            if not rows:
+                message=('No accepted final GPX. Select a retained stage above.' if no_final else
+                         'Saved result files are unavailable. Recover their artifacts.' if unavailable else
+                         'This stage is absent from the processed results.' if missing_stage else
+                         'Waiting for a completed refinement in this selection.' if any(job['status'] in {'queued','running','submitting'} for job in selected_jobs) else
+                         'No processed refinements in this selection.')
+                figure=empty_figure(message)
             if (figure.layout.meta or {}).get('temperature_spans'):
                 s.rf_trend_notice+=' Horizontal bars show the recorded within-scan temperature range, not a 1σ uncertainty.'
             references=(figure.layout.meta or {}).get('references',[])

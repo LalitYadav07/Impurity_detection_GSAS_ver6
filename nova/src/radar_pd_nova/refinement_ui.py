@@ -234,9 +234,9 @@ def refinement_dashboard(app):
                         v_model=('rf_trend_temperature_span',),v_if="rf_trend_axis === 'temperature'",
                         density='compact',hide_details=True)
                     with html.Div(classes='rf-trend'):
-                        fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_trend.data',);fig.layout=('rf_trend.layout',)
+                        fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%',click=(app.select_refinement_trend_point,"[{points:($event.points || []).map(p=>({customdata:p.customdata}))}]"));fig.data=('rf_trend.data',);fig.layout=('rf_trend.layout',)
                     html.P('{{ rf_trend_notice }}',classes='rf-notice')
-                    html.P('Traces remain separate by sample, bank and recipe. Missing measured conditions leave gaps. Relative percent is supported for cell lengths and volume.',classes='rf-notice')
+                    html.P('Click a point to inspect that scan and recipe stage. Traces remain separate by sample, bank and recipe. Missing measured conditions leave gaps. Relative percent is supported for cell lengths and volume.',classes='rf-notice')
                 with html.Div(v_show="rf_result_tab === 'parameters'"):
                     with html.Div(v_if='rf_has_output'):
                         v.VTextField(label='Find phase, atom or parameter',v_model=('rf_parameter_search',),density='compact',variant='outlined',hide_details=True,classes='mb-3')
@@ -268,4 +268,4 @@ def refinement_dashboard(app):
             html.P('{{ rf_rwp_summary }}',v_if="rf_result_tab !== 'trends'",classes='rf-notice')
             html.P('{{ rf_trend_notice }}',v_if="rf_result_tab === 'trends'",classes='rf-notice')
             with html.Div(style='height:calc(100vh - 300px);min-height:260px'):
-                fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=("rf_result_tab === 'trends' ? rf_trend.data : rf_fit.data",);fig.layout=("rf_result_tab === 'trends' ? rf_trend.layout : rf_fit.layout",)
+                fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%',click=(app.select_refinement_trend_point,"[{points:($event.points || []).map(p=>({customdata:p.customdata}))}]"));fig.data=("rf_result_tab === 'trends' ? rf_trend.data : rf_fit.data",);fig.layout=("rf_result_tab === 'trends' ? rf_trend.layout : rf_fit.layout",)

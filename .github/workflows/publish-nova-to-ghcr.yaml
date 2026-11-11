@@ -150,6 +150,10 @@ jobs:
             /validation-tests/test_refinement_detail_owner.py \
             /validation-tests/test_refinement_download_names.py \
             /validation-tests/test_refinement_review_status.py \
+            /validation-tests/test_refinement_retained_trends.py \
+            /validation-tests/test_refinement_trend_arrivals.py \
+            /validation-tests/test_refinement_reference_caption.py \
+            /validation-tests/test_refinement_plots.py \
             /validation-tests/test_refinement_planner_payload.py \
             /validation-tests/test_refinement_convergence_request.py \
             /validation-tests/test_refinement_bound_labels.py \

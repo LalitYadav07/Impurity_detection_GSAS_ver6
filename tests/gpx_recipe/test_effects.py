@@ -1,9 +1,7 @@
 """Actual native effects and fail-closed input/target checks."""
-from pathlib import Path
 import sys
 from types import SimpleNamespace
 import pytest
-sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'scripts'))
 from gpx_recipe.effects import parameter_changes,require_fixed_values_unchanged
 from gpx_recipe.execution import check_preflight
 from gpx_recipe import advanced
