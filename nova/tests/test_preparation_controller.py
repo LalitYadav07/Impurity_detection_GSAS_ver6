@@ -427,7 +427,7 @@ def test_outdated_reference_replaces_old_completion_message_with_revalidation_ac
 def test_transient_queue_observation_is_repolled_without_a_new_dispatch(app,monkeypatch):
     app,store,_,_=app;calls=[];s=app.server.state;s.prep_library=''
     def tick(**kwargs):
-        assert kwargs=={'maximum_submissions':1}
+        assert kwargs=={'maximum_submissions':1,'maximum_replays':1}
         calls.append('same job')
         if len(calls)==1:raise TimeoutError('temporary observation failure')
         return dict(active=0,queue={'paused':True},coverage={'complete':True,'all_prepared':True})
@@ -437,6 +437,44 @@ def test_transient_queue_observation_is_repolled_without_a_new_dispatch(app,monk
     asyncio.run(app._prep_drive())
     assert calls==['same job','same job']
     assert not s.prep_error
+
+
+def test_paused_recovery_refreshes_each_verified_receipt_until_the_chain_is_complete(app,monkeypatch):
+    application,store,key,_=app;s=application.server.state
+    s.prep_library=key;application._prep_recovering.add(key)
+    calls=[];messages=[];delays=[]
+    def tick(**kwargs):
+        assert kwargs==dict(maximum_submissions=1,maximum_replays=1)
+        calls.append(True);n=len(calls)
+        return dict(active=0,queue=dict(paused=True,jobs=[]),
+            recovery=dict(total=3,verified=n,remaining=3-n),
+            coverage=dict(complete=False,all_prepared=False,counts=dict(prepared=n)))
+    store._queues={key:SimpleNamespace(tick=tick)}
+    monkeypatch.setattr(application,'_preparation_table_changed',lambda:messages.append(s.prep_message))
+    monkeypatch.setattr(application,'_prep_refresh',lambda:None)
+    async def immediate(delay):delays.append(delay)
+    monkeypatch.setattr(module.asyncio,'sleep',immediate)
+    asyncio.run(application._prep_drive())
+    assert len(calls)==3 and not application._prep_recovering
+    assert '1 / 3 checked' in messages[0] and '2 / 3 checked' in messages[1]
+    assert 'Recovered 3 prepared entries' in messages[2]
+    assert 'no new calculations' in messages[0]
+    assert delays==[0,0]
+
+
+def test_resume_control_stays_disabled_until_saved_result_checks_finish(app):
+    application,store,key,_=app;s=application.server.state;s.prep_library=key
+    progress=dict(total=2,verified=1,remaining=1)
+    store._queues={key:SimpleNamespace(
+        snapshot=lambda:dict(paused=True,jobs=[]),
+        recovery_progress=lambda state:progress)}
+    application._prep_refresh()
+    assert not s.prep_can_resume
+    assert '1 / 2 checked' in s.prep_job_status
+    progress.update(verified=2,remaining=0)
+    application._prep_refresh()
+    assert s.prep_can_resume
+    assert s.prep_job_status=='No Galaxy jobs awaiting results.'
 
 
 @pytest.mark.parametrize('base',['https://person:secret@galaxy.invalid','file:///private',

@@ -5,7 +5,7 @@ from pathlib import Path
 from ..execution import write_json
 from ..symmetry.compiler import file_sha,package_signature
 from . import structural_training_transfer as transfer
-from .tof_kernel_arrays import read_bounded
+from .tof_kernel_arrays import read_bounded,checksum
 
 SCHEMA='radar-structural-training-continuation-worker/v1'
 REASON='training_checkpoint_available'
@@ -14,7 +14,10 @@ RESULT='training-continuation-result.json'
 ARTIFACTS=['continuation/'+transfer.STATE,'continuation/'+transfer.RECEIPT]
 
 
-def validate(result,request,plan_sha):
+def validate(result,request,plan_sha,*,expected_implementation=None):
+    expected_implementation=package_signature() if expected_implementation is None else expected_implementation
+    if not checksum(expected_implementation):
+        raise ValueError('Training continuation needs a bound implementation digest')
     expected={'schema','status','kind','output','artifacts','plan_sha256','input_sha256',
         'grid','settings','implementation_sha256','identity','checkpoint_sha256','epochs',
         'epochs_completed','warmup_completed','dataset','seconds','training_seconds_cumulative',
@@ -25,13 +28,14 @@ def validate(result,request,plan_sha):
             or result['artifacts']!=ARTIFACTS or result['plan_sha256']!=plan_sha
             or result['input_sha256']!=[file_sha(request[k]) for k in ('source','instrument')]
             or result['grid']!=request['grid'] or result['settings']!=request['settings']
-            or result['implementation_sha256']!=package_signature()
+            or result['implementation_sha256']!=expected_implementation
             or any(type(result[key])is not int for key in ('epochs','epochs_completed','warmup_completed'))
             or result['epochs']!=request['settings']['epochs']
             or any(result[key] is not False for key in ('observations_included','scientific_result',
                 'trained_model','candidate_pruning_authorized'))):
         raise ValueError('Training continuation differs from its captured scientific request')
-    receipt,_=transfer.read(Path(result['output'])/'continuation',identity=result['identity'],epochs=result['epochs'])
+    receipt,_=transfer.read(Path(result['output'])/'continuation',identity=result['identity'],epochs=result['epochs'],
+                            expected_implementation=expected_implementation)
     if any(result[key]!=receipt[key] for key in ('checkpoint_sha256','epochs_completed','warmup_completed')):
         raise ValueError('Training continuation progress differs from its complete numerical state')
     from .structural_training_counts import validate as validate_counts
@@ -41,10 +45,12 @@ def validate(result,request,plan_sha):
            for key in ('seconds','training_seconds_cumulative')):
         raise ValueError('Training continuation timing is invalid')
     from .structural_jobs import read_plan,resume_directory
-    plan=read_plan(request['plan']);previous=resume_directory(Path(request['plan']),plan)
+    plan=read_plan(request['plan']);previous=resume_directory(Path(request['plan']),plan,
+                                                           expected_implementation=expected_implementation)
     prior=(0,0)
     if previous is not None:
-        before,_=transfer.read(previous,identity=result['identity'],epochs=result['epochs'])
+        before,_=transfer.read(previous,identity=result['identity'],epochs=result['epochs'],
+                               expected_implementation=expected_implementation)
         prior=(before['epochs_completed'],before['warmup_completed'])
     if (result['epochs_completed'],result['warmup_completed'])<=prior:
         raise ValueError('A training continuation must advance a complete checkpoint boundary')

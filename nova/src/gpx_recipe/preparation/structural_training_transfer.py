@@ -121,8 +121,15 @@ def snapshot(directory,destination,*,identity,epochs):
     return receipt
 
 
-def read(directory,*,identity=None,epochs=None):
-    """A typed transfer does not make the contained optimizer authoritative."""
+def read(directory,*,identity=None,epochs=None,expected_implementation=None):
+    """Inspect captured bytes; execution defaults to the installed implementation.
+
+    Archive verification may supply the implementation from an authenticated
+    original job request. Restore/resume callers deliberately do not pass it.
+    """
+    expected_implementation=package_signature() if expected_implementation is None else expected_implementation
+    if not checksum(expected_implementation):
+        raise ValueError('Training continuation needs a bound implementation digest')
     directory=Path(directory);receipt=json.loads(read_bounded(directory/RECEIPT,8192))
     expected={'schema','identity','implementation_sha256','checkpoint_sha256','epochs',
         'epochs_completed','warmup_completed','elapsed_seconds','role','trained_model',
@@ -132,7 +139,7 @@ def read(directory,*,identity=None,epochs=None):
     if (not isinstance(receipt,dict) or set(receipt)!=expected or receipt['schema'] not in (SCHEMA,CUDA_SCHEMA)
             or cuda and receipt['device']!='cuda'
             or not checksum(receipt['identity']) or not checksum(receipt['checkpoint_sha256'])
-            or receipt['implementation_sha256']!=package_signature()
+            or receipt['implementation_sha256']!=expected_implementation
             or type(receipt['epochs'])is not int or not 1<=receipt['epochs']<=1000
             or (identity is not None and receipt['identity']!=identity)
             or (epochs is not None and receipt['epochs']!=epochs)

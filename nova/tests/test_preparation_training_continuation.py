@@ -111,6 +111,26 @@ def test_multiple_segments_keep_one_attempt_and_advance_the_captured_state(remot
     queue.tick();assert len(service.submissions)==3
 
 
+def test_old_completed_checkpoint_can_be_recovered_but_not_resumed_on_new_code(remote,tmp_path,monkeypatch):
+    from gpx_recipe.preparation import structural_training_segments as segments
+    from gpx_recipe.preparation import structural_training_transfer as transfer
+    queue,_,_=setup(remote,tmp_path);_,service,_=remote
+    first=queue.snapshot()['jobs'][0];finish_segment(queue,service,first)
+    original=first['handle']['request']['implementation_sha256']
+    assert original==segments.package_signature()
+    monkeypatch.setattr(segments,'package_signature',lambda:'b'*64)
+    monkeypatch.setattr(transfer,'package_signature',lambda:'b'*64)
+    queue.pause();result=queue.tick()
+    outcome=result['queue']['jobs'][0]['outcomes'][first['members'][0]['entry']]
+    assert outcome['state']=='pending' and outcome['reason']==REASON
+    assert len(service.submissions)==1
+    # Archival verification against the original job cannot make that old
+    # optimizer valid for a newly submitted worker implementation.
+    queue.resume()
+    with pytest.raises(ValueError,match='captured scientific request'):queue.tick()
+    assert len(service.submissions)==1
+
+
 def test_explicit_retry_after_a_failed_continuation_retains_acknowledged_optimizer_progress(remote,tmp_path):
     queue,_,_=setup(remote,tmp_path);_,service,_=remote
     first=queue.snapshot()['jobs'][0];finish_segment(queue,service,first)

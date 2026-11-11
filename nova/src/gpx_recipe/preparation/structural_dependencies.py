@@ -201,11 +201,11 @@ def stage(library, model, payload, directory, *, resume=None):
     return payload
 
 
-def verify(library, model, request):
+def verify(library, model, request,*,expected_implementation=None):
     """Publication must still refer to every declared dependency, after recovery."""
     from .structural_jobs import read_plan,resume_directory,PROJECTED_PLAN_SCHEMAS
     plan=read_plan(request['plan'])
-    resume_directory(Path(request['plan']),plan)
+    resume_directory(Path(request['plan']),plan,expected_implementation=expected_implementation)
     expected=[]
     for key,assets in dependencies(library,model):
         row=dict(directory='blocks/'+key,manifest_sha256=file_sha(assets['examples.json']),

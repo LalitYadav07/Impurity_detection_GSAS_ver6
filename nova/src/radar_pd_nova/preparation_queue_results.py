@@ -55,7 +55,8 @@ def outcomes(job, result, root, plan, *, requests=None):
                 raise ValueError('An optimizer continuation belongs only to its training operation')
             if requests is None:requests,_=requests_for(job,root)
             member=job['members'][0];request=requests[member['entry']]
-            segments.validate(result,request,file_sha(request['plan']))
+            segments.validate(result,request,file_sha(request['plan']),
+                expected_implementation=job['handle']['request']['implementation_sha256'])
             return [dict(member,state='pending',reason=segments.REASON,result=result)]
         return [dict(job['members'][0],state='prepared',reason='',result=result)]
     expected={'schema','plan_sha256','status','counts','all_prepared','entries','allocation',

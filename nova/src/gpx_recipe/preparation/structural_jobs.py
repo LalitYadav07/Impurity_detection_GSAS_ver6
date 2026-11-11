@@ -197,7 +197,7 @@ def plan_inputs(path):
     return result
 
 
-def resume_directory(plan_path,plan):
+def resume_directory(plan_path,plan,*,expected_implementation=None):
     if plan['schema'] not in CONTINUED_PLAN_SCHEMAS:return None
     from ..symmetry.compiler import confined
     from .structural_training_transfer import STATE,RECEIPT,read
@@ -205,7 +205,7 @@ def resume_directory(plan_path,plan):
     for name,key in ((STATE,'state_sha256'),(RECEIPT,'receipt_sha256')):
         if file_sha(confined(Path(plan_path).parent,str(Path('resume')/name)))!=record[key]:
             raise ValueError('Captured training continuation changed')
-    read(directory)
+    read(directory,expected_implementation=expected_implementation)
     return directory
 
 

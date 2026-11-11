@@ -288,6 +288,73 @@ def test_restore_reconstructs_published_arrays_from_jobs_not_status_flags(remote
     assert fresh_library.prepared_assets(entry(task))
 
 
+def recovered_completed_queue(remote,tmp_path,monkeypatch):
+    queue,snapshots,base=setup(remote,tmp_path,count=4)
+    runtime,service,source=remote
+    runtime.max_active_jobs=4;queue.resume(maximum_jobs=4);queue.tick(maximum_submissions=3)
+    for job in queue.snapshot()['jobs']:complete(queue,service,job,tmp_path)
+    queue.pause();queue.tick();snapshot=queue.snapshot()
+    assert len(snapshot['jobs'])==3 and queue.library.coverage()['counts']['prepared']==3
+    library=import_library(base,tmp_path/'incremental-restore')
+    runtime=GalaxyModelRuntime(tmp_path/'recovery-runtime',service,max_active_jobs=1)
+    monkeypatch.setattr(runtime,'find_dispatch',lambda key:service.jobs.get(key))
+    monkeypatch.setattr(runtime,'wait_capacity',lambda cancel=None:None)
+    source=dict(source,source_path=str(library.root/'inputs/parent.cif'))
+    restored=PreparationQueue(library.root/'queue',library,runtime,source=source,
+        checkpoint=lambda state:snapshots.append(copy.deepcopy(state)))
+    restored.restore(snapshot)
+    return restored,service
+
+
+def test_recovery_yields_verified_progress_and_holds_new_dispatch_until_complete(remote,tmp_path,monkeypatch):
+    restored,service=recovered_completed_queue(remote,tmp_path,monkeypatch)
+    restored.resume(maximum_jobs=1)
+    for verified in (1,2):
+        progress=restored.tick(maximum_replays=1)
+        assert progress['recovery']==dict(total=3,verified=verified,remaining=3-verified)
+        assert progress['coverage']['counts']['prepared']==verified
+        assert len(service.submissions)==3
+    finished=restored.tick(maximum_replays=1)
+    assert finished['recovery']==dict(total=3,verified=3,remaining=0)
+    assert finished['coverage']['counts']['prepared']==3
+    assert len(service.submissions)==4, (
+        finished['queue']['jobs'][-1]['phase'],finished['queue']['jobs'][-1]['reason'])
+    assert finished['active']==1
+
+
+def test_incremental_recovery_still_rejects_a_changed_receipt_before_new_work(remote,tmp_path,monkeypatch):
+    restored,service=recovered_completed_queue(remote,tmp_path,monkeypatch)
+    restored.resume(maximum_jobs=1)
+    restored.tick(maximum_replays=1)
+    original=restored.runtime.collect_native
+    blocked=restored.snapshot()['jobs'][1]['handle']['key']
+    def changed(handle,*args,**kwargs):
+        result,path=original(handle,*args,**kwargs)
+        if handle['key']==blocked:result={**result,'status':'tampered receipt'}
+        return result,path
+    monkeypatch.setattr(restored.runtime,'collect_native',changed)
+    with pytest.raises(ValueError):restored.tick(maximum_replays=1)
+    assert restored.library.coverage()['counts']['prepared']==1
+    assert len(service.submissions)==3
+
+
+@pytest.mark.parametrize('limit',[0,-1,True,1.5,65])
+def test_invalid_recovery_quantum_cannot_start_work(remote,tmp_path,limit):
+    queue,_,_=setup(remote,tmp_path);_,service,_=remote;queue.resume()
+    with pytest.raises(ValueError,match='recovery limit'):queue.tick(maximum_replays=limit)
+    assert not service.submissions
+
+
+def test_recovery_does_not_revisit_already_verified_attempts(remote,tmp_path,monkeypatch):
+    queue,_,_=setup(remote,tmp_path,count=1);_,service,_=remote
+    queue.resume();queue.tick();job=queue.snapshot()['jobs'][0]
+    complete(queue,service,job,tmp_path);queue.pause();queue.tick()
+    monkeypatch.setattr(queue,'_ensure_attempt',lambda _:pytest.fail('Already verified attempt revisited'))
+    result=queue.tick(maximum_replays=1)
+    assert result['coverage']['all_prepared'] and result['recovery']['remaining']==0
+    assert len(service.submissions)==1
+
+
 def test_known_failed_job_needs_explicit_retry_and_gets_a_new_attempt_key(remote,tmp_path):
     queue,_,_=setup(remote,tmp_path,count=1);_,service,_=remote
     queue.resume();queue.tick();first=queue.snapshot()['jobs'][0]

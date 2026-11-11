@@ -268,13 +268,17 @@ def stage_entry(library, identifier, attempt, directory, *, recover_completed=Fa
     return validate_request(model['kind'], payload)
 
 
-def publish_entry(library, identifier, attempt, request, result):
+def publish_entry(library, identifier, attempt, request, result,*,expected_implementation=None):
     """Accept a checked worker receipt; an upload alone never marks preparation done."""
     library.refresh()
     row = library.row(identifier)
     if row['state'] != 'preparing' or row['attempt'] != attempt:
         raise ValueError('Late preparation receipt belongs to another attempt')
     kind = row['model']['kind']
+    if expected_implementation is not None:
+        from .tof_kernel_arrays import checksum
+        if kind!='structural-training' or not checksum(expected_implementation):
+            raise ValueError('Archived training publication needs its original implementation digest')
     request = validate_request(kind, request)
     model = row['model']
     roles = [library.document['specification']['source'], model['instrument']]
@@ -290,7 +294,7 @@ def publish_entry(library, identifier, attempt, request, result):
         raise ValueError('The staged preparation no longer matches its captured library inputs')
     if kind=='structural-training':
         from .structural_dependencies import verify
-        verify(library,model,request)
+        verify(library,model,request,expected_implementation=expected_implementation)
     if (not isinstance(result, dict) or result.get('schema') != 'radar-experiment-preparation-worker/v1'
             or result.get('status') != 'prepared' or result.get('kind') != kind
             or result.get('observations_included') is not False or result.get('scientific_result') is not False):
@@ -307,6 +311,8 @@ def publish_entry(library, identifier, attempt, request, result):
     if entry.stat().st_size > 8*1024*1024 or file_sha(entry) != result.get('entry_sha256'):
         raise ValueError('The preparation manifest differs from its collected receipt')
     manifest = json.loads(entry.read_text())
+    if expected_implementation is not None and manifest.get('implementation_sha256')!=expected_implementation:
+        raise ValueError('The trained model differs from its original job implementation')
     if (manifest.get('schema') != 'radar-experiment-preparation-entry/v1'
             or manifest.get('kind') != kind or manifest.get('grid') != request['grid']
             or manifest.get('settings') != request['settings'] or manifest.get('input_sha256') != checksums

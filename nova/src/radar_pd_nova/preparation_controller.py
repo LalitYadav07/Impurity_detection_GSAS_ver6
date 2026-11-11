@@ -405,12 +405,12 @@ class PreparationMixin:
     async def _prep_drive(self):
         store=self._preparation_store();s=self.server.state
         while not self._prep_stopping:
-            busy=False
+            busy=False;recovering_any=False
             for key,queue in list(store._queues.items()):
                 # A durable submission may include several slow Galaxy
                 # uploads. Return to collection and UI refresh after each
                 # one instead of hiding progress until every slot is filled.
-                try:result=await asyncio.to_thread(queue.tick,maximum_submissions=1)
+                try:result=await asyncio.to_thread(queue.tick,maximum_submissions=1,maximum_replays=1)
                 except Exception as exc:
                     message='Preparation queue needs attention ('+type(exc).__name__+'). Existing Galaxy jobs were not restarted.'
                     self._prep_queue_errors[key]=message;s.prep_error=message
@@ -423,9 +423,15 @@ class PreparationMixin:
                     s.prep_error=next(reversed(self._prep_queue_errors.values()),'')
                 from .preparation_labels import queue_activity
                 activity=queue_activity(result['queue'])
+                recovery=result.get('recovery',{})
+                recovering=bool(recovery.get('remaining',0))
+                recovering_any=recovering_any or recovering
                 busy=busy or bool(activity['accepted'] or activity['reconciling']
-                    or (not result['queue']['paused'] and not result['coverage']['complete']))
-                if key in self._prep_recovering and not s.prep_busy:
+                    or recovering or (not result['queue']['paused'] and not result['coverage']['complete']))
+                if recovering and key==s.prep_library and not s.prep_busy:
+                    s.prep_message=(f"Recovering saved results: {recovery['verified']} / {recovery['total']} checked. "
+                        'Original results remain in Galaxy; no new calculations are being submitted.')
+                if key in self._prep_recovering and not s.prep_busy and not recovering:
                     self._prep_recovering.discard(key)
                     if key==s.prep_library and not result['coverage']['complete']:
                         count=result['coverage']['counts']['prepared']
@@ -447,7 +453,9 @@ class PreparationMixin:
                             s.prep_message='Preparation complete. These calculations still need actual-scan compatibility checks before fitting.'
             self._prep_refresh();s.flush()
             if not busy:break
-            await asyncio.sleep(2)
+            # Saved results are already terminal: yield for UI updates, but
+            # do not add the live-job polling delay between their checks.
+            await asyncio.sleep(0 if recovering_any else 2)
 
     def _preparation_library_changed(self,**_):
         s=self.server.state;s.prep_page=1;s.prep_download_href='';s.prep_active_jobs=0;s.prep_job_status=''
@@ -530,6 +538,10 @@ class PreparationMixin:
             from .preparation_labels import queue_activity,queue_activity_label
             s.prep_active_jobs=queue_activity(queue_state)['accepted']
             s.prep_job_status=queue_activity_label(queue_state)
+            recovery=queue.recovery_progress(queue_state) if queue else None
+            if recovery and recovery['remaining']:
+                s.prep_job_status=(f"Recovering saved results: {recovery['verified']} / {recovery['total']} checked. "
+                    'No new calculations are being submitted.')
             paused=queue_state['paused'] if queue_state else True
             from .preparation_labels import training_progress
             continuing=training_progress(library,queue_state)
@@ -538,7 +550,7 @@ class PreparationMixin:
             from gpx_recipe.preparation.structural_dependencies import ready
             runnable=bool(counts['preparing'] or any(row['state']=='pending' and ready(library,row['model'])
                 for row in library.document['entries']))
-            s.prep_can_resume=bool(runnable and paused)
+            s.prep_can_resume=bool(runnable and paused and not (recovery and recovery['remaining']))
             kinds={r['model']['kind'] for r in library.document['entries']}
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             if kinds=={'structural-ranking-model'}:s.prep_library_kind='Imported trained structural model'

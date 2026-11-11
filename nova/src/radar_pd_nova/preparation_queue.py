@@ -181,7 +181,7 @@ class PreparationQueue:
         elif row['state']!=state:
             raise ValueError('A late receipt cannot replace a different completed preparation')
 
-    def _publish(self,member,request,result):
+    def _publish(self,member,request,result,*,expected_implementation=None):
         self.library.refresh();row=self.library.row(member['entry'])
         if row['attempt']!=member['attempt'] or row['state']=='pending':return
         if row['state']=='prepared':
@@ -189,7 +189,10 @@ class PreparationQueue:
             entry=next(p for p in paths.values() if p.name=='entry.json')
             if file_sha(entry)!=result.get('entry_sha256'):
                 raise ValueError('Recovered preparation differs from its published worker receipt')
-        else:publish_entry(self.library,member['entry'],member['attempt'],request,result)
+        else:
+            options=({} if row['model']['kind']!='structural-training' else
+                     dict(expected_implementation=expected_implementation))
+            publish_entry(self.library,member['entry'],member['attempt'],request,result,**options)
 
     def _collect(self,state,job):
         requests,plan=self._inputs(job)
@@ -207,7 +210,8 @@ class PreparationQueue:
                 self._finish(member,previous['state'],previous['reason']);continue
             outcome=dict(state=row['state'],reason=row['reason'],source='worker')
             if row['state']=='prepared':
-                try:self._publish(member,requests[identifier],row['result'])
+                try:self._publish(member,requests[identifier],row['result'],
+                    expected_implementation=job['handle']['request']['implementation_sha256'])
                 except (ValueError,KeyError,TypeError) as exc:
                     self.library.refresh()
                     current=self.library.row(identifier)
@@ -247,8 +251,28 @@ class PreparationQueue:
         job.update(phase='collected',reason=reason);self._save(state,remote=True)
         self._verified.add(job['id'])
 
-    def _replay(self,state):
+    def recovery_progress(self,state=None):
+        """Count original receipts still requiring local verification."""
+        state=self._read() if state is None else state
+        self.library.refresh()
+        collected=[job for job in state['jobs'] if job['phase']=='collected']
+        remaining=sum(job['id'] not in self._verified and any(
+            self.library.row(member['entry'])['attempt']<=member['attempt']
+            for member in job['members']) for job in collected)
+        return dict(total=len(collected),verified=len(collected)-remaining,remaining=remaining)
+
+    def _replay(self,state,*,maximum_replays=None):
+        replayed=0
         for job in state['jobs']:
+            if job['phase']=='collected' and job['id'] in self._verified:
+                continue
+            # Yield between complete original receipts, never inside their
+            # validation/publication transaction. No new work is admitted
+            # until the entire required recovery chain has been verified.
+            if (job['phase']=='collected' and job['id'] not in self._verified
+                    and maximum_replays is not None and replayed>=maximum_replays):
+                if any(self.library.row(m['entry'])['attempt']<=m['attempt'] for m in job['members']):
+                    return False
             for member in job['members']:self._ensure_attempt(member)
             self.library.refresh()
             # A locally reviewed retry still needs terminal remote ownership
@@ -271,6 +295,8 @@ class PreparationQueue:
                         raise ValueError('Recovered Galaxy failure differs from its saved receipt')
                     self._finish(member,outcome['state'],outcome['reason'])
                 self._verified.add(job['id'])
+            replayed+=1
+        return True
 
     def _deferred(self,state):
         latest={m['entry']:(job,m) for job in state['jobs'] for m in job['members']}
@@ -283,14 +309,25 @@ class PreparationQueue:
                 result.append(identifier)
         return result
 
-    def tick(self,*,maximum_submissions=None):
+    def tick(self,*,maximum_submissions=None,maximum_replays=None):
         """Collect each batch once, then admit a bounded fair finite scope."""
         if maximum_submissions is not None and (
                 type(maximum_submissions) is not int or not 0<=maximum_submissions<=64):
             raise ValueError('Use a bounded whole-number preparation submission limit')
+        if maximum_replays is not None and (
+                type(maximum_replays) is not int or not 1<=maximum_replays<=64):
+            raise ValueError('Use a bounded whole-number preparation recovery limit')
         with self._lock,intent_lock(self.path):
-            state=self._read();self._replay(state);submitted=0
+            state=self._read();recovered=self._replay(state,maximum_replays=maximum_replays);submitted=0
             if state['paused']:self._paused.set()
+            if not recovered:
+                # Recovered status flags alone cannot authorize a new job.
+                # Return the verified subset so the UI can update promptly.
+                self._save(state)
+                active=sum(job['phase']!='collected' for job in state['jobs'])
+                return dict(queue=copy.deepcopy(state),coverage=self.library.coverage(),
+                    active=active,deferred=0,effective_job_limit=min(state['maximum_jobs'],self.runtime.max_active_jobs),
+                    blocked_training=[],recovery=self.recovery_progress(state))
             for job in state['jobs']:
                 if job['phase']=='collected':continue
                 handle=job['handle']
@@ -378,4 +415,4 @@ class PreparationQueue:
             self._save(state)
             return dict(queue=copy.deepcopy(state),coverage=self.library.coverage(),
                 active=active,deferred=len(self._deferred(state)),effective_job_limit=limit,
-                blocked_training=blocked)
+                blocked_training=blocked,recovery=self.recovery_progress(state))

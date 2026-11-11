@@ -37,6 +37,22 @@ def test_data_only_transfer_to_a_fresh_owner_is_lossless_and_idempotent(tmp_path
     assert transfer.restore(snapshot,target,identity='a'*64,epochs=60)['disposition']=='identical_owned_checkpoint_retained'
 
 
+def test_archival_read_checks_original_implementation_but_does_not_authorize_resume(tmp_path,monkeypatch):
+    source=owned(tmp_path/'source');snapshot=tmp_path/'snapshot'
+    saved=transfer.snapshot(source,snapshot,identity='a'*64,epochs=60)
+    monkeypatch.setattr(transfer,'package_signature',lambda:'b'*64)
+    with pytest.raises(ValueError,match='continuation receipt'):transfer.read(snapshot)
+    receipt,raw=transfer.read(snapshot,expected_implementation=saved['implementation_sha256'])
+    assert receipt==saved and raw==(source/'training-checkpoint.npz').read_bytes()
+    with pytest.raises(ValueError,match='continuation receipt'):
+        transfer.read(snapshot,expected_implementation='c'*64)
+    with pytest.raises(ValueError,match='implementation digest'):
+        transfer.read(snapshot,expected_implementation='not-a-digest')
+    with pytest.raises(ValueError,match='continuation receipt'):
+        transfer.restore(snapshot,tmp_path/'must-not-resume',identity='a'*64,epochs=60)
+    assert not (tmp_path/'must-not-resume').exists()
+
+
 @pytest.mark.parametrize('mutation',['identity','target_epochs','code','hash','trained_flag','bytes','inventory'])
 def test_changed_transfer_cannot_create_or_replace_an_optimizer(tmp_path,mutation):
     source=owned(tmp_path/'source');snapshot=tmp_path/'snapshot'
