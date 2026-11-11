@@ -254,7 +254,7 @@ def model_exploration(app):
             scan_select('Compare models for this exact scan / bank','sx_source','sx_source_options')
             v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
         html.P('Saved results load for the selected scan. Switching scans reads and verifies their artifacts; it does not start new refinements.',v_if='!sx_setup && sx_source_options.length > 1',classes='rf-notice')
-        matching_groups="sx_groups.filter(g => (g.title+' '+g.status).toLowerCase().includes(sx_search.trim().toLowerCase()))"
+        matching_groups="sx_groups.filter(g => (g.search_members || [g.title+' '+g.status]).some(m => m.toLowerCase().includes(sx_search.trim().toLowerCase())))"
         with html.Div(v_if='!sx_setup && sx_results_current && sx_groups.length',classes='sx-layout'):
             with html.Aside(classes='rf-card'):
                 html.H3('Calculated-pattern groups')
@@ -264,7 +264,7 @@ def model_exploration(app):
                     with html.Button(v_for=f"group in {matching_groups}.filter((g,i) => i < sx_group_limit || g.id === sx_group)",key='group.id',classes=("['sx-model', {active: sx_group === group.id}]",),click=(app.select_symmetry_group,'[group.id]')):
                         html.B('{{ group.title }}')
                         html.Span('{{ group.rwp }} · {{ group.status }}')
-                        html.Span('{{ group.count }} model / start records')
+                        html.Span('{{ sx_search.trim() ? (group.search_members || []).filter(m => m.toLowerCase().includes(sx_search.trim().toLowerCase())).length + " matching of " : "" }}{{ group.count }} model / start records')
                 v.VBtn('Show 12 more groups',v_if=f'{matching_groups}.length > sx_group_limit',click='sx_group_limit += 12',variant='text',size='small')
                 html.P('No groups match this search.',v_if=f'{matching_groups}.length === 0',classes='rf-notice')
                 html.P('{{ '+matching_groups+'.length }} matching of {{ sx_groups.length }} groups; clear the search to see all outcomes.',v_if='!!sx_search.trim()',classes='rf-notice')

@@ -31,7 +31,7 @@ from gpx_recipe.symmetry.isodistort_discovery import discover_structural
 from gpx_recipe.symmetry.plans import build_plan
 from gpx_recipe.symmetry.contracts import iter_trials
 from .symmetry_workspace import campaign_rows,group_models,display_groups,view_for,choose_group,choose_member,disposition_reason,coverage_rows,scope_rows,parameter_rows,moment_precision_note,campaign_can_resume,display_status,embedding_evidence,fit_caption,fit_diagnostics,pin_label
-from .symmetry_workspace import structural_discovery_feedback,candidate_display_name,parameter_note,structural_timing_summary
+from .symmetry_workspace import structural_discovery_feedback,candidate_display_name,parameter_note,structural_timing_summary,model_search_text,matching_members
 from . import symmetry_plots as plots
 from .parent_moments import parent_frame_moments
 from .symmetry_sources import start_choices,resolve_start,acquisition_details,acquisition_notices,acquisition_temperature,display_acquisition_notices
@@ -80,6 +80,7 @@ class SymmetryMixin(KSearchMixin):
         s.change('rf_experiment','sx_result_scope')(self._symmetry_mode_changed)
         s.change('sx_campaign')(self._symmetry_campaign_changed)
         s.change('sx_group')(self._symmetry_group_changed)
+        s.change('sx_search')(self._symmetry_group_changed)
         s.change('sx_source')(self._symmetry_source_changed)
         s.change('sx_selected','sx_axis','sx_pins','sx_reset','sx_intensity_scale','sx_parent_axis')(self._symmetry_plot_changed)
         s.change('sx_kind','sx_parent','sx_histogram','sx_k','sx_sites','sx_form_factors','sx_lande','sx_directions','sx_adequate','sx_max_moment','sx_mag_d_min','sx_max_mode','sx_start_mode','sx_cycles','sx_request','sx_sign_starts','rf_source','sx_start_source')(self._symmetry_unapprove)
@@ -529,7 +530,7 @@ class SymmetryMixin(KSearchMixin):
         from .structural_ranking_labels import visible_rows
         s.sx_structural_priority_rows=visible_rows(getattr(self,'_symmetry_ranking_evidence',{}),rows,
             previous=getattr(s,'sx_structural_priority_rows',None) or ())
-        s.sx_groups=[dict(id=g['id'],title=g['representative']['name'] if g['representative']['has_view'] else display_status(g['representative']['status']).capitalize(),count=len(g['members']),rwp=(f"{g['representative']['rwp']:.3f}%" if g['representative']['rwp'] is not None else '—'),status=display_status(g['representative']['status'])) for g in groups]
+        s.sx_groups=[dict(id=g['id'],title=g['representative']['name'] if g['representative']['has_view'] else display_status(g['representative']['status']).capitalize(),count=len(g['members']),rwp=(f"{g['representative']['rwp']:.3f}%" if g['representative']['rwp'] is not None else '—'),status=display_status(g['representative']['status']),search_members=[model_search_text(row) for row in g['members']]) for g in groups]
         s.sx_overview=plots.overview(rows,s.sx_selected)
         s.sx_pin_options=[dict(title=pin_label(r,include_start=True),value=r['id']) for r in rows if r['has_view']]
         pinnable={r['id'] for r in rows if r['has_view']}
@@ -573,7 +574,7 @@ class SymmetryMixin(KSearchMixin):
 
     def _symmetry_group_changed(self,**_):
         s=self.server.state;group=next((g for g in self._symmetry_groups if g['id']==s.sx_group),None)
-        members=group['members'] if group else []
+        members=matching_members(group['members'],s.sx_search) if group else []
         s.sx_members=[dict(title=r['name']+' · '+r['candidate'][-6:]+' · '+r['seed']+' · '+display_status(r['status']),value=r['id']) for r in members]
         s.sx_selected=choose_member(members,s.sx_selected,explicit=self._symmetry_explicit_selection)
         self._symmetry_plot_changed()

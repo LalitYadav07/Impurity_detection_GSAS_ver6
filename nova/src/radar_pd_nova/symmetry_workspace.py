@@ -264,6 +264,18 @@ def display_status(status):
             'inadequate_fit':'Rwp target not met'}.get(status,status.replace('_',' '))
 
 
+def model_search_text(row):
+    """Search model identities even when a failed start has no curve."""
+    status=str(row.get('status') or '')
+    parts=[str(row.get(key) or '') for key in ('name','bns','candidate','seed')]
+    return ' '.join([*parts,status,display_status(status)]).lower()
+
+
+def matching_members(members,query):
+    query=str(query or '').strip().lower()
+    return [row for row in members if not query or query in model_search_text(row)]
+
+
 def pin_label(row,*,include_start=False):
     """Keep checkpoint quality visible when a curve leaves the main selection."""
     parts=[str(row.get('name') or 'Model')]
