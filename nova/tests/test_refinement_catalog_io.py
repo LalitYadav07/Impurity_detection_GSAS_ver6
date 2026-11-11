@@ -156,9 +156,11 @@ def test_switching_candidate_refreshes_open_model_choices_and_discards_context(t
     state.rf_checkpoint_run='record-1';app._refinement_checkpoint_run_changed()
     selected=[]
     for choice in state.rf_checkpoint_options:
+        state.rf_message='Previous source inspected'
         state.rf_checkpoint_key=choice['value']
         asyncio.run(app._choose_published_checkpoint())
         assert not state.rf_checkpoint_error
+        assert not state.rf_message
         source=workspace.state['sources'][state.rf_source]
         label=next(entry['title'] for entry in state.sx_start_sources if entry['value']==source['id'])
         assert source['collection_name'] in label
@@ -168,6 +170,27 @@ def test_switching_candidate_refreshes_open_model_choices_and_discards_context(t
         app._symmetry_draft={'root':str(tmp_path/'previous-native-context')}
         state.sx_has_context=True
     assert len(set(selected))==2 and not workspace.state['jobs']
+
+
+@pytest.mark.parametrize('change',['selection','workspace'])
+def test_inspection_completion_does_not_publish_previous_selection_message(tmp_path,change):
+    app=rapid_app(tmp_path);state=app.server.state;workspace=app._refinement_workspace
+    state.rf_source='selected-source';state.rf_busy=False
+    entered=threading.Event();release=threading.Event()
+    def inspect(uid):
+        assert uid=='selected-source';entered.set();assert release.wait(5)
+    workspace.inspect=inspect
+    async def run():
+        tasks=[]
+        app._refinement_schedule=lambda coroutine,*args:tasks.append(asyncio.create_task(coroutine))
+        app.inspect_refinement_project()
+        assert await asyncio.to_thread(entered.wait,5)
+        if change=='selection':state.rf_source='new-source'
+        else:app._refinement_workspace=Workspace(tmp_path/'replacement')
+        state.rf_message='New source selected'
+        release.set();await asyncio.gather(*tasks)
+    asyncio.run(run())
+    assert state.rf_message=='New source selected' and not state.rf_error
 
 
 @pytest.mark.parametrize('mutation',['record','row','selection','service','workspace'])

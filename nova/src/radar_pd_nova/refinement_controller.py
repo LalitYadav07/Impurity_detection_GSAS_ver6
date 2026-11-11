@@ -701,6 +701,7 @@ class RefinementMixin(GuidedRefinementMixin):
                 s.rf_experiment=source['experiment'];s.rf_source=source['id']
                 s.rf_scope='scans';s.rf_scans=['source:'+source['id']];s.rf_samples=[];s.rf_banks=[]
                 s.rf_existing=True;s.rf_future=False;s.rf_approved=False;s.rf_recipe_id=''
+                s.rf_message='';s.rf_error=''
                 self._clear_refinement_output(clear_trends=True)
                 experiments=refinement_experiment_options(workspace)
                 s.rf_experiments=[dict(title=value,value=key) for key,value in sorted(experiments.items(),key=lambda item:item[1])]
@@ -856,13 +857,22 @@ class RefinementMixin(GuidedRefinementMixin):
     def inspect_refinement_project(self,**_):
         s=self.server.state
         if s.rf_busy or not s.rf_source:return
-        uid=s.rf_source;self._refinement_inspecting=True;s.rf_busy=True;s.rf_error='';s.rf_message='Inspecting the starting model without a model call…';s.flush()
+        uid=s.rf_source;workspace=self._refinement_workspace
+        owner=object();self._refinement_inspection_owner=owner
+        self._refinement_inspecting=True;s.rf_busy=True;s.rf_error='';s.rf_message='Inspecting the starting model without a model call…';s.flush()
+        def current():
+            return (self._refinement_inspection_owner is owner
+                    and self._refinement_workspace is workspace and s.rf_source==uid)
         async def inspect():
             try:
-                await asyncio.to_thread(self._refinement_workspace.inspect,uid)
-                s.rf_message='Starting model inspected. Atom labels and displacement models are available below the source GPX.'
-            except Exception as exc:s.rf_error=str(exc)
-            finally:self._refinement_inspecting=False;self._refinement_sync();s.flush()
+                await asyncio.to_thread(workspace.inspect,uid)
+                if current():s.rf_message='Starting model inspected. Atom labels and displacement models are available below the source GPX.'
+            except Exception as exc:
+                if current():s.rf_error=str(exc)
+            finally:
+                if self._refinement_inspection_owner is owner:
+                    self._refinement_inspecting=False
+                    if self._refinement_workspace is workspace:self._refinement_sync();s.flush()
         self._refinement_schedule(inspect(),'radar-refinement-inspect')
 
     def _refinement_sync_approval(self):
