@@ -3,8 +3,37 @@ import copy
 import re
 
 from gpx_recipe.convergence import SCHEMA as CONVERGENCE_SCHEMA, assess_convergence, finite
+from gpx_recipe.native_termination import SCHEMA as TERMINATION_SCHEMA
 
 REVIEW_SCHEMA = 'radar-refinement-review/v1'
+
+
+def _numerical_termination(evidence):
+    """Read the observed MINPACK result, separate from Hessian-only shifts."""
+    if evidence.get('method') not in {'numeric', 'analytic Jacobian'}:
+        return None
+    receipt = evidence.get('solver_termination')
+    if (not isinstance(receipt, dict) or receipt.get('schema') != TERMINATION_SCHEMA
+            or receipt.get('solver') != 'scipy.optimize.leastsq'
+            or receipt.get('state') != 'observed'):
+        return None
+    final = receipt.get('final')
+    if not isinstance(final, dict) or final.get('state') != 'observed':
+        return None
+    code = final.get('code')
+    if (type(code) is not int or not 0 <= code <= 8
+            or type(final.get('solver_success')) is not bool
+            or final['solver_success'] != (code in (1, 2, 3, 4))):
+        return None
+    return final
+
+
+def _hessian_shifts_not_supplied(evidence):
+    return (evidence.get('method') in {'numeric', 'analytic Jacobian'}
+            and evidence.get('native_converged') is None
+            and evidence.get('last_cycle_complete') is False
+            and evidence.get('last_cycle_max_shift_over_sigma') is None
+            and not evidence.get('last_cycle_ratios'))
 
 
 def review_notices(values):
@@ -76,9 +105,21 @@ def refinement_review_status(result):
         return dict(status='unavailable',needs_review=False,
             message='Convergence diagnostics unavailable. Final GPXs require scientific review.')
     reasons=[]
+    numerical = _numerical_termination(evidence)
+    shifts_not_supplied = _hessian_shifts_not_supplied(evidence)
+    if numerical is not None and numerical['solver_success'] is False:
+        reasons.append('The numerical solver did not reach a successful stopping criterion.')
+    budget = evidence.get('evaluation_budget')
+    if isinstance(budget, dict) and budget.get('schema') == 'radar-native-evaluation-budget/v1':
+        maximum, used = budget.get('maximum'), budget.get('evaluations')
+        if (type(maximum) is not int or type(used) is not int
+                or not 0 <= used <= maximum <= 100000):
+            reasons.append('The recorded residual-evaluation budget is invalid.')
+        elif budget.get('exhausted') is True:
+            reasons.append('The residual-evaluation budget was exhausted.')
     if evidence.get('native_converged') is False:reasons.append('Native solver did not report convergence.')
     if evidence.get('aborted') is True:reasons.append('Native solver reported an abort.')
-    if evidence.get('last_cycle_complete') is False or evidence.get('missing_last_cycle_parameters'):
+    if not shifts_not_supplied and (evidence.get('last_cycle_complete') is False or evidence.get('missing_last_cycle_parameters')):
         reasons.append('Final-cycle evidence is incomplete.')
     value=evidence.get('last_cycle_max_shift_over_sigma')
     if (value is not None and (not finite(value) or value<0)) or (evidence.get('last_cycle_complete') is True and value is None):
@@ -94,8 +135,11 @@ def refinement_review_status(result):
             reasons.append('The recorded convergence criterion is invalid.')
         else:
             if assessment['status']!='passed':reasons.append(assessment['message'])
-    missing=(type(evidence.get('native_converged')) is not bool
-             or evidence.get('last_cycle_complete') is not True or not finite(value))
+    if shifts_not_supplied:
+        missing = numerical is None
+    else:
+        missing = (type(evidence.get('native_converged')) is not bool
+                   or evidence.get('last_cycle_complete') is not True or not finite(value))
     status='needs_review' if reasons else 'unavailable' if missing else 'recorded'
     message=convergence_notice({'convergence':evidence})
     if reasons:message=' '.join(dict.fromkeys(reasons))+' '+message
@@ -108,14 +152,17 @@ def convergence_notice(view):
     if not isinstance(evidence, dict) or evidence.get('schema') != CONVERGENCE_SCHEMA:
         return ('Final-cycle convergence evidence is unavailable for this saved result. '
                 'Job completion does not establish convergence.')
+    shifts_not_supplied = _hessian_shifts_not_supplied(evidence)
     if evidence.get('aborted') is True:
         parts = ['The native solver reported an abort.']
     elif evidence.get('native_converged') is True:
         parts = ['The native solver reported convergence.']
     elif evidence.get('native_converged') is False:
         parts = ['The native solver did not report convergence.']
-    else:
+    elif not shifts_not_supplied:
         parts = ['The native convergence status is unavailable.']
+    else:
+        parts = []
     termination=evidence.get('solver_termination') or {}
     final=termination.get('final') or {}
     if termination.get('state')=='observed' and final.get('state')=='observed':
@@ -123,6 +170,8 @@ def convergence_notice(view):
         if final.get('solver_success') is False:state='reported '+str(final.get('termination','failure')).replace('_',' ')
         count=final.get('function_evaluations')
         parts.append('The numerical solver '+state+(f' after {count} function evaluations.' if type(count) is int else '.'))
+    elif shifts_not_supplied:
+        parts.append('The numerical stopping status is unavailable.')
     budget=evidence.get('evaluation_budget') or {}
     maximum,used=budget.get('maximum'),budget.get('evaluations')
     if (budget.get('schema')=='radar-native-evaluation-budget/v1' and
@@ -138,7 +187,7 @@ def convergence_notice(view):
     usable = finite(value) and value >= 0
     if evidence.get('last_cycle_complete') is True and usable:
         parts.append(f'Largest final-cycle shift / conditional s.u.: {value:.5g}.')
-    else:
+    elif not shifts_not_supplied:
         parts.append('Final-cycle shift evidence is incomplete.')
         if usable:
             parts.append(f'Largest available shift / conditional s.u.: {value:.5g}; this may omit other parameters.')

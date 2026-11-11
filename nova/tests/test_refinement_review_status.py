@@ -224,6 +224,63 @@ def test_missing_or_ambiguous_final_stage_does_not_invent_a_criterion():
     assert final_stage_criterion(output,{'stages':None}) is None
 
 
+def numerical_evidence(method='numeric'):
+    """Field shape recorded by the native noisy TOF occupancy control."""
+    return diagnostics(method=method,native_converged=None,last_cycle_complete=False,
+        last_cycle_max_shift_over_sigma=None,missing_last_cycle_parameters=['0::Afrac:0'],
+        last_cycle_ratios={},relative_objective_change=None,relative_objective_tolerance=None,
+        solver_termination=dict(schema='radar-native-solver-termination/v1',
+            solver='scipy.optimize.leastsq',state='observed',
+            final=dict(state='observed',code=1,termination='relative_objective_tolerance',
+                       solver_success=True,function_evaluations=19)),
+        evaluation_budget=dict(schema='radar-native-evaluation-budget/v1',
+                               maximum=1000,evaluations=21,exhausted=False))
+
+
+@pytest.mark.parametrize('method',['numeric','analytic Jacobian'])
+def test_normal_numerical_stopping_is_not_a_missing_hessian_failure(method):
+    output=result(numerical_evidence(method));before=deepcopy(output)
+    review=refinement_review_status(output)
+    assert review['status']=='recorded' and not review['needs_review']
+    assert 'relative objective tolerance' in review['message']
+    assert '21 of 1000' in review['message']
+    assert 'does not save the Hessian' in review['message']
+    assert 'Final-cycle shift evidence is incomplete' not in review['message']
+    assert 'reported convergence' not in review['message']
+    assert output==before
+
+
+@pytest.mark.parametrize('damage',['missing','schema','code','boolean_code','inconsistent_success','solver'])
+def test_unrecognized_numerical_termination_remains_unavailable(damage):
+    evidence=numerical_evidence();receipt=evidence['solver_termination']
+    if damage=='missing':evidence.pop('solver_termination')
+    elif damage=='schema':receipt['schema']='unknown'
+    elif damage=='code':receipt['final']['code']=999
+    elif damage=='boolean_code':receipt['final']['code']=True
+    elif damage=='inconsistent_success':receipt['final']['solver_success']=False
+    else:receipt['solver']='different solver'
+    review=refinement_review_status(result(evidence))
+    assert review['status']=='unavailable' and not review['needs_review']
+
+
+@pytest.mark.parametrize('failure',['stopping','abort','budget','invalid_budget','required_hessian'])
+def test_numerical_termination_never_overrides_failure_or_reviewed_requirements(failure):
+    evidence=numerical_evidence();criteria=None
+    if failure=='stopping':
+        evidence['solver_termination']['final'].update(code=5,solver_success=False,termination='function_evaluation_limit')
+    elif failure=='abort':evidence['aborted']=True
+    elif failure=='budget':evidence['evaluation_budget']['exhausted']=True
+    elif failure=='invalid_budget':evidence['evaluation_budget']['evaluations']=1001
+    else:criteria={'max_shift_over_sigma':.5}
+    assert refinement_review_status(result(evidence,criteria))['needs_review']
+
+
+def test_numerical_stopping_does_not_hide_recovered_stages():
+    output=result(numerical_evidence());output['rejected_stages']=['widths']
+    review=refinement_review_status(output)
+    assert review['needs_review'] and 'widths' in review['message']
+
+
 def test_queue_counts_and_filters_do_not_double_count_completed_review_jobs(tmp_path):
     w,_=create(tmp_path);w.observe([source('1'),source('2')]);recipe=approved(w,RefinementScope('exp'))
     w.start(recipe['id'],recipe['selection_token'])
