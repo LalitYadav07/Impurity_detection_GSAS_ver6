@@ -254,18 +254,21 @@ def model_exploration(app):
             scan_select('Compare models for this exact scan / bank','sx_source','sx_source_options')
             v.VBtn('Next scan',click=(app.symmetry_adjacent_scan,'[1]'),disabled=("sx_source_options.findIndex(x => x.value === sx_source) >= sx_source_options.length - 1",),variant='text',append_icon='mdi-chevron-right')
         html.P('Saved results load for the selected scan. Switching scans reads and verifies their artifacts; it does not start new refinements.',v_if='!sx_setup && sx_source_options.length > 1',classes='rf-notice')
+        matching_groups="sx_groups.filter(g => (g.title+' '+g.status).toLowerCase().includes(sx_search.trim().toLowerCase()))"
         with html.Div(v_if='!sx_setup && sx_results_current && sx_groups.length',classes='sx-layout'):
             with html.Aside(classes='rf-card'):
                 html.H3('Calculated-pattern groups')
                 html.P('Grouped only within the same source and fit domain. Expand a group to inspect each model and start.',classes='rf-notice')
                 v.VTextField(label='Find model or status',v_model=('sx_search',),density='compact',variant='outlined',hide_details=True,classes='mt-3')
                 with html.Div(classes='sx-models'):
-                    with html.Button(v_for="group in sx_groups.filter(g => (g.title+' '+g.status).toLowerCase().includes(sx_search.toLowerCase())).filter((g,i) => i < sx_group_limit || g.id === sx_group)",key='group.id',classes=("['sx-model', {active: sx_group === group.id}]",),click=(app.select_symmetry_group,'[group.id]')):
+                    with html.Button(v_for=f"group in {matching_groups}.filter((g,i) => i < sx_group_limit || g.id === sx_group)",key='group.id',classes=("['sx-model', {active: sx_group === group.id}]",),click=(app.select_symmetry_group,'[group.id]')):
                         html.B('{{ group.title }}')
                         html.Span('{{ group.rwp }} · {{ group.status }}')
                         html.Span('{{ group.count }} model / start records')
-                v.VBtn('Show 12 more groups',v_if='sx_groups.length > sx_group_limit',click='sx_group_limit += 12',variant='text',size='small')
-                html.P('{{ sx_groups.length }} groups; every model and disposition remains inspectable.',classes='rf-notice')
+                v.VBtn('Show 12 more groups',v_if=f'{matching_groups}.length > sx_group_limit',click='sx_group_limit += 12',variant='text',size='small')
+                html.P('No groups match this search.',v_if=f'{matching_groups}.length === 0',classes='rf-notice')
+                html.P('{{ '+matching_groups+'.length }} matching of {{ sx_groups.length }} groups; clear the search to see all outcomes.',v_if='!!sx_search.trim()',classes='rf-notice')
+                html.P('{{ sx_groups.length }} groups; every model and disposition remains inspectable.',v_else=True,classes='rf-notice')
             with html.Div(classes='rf-card'):
                 html.H3('Selected model fit')
                 html.P('{{ sx_fit_title }}',v_if='sx_fit_title',classes='rf-notice')
