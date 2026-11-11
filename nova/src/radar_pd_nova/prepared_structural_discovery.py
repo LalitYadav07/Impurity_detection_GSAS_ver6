@@ -19,6 +19,21 @@ class PreparedLibraryUnavailable(RuntimeError):
         self.candidate_checks=list(candidate_checks)
 
 
+def reference_notice(kind, *, has_reference=False):
+    """Describe the stored model's inputs without changing its inference."""
+    from gpx_recipe.preparation.structural_attention_weights import REFERENCE_KIND, FIXED_REFERENCE_KIND
+    if kind == FIXED_REFERENCE_KIND:
+        return ('ML reference: the selected before-transition measured scan.' if has_reference else
+                'ML reference: this model requires a before-transition measured scan.')
+    if kind == REFERENCE_KIND:
+        detail = (' The selected before-transition GPX supplies structure parameters for fitting; '
+                  'its measured curve is not used by this stored model.' if has_reference else
+                  ' No measured before-transition curve is used by this stored model.')
+        return 'ML reference: a calculated parent pattern.' + detail
+    return ('This older model does not record its ML reference type. '
+            'Do not interpret its ranking as a measured before/after comparison.')
+
+
 def selected_library(app):
     workspace = getattr(app, '_preparation_workspace', None)
     if workspace is None or not workspace.registry.selected_key(): return None
@@ -109,6 +124,7 @@ def stage_models(library, root):
                     and {candidate_identity(v) for v in c['candidates']} <= identities]
         result.append(dict(row=row, files=files, candidates=candidates, children=children,
             original_catalogs=original,
+            reference_kind=metadata.get('reference_kind'),
             library_id=library.document['id'], library_name=library.document['name']))
     return result
 
@@ -170,6 +186,7 @@ def discover(app, draft, parent, k, progress):
             candidate_checks=receipt['candidate_checks'])
     provenance = dict(library_id=model['library_id'], library_name=model['library_name'],
         entry_id=model['row']['entry'], model_sha256=model['row']['files']['model']['sha256'],
+        reference_kind=model.get('reference_kind'),
         candidate_scope_sha256=digest(model['candidates']), admission=receipt,
         scope='Reconstructed from native-eligible exact stored training candidates for the selected k; full model retained')
     catalog = dict(schema='radar-symmetry-catalog/v1', parent_setting_sha256=parent['setting_sha256'],

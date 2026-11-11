@@ -54,6 +54,7 @@ def test_exact_candidate_bytes_and_modes_survive_fresh_gpx_names_and_repeat_disc
         assert old['child']['sha256']==file_sha(draft['root']/new['child']['path'])
         assert new['child']['path']!=old['child']['path']
     assert catalog['provenance']['prepared_library']['library_id']==library.document['id']
+    assert 'reference_kind' in catalog['provenance']['prepared_library']
     assert 'Reconstructed' in catalog['provenance']['prepared_library']['scope']
     assert bridge.discover(app,draft,dict(setting_sha256='a'*64),['0','0','0'],lambda _:None)==catalog
     assert len(calls)==1
@@ -61,6 +62,34 @@ def test_exact_candidate_bytes_and_modes_survive_fresh_gpx_names_and_repeat_disc
     draft['context']['sha256']=file_sha(draft['root']/'source.gpx')
     bridge.discover(app,draft,dict(setting_sha256='a'*64),['0','0','0'],lambda _:None)
     assert len(calls)==2
+
+
+@pytest.mark.parametrize('kind,selected,expected',[
+    ('fixed_before_transition_parent',True,'selected before-transition measured scan'),
+    ('fixed_before_transition_parent',False,'requires a before-transition measured scan'),
+    ('calculated_parent_at_shared_parent_compatible_cell',True,'its measured curve is not used'),
+    ('calculated_parent_at_shared_parent_compatible_cell',False,'No measured before-transition curve is used'),
+    (None,False,'does not record its ML reference type'),
+])
+def test_reference_notice_describes_only_the_model_reference_actually_used(kind,selected,expected):
+    message=bridge.reference_notice(kind,has_reference=selected)
+    assert expected in message
+    if kind=='calculated_parent_at_shared_parent_compatible_cell':
+        assert 'calculated parent pattern' in message
+
+
+def test_discovery_retains_the_reference_kind_with_the_bound_model_metadata(setup,monkeypatch):
+    app,draft,library,_,_=setup
+    original=bridge.stage_models
+    def staged(*args):
+        models=original(*args)
+        for model in models:model['reference_kind']='calculated_parent_at_shared_parent_compatible_cell'
+        return models
+    monkeypatch.setattr(bridge,'stage_models',staged)
+    catalog=bridge.discover(app,draft,dict(setting_sha256='a'*64),['0','0','0'],lambda _:None)
+    marker=catalog['provenance']['prepared_library']
+    assert marker['reference_kind']=='calculated_parent_at_shared_parent_compatible_cell'
+    assert marker['admission']['identity']['files']['model']
 
 
 def test_incompatible_library_stops_instead_of_regenerating_or_repeating_admission(setup):

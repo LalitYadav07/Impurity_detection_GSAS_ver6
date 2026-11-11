@@ -931,6 +931,8 @@ class SymmetryMixin(KSearchMixin):
                             reason=row['eligibility_reason']) for row in admission['candidate_checks']]
                         s.sx_preparation_notice=(f"Admitted trained library: {marker['library_name']} · "
                             f"{eligible} / {total} candidates eligible · {excluded} excluded from this k · native context checks passed.")
+                        from .prepared_structural_discovery import reference_notice
+                        s.sx_preparation_notice+=' '+reference_notice(marker.get('reference_kind'),has_reference=bool(d.get('reference_asset')))
                 else:s.sx_discovery_scope=f"{len(catalog['candidates'])} magnetic embeddings discovered in this exact parent setting"
                 s.sx_discovered=True;s.sx_plan_ready=False;s.sx_approved=False
                 s.sx_message=s.sx_discovery_scope+('. Review the finite plan before starting refinement.' if catalog['candidates'] else '. No refinement plan is available.')
