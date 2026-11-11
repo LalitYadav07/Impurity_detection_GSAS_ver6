@@ -30,6 +30,22 @@ def test_planner_schema_exposes_explicit_stage_dependencies():
     assert 'execution order alone' in payload['response_contract']
 
 
+def test_planner_schema_can_express_requested_restore_and_continue_policy():
+    payload = native_planner.build_payload(
+        'Restore a rejected stage and continue independent later stages.', native_context())
+    schema = payload['response_schema']
+    assert 'failure_policy' in schema['required']
+    assert schema['properties']['failure_policy']['enum'] == ['stop', 'continue_independent']
+    assert 'Technical errors' in schema['properties']['failure_policy']['description']
+    assert 'continue_independent' in payload['response_contract']
+    plan = four_stage_plan(native_context(), payload['user_request'])
+    plan['failure_policy'] = 'continue_independent'
+    client = CapturingClient(plan)
+    result = native_planner.make_plan(payload['user_request'], native_context(), client=client)
+    assert result['status'] == 'ready_for_preflight'
+    assert result['plan']['failure_policy'] == 'continue_independent'
+
+
 def four_stage_plan(context, request):
     return dict(schema='radar-gpx-recipe/v1',model_signature=context['model_signature'],
         request=request,assumptions=[],questions=[],unsupported=[],stages=[

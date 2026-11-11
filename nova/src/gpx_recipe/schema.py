@@ -27,7 +27,15 @@ def response_schema(model_signature=None):
                "bounds":array(obj({"phase":string,"atom":string,"parameter":enum("F","U"),"lower":number,"upper":number,"value":nullable(number)})),
                "texture":array(obj({"phase":string,"histogram":string,"model":enum("march-dollase","spherical-harmonics"),"direction":nullable(array(integer)),"order":nullable(integer),"value":nullable(number)}))})
     signature=enum(model_signature) if model_signature is not None else string
+    failure_policy = enum("stop", "continue_independent")
+    failure_policy["description"] = (
+        "After a scientific stage rejection, stop or restore the complete previous checkpoint and "
+        "continue only stages whose explicit dependencies succeeded. Use continue_independent only "
+        "when requested or retained from the supplied previous plan; otherwise stop. Technical errors, "
+        "invalid requests, and failed provenance/active-set checks always stop."
+    )
     return obj({"schema":enum("radar-gpx-recipe/v1"),"model_signature":signature,"request":string,
+                "failure_policy": failure_policy,
                 "assumptions":array(string),"questions":array(string),"unsupported":array(string),"stages":array(stage)})
 
 

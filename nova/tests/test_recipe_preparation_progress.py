@@ -79,6 +79,50 @@ def test_guided_plan_uses_shared_progress_without_calling_luna(tmp_path):
     assert not w.state['jobs'] and not app._refinement_preparations
 
 
+@pytest.mark.parametrize('explicit,expected', [(False, 'continue_independent'), (True, 'stop')])
+def test_chat_failure_policy_is_not_overwritten_by_untouched_form_default(tmp_path, explicit, expected):
+    w, rt = create(tmp_path)
+    w.observe([source('1')])
+    def planner(request, context, previous=None):
+        value = plan(context)
+        value['failure_policy'] = 'continue_independent'
+        return dict(plan=value, calls=[])
+    w._planner = planner
+    app = App(w)
+    app.server.state.rf_failure_policy = 'stop'
+    app.server.state.rf_failure_policy_explicit = explicit
+    owner = dict(workspace=w, selection=('exp', '1', 'background', 'expert'),
+                 source_sha256=None)
+    result = asyncio.run(app._prepare_recipe_with_progress(owner))
+    assert result['status'] == 'ready'
+    assert result['plan']['failure_policy'] == expected
+    assert app.server.state.rf_failure_policy == expected
+    assert not w.state['jobs'] and not w.state['recipes']
+    assert [c[0] for c in rt.calls] == ['inspect', 'preview']
+
+
+def test_policy_edited_during_preparation_is_not_overwritten_by_completed_draft(tmp_path):
+    w, rt = create(tmp_path)
+    w.observe([source('1')])
+    app = App(w)
+    app.server.state.rf_failure_policy = 'stop'
+    app.server.state.rf_failure_policy_explicit = False
+    def planner(request, context, previous=None):
+        app.server.state.rf_failure_policy = 'stop'
+        app.server.state.rf_failure_policy_explicit = True
+        value = plan(context)
+        value['failure_policy'] = 'continue_independent'
+        return dict(plan=value, calls=[])
+    w._planner = planner
+    owner = dict(workspace=w, selection=('exp', '1', 'background', 'expert'),
+                 source_sha256=None)
+    result = asyncio.run(app._prepare_recipe_with_progress(owner))
+    assert result['plan']['failure_policy'] == 'continue_independent'
+    assert app.server.state.rf_failure_policy == 'stop'
+    assert not app._refinement_setup_matches(result)
+    assert not w.state['jobs'] and not w.state['recipes']
+
+
 def test_clarification_has_no_preflight_and_no_success_claim(tmp_path):
     w,rt=create(tmp_path);w.observe([source('1')]);events=[]
     def needs_input(request,context,previous=None):

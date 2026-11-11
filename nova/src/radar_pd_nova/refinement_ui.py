@@ -97,8 +97,8 @@ def refinement_dashboard(app):
                 html.P('{{ rf_scope_summary }}',classes='rf-notice')
                 html.Hr(style='border:0;border-top:1px solid #e0e9e2;margin:20px 0')
                 html.Div('2 · Describe the refinement',classes='rf-subtitle')
-                select('If a stage fails scientific checks','rf_failure_policy',"[{title:'Restore previous checkpoint and continue independent stages',value:'continue_independent'},{title:'Stop the recipe',value:'stop'}]",v_show="rf_setup_mode === 'expert'",update_modelValue=app.refinement_policy_edited)
-                html.P('Rejected values are discarded. Dependent stages are skipped. Recovered outputs retain the rejected-stage warnings.',v_show="rf_setup_mode === 'expert'",classes='rf-help')
+                select('If a stage fails scientific checks','rf_failure_policy',"[{title:'Restore previous checkpoint and continue independent stages',value:'continue_independent'},{title:'Stop the recipe',value:'stop'}]",v_show="rf_setup_mode === 'expert'",update_modelValue=app.refinement_failure_policy_edited)
+                html.P('The recipe request can set this behavior; changing this control overrides that choice. Rejected values are discarded, dependent stages are skipped, and recovered outputs retain the warnings.',v_show="rf_setup_mode === 'expert'",classes='rf-help')
                 select('Representative GPX','rf_source','rf_sources',id='radar-rf-source',update_modelValue=app.refinement_policy_edited)
                 with html.Div(v_if='!!rf_source',classes='rf-source mt-3'):
                     with html.Div(v_for='item in rf_source_details',key='item.label'):

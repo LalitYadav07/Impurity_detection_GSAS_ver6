@@ -1,6 +1,6 @@
 {
   "schema": "radar-pd-user-guide/v2",
-  "application_version": "0.7.11",
+  "application_version": "0.7.12",
   "pages": [
     "index.html",
     "reference-0.4.34.html",
@@ -506,10 +506,10 @@
     "assets/fd2dbb4afe01d19cb485.jpg": "fd2dbb4afe01d19cb48518d6c30a192c45c3c2af8560638d27a791b548d2c1f1",
     "assets/fe125ef98e627cd6c801.jpg": "fe125ef98e627cd6c801d7ee43c340537394df5b483555ba70b11d9fc8e476cf",
     "assets/ff2125e34a54ca4330be.jpg": "ff2125e34a54ca4330be10216af2b81c44e4bc4ed2ed09fe7ef801d7bc53795d",
-    "experiment-planner.html": "fe87d8568429c5e1c2d083f87c7446ef68a118362a3b13fc9c5ad58693261eef",
+    "experiment-planner.html": "361cdcec3aa7c96617b4578c7acb15b917817da47b8e5d52fb160ee1e63aff8e",
     "guide.css": "5c42c1e1efb87a99c78d01e726a5856492245faff6eae738f116da679777ce1a",
     "guide.js": "4ab14ce0c86f67a2d8b3f8cbe29a2f49e62ca1e03bd6d1bcd9aba264c118930e",
-    "index.html": "fd4426cc1dd660598e07fd8830f3d8b43320558ac749bd6b3bf2fcf36d3e0315",
+    "index.html": "2f386e3c269bd3e1bb83ca05e4af02e2c8121c2984467f597b7e864acdd04754",
     "inputs/ages-analysis-settings.yaml": "fbbff1d875b7b38f963c7edfe55ef019bdc01acc5e649c2918b3ae8e428656fc",
     "inputs/approved-refinement-recipe.json": "4e8e9d6365a47df527566ad20caaa4eb3a53b87e6d34bd7360ff0aeca94855fd",
     "inputs/llm-refinement-request.txt": "8bb6e275e5e675c32442279b246b1eaf38632fd6689b07133ce2c06139291283",

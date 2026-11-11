@@ -408,7 +408,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_state_defaults():
         return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_preparation_progress='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',rf_illumine_configured=bool(os.environ.get('AZURE_ILLUMINE_API_KEY')),rf_bilbao_configured=bool(os.environ.get('BCS_API_KEY')),
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
-            rf_failure_policy='stop',rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_question_answer='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
+            rf_failure_policy='stop',rf_failure_policy_explicit=False,rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_question_answer='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=2,
@@ -599,6 +599,7 @@ class RefinementMixin(GuidedRefinementMixin):
         scope=recipe.get('scope') or {}
         s.rf_source=draft.get('source_id','');s.rf_request=draft.get('request','')
         s.rf_failure_policy=(draft.get('plan') or {}).get('failure_policy','stop')
+        s.rf_failure_policy_explicit=False
         s.rf_scope=scope.get('mode','all');s.rf_samples=list(scope.get('samples',[]));s.rf_scans=list(scope.get('scans',[]));s.rf_banks=list(scope.get('banks',[]))
         s.rf_existing=recipe.get('existing',True);s.rf_future=recipe.get('future',False);s.rf_selected_job='';s.rf_recipe_filter='all'
         if s.rf_mode!='models' and w and any(j['source']['experiment']==s.rf_experiment for j in w.state['jobs'].values()):s.rf_mode='results'
@@ -634,6 +635,10 @@ class RefinementMixin(GuidedRefinementMixin):
 
     def refinement_policy_edited(self,*_,**__):
         self._refinement_hold_enrollment();self._refinement_sync_approval()
+
+    def refinement_failure_policy_edited(self,*_,**__):
+        self.server.state.rf_failure_policy_explicit=True
+        self.refinement_policy_edited()
 
     def load_atomic_refinement_example(self,**_):
         self._refinement_hold_enrollment()
@@ -867,9 +872,13 @@ class RefinementMixin(GuidedRefinementMixin):
             if self._recipe_preparation_current(owner):
                 self._sync_recipe_preparation_progress();self.server.state.flush()
         def progress(event):loop.call_soon_threadsafe(publish,event)
-        # Guided plans retain their declared policy. The expert-only selector
-        # can still contain a prior choice after the user changes setup mode.
-        options=dict(progress=progress,failure_policy=None if 'guided' in owner else getattr(self.server.state,'rf_failure_policy',None))
+        # A default or restored selector must not silently overwrite a policy
+        # requested in chat. A deliberate control edit remains authoritative.
+        state=self.server.state
+        policy_selection=(getattr(state,'rf_failure_policy','stop'),
+                          bool(getattr(state,'rf_failure_policy_explicit',False)))
+        options=dict(progress=progress,failure_policy=policy_selection[0]
+                     if 'guided' not in owner and policy_selection[1] else None)
         if 'guided' in owner:options['guided']=owner['guided']
         work=asyncio.create_task(asyncio.to_thread(w.prepare,experiment,source,request,**options))
         try:
@@ -879,7 +888,14 @@ class RefinementMixin(GuidedRefinementMixin):
                 done,_=await asyncio.wait({work},timeout=REFINEMENT_PROGRESS_SECONDS)
                 if self._recipe_preparation_current(owner):
                     self._sync_recipe_preparation_progress();self.server.state.flush()
-                if done:return work.result()
+                if done:
+                    draft=work.result()
+                    current=(getattr(state,'rf_failure_policy','stop'),
+                             bool(getattr(state,'rf_failure_policy_explicit',False)))
+                    if (draft and 'guided' not in owner and self._recipe_preparation_current(owner)
+                            and current==policy_selection and not policy_selection[1]):
+                        state.rf_failure_policy=(draft.get('plan') or {}).get('failure_policy','stop')
+                    return draft
         finally:
             owners.pop(token,None)
             # Cancelling this UI waiter cannot cancel an already accepted native
