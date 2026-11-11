@@ -406,7 +406,10 @@ class PreparationMixin:
         while not self._prep_stopping:
             busy=False
             for key,queue in list(store._queues.items()):
-                try:result=await asyncio.to_thread(queue.tick)
+                # A durable submission may include several slow Galaxy
+                # uploads. Return to collection and UI refresh after each
+                # one instead of hiding progress until every slot is filled.
+                try:result=await asyncio.to_thread(queue.tick,maximum_submissions=1)
                 except Exception as exc:
                     message='Preparation queue needs attention ('+type(exc).__name__+'). Existing Galaxy jobs were not restarted.'
                     self._prep_queue_errors[key]=message;s.prep_error=message

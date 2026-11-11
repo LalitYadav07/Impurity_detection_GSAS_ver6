@@ -379,7 +379,8 @@ def test_outdated_reference_replaces_old_completion_message_with_revalidation_ac
 
 def test_transient_queue_observation_is_repolled_without_a_new_dispatch(app,monkeypatch):
     app,store,_,_=app;calls=[];s=app.server.state;s.prep_library=''
-    def tick():
+    def tick(**kwargs):
+        assert kwargs=={'maximum_submissions':1}
         calls.append('same job')
         if len(calls)==1:raise TimeoutError('temporary observation failure')
         return dict(active=0,queue={'paused':True},coverage={'complete':True,'all_prepared':True})

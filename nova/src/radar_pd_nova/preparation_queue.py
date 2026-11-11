@@ -278,16 +278,21 @@ class PreparationQueue:
                 result.append(identifier)
         return result
 
-    def tick(self):
+    def tick(self,*,maximum_submissions=None):
         """Collect each batch once, then admit a bounded fair finite scope."""
+        if maximum_submissions is not None and (
+                type(maximum_submissions) is not int or not 0<=maximum_submissions<=64):
+            raise ValueError('Use a bounded whole-number preparation submission limit')
         with self._lock,intent_lock(self.path):
-            state=self._read();self._replay(state)
+            state=self._read();self._replay(state);submitted=0
             if state['paused']:self._paused.set()
             for job in state['jobs']:
                 if job['phase']=='collected':continue
                 handle=job['handle']
                 if not handle or not handle['submission_started']:
-                    if not state['paused'] and not self._paused.is_set():self._submit(state,job)
+                    if (not state['paused'] and not self._paused.is_set()
+                            and (maximum_submissions is None or submitted<maximum_submissions)):
+                        submitted+=1;self._submit(state,job)
                     continue
                 status=self.runtime.poll_native(handle);job['handle']=status['handle']
                 if status['state']=='finished':
@@ -310,6 +315,7 @@ class PreparationQueue:
             available=max(0,limit-active)
             for slot in range(available):
                 if state['paused'] or self._paused.is_set():break
+                if maximum_submissions is not None and submitted>=maximum_submissions:break
                 deferred=self._deferred(state)
                 pending=pending_entries(self.library,deferred=deferred)
                 ready=getattr(self.runtime,'preparation_operation_ready',None)
@@ -355,7 +361,7 @@ class PreparationQueue:
                     members=members,outcomes={},reason='',result_sha256=None)
                 state['jobs'].append(job);self._save(state)
                 for member in members:self._ensure_attempt(member)
-                self._submit(state,job)
+                submitted+=1;self._submit(state,job)
             from gpx_recipe.preparation.structural_dependencies import blocked_training
             blocked=blocked_training(self.library)
             active=sum(j['phase']!='collected' for j in state['jobs'])

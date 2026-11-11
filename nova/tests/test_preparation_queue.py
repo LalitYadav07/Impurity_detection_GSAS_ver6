@@ -48,6 +48,48 @@ def setup(remote, tmp_path, count=3, *, batch_size=1):
     return queue, snapshots, base
 
 
+def test_submission_quantum_collects_ready_results_before_filling_other_slots(remote,tmp_path):
+    queue,_,_=setup(remote,tmp_path,count=3);runtime,service,_=remote
+    runtime.max_active_jobs=4
+    queue.resume(maximum_jobs=4)
+    first=queue.tick(maximum_submissions=1)
+    first_job=first['queue']['jobs'][0]
+    assert first['active']==1 and len(service.submissions)==1
+    complete(queue,service,first_job,tmp_path)
+    second=queue.tick(maximum_submissions=1)
+    assert second['coverage']['counts']['prepared']==1
+    assert second['queue']['jobs'][0]['id']==first_job['id']
+    assert second['queue']['jobs'][0]['phase']=='collected'
+    assert second['active']==1 and len(service.submissions)==2
+    complete(queue,service,second['queue']['jobs'][1],tmp_path)
+    third=queue.tick(maximum_submissions=1)
+    assert third['coverage']['counts']['prepared']==2 and len(service.submissions)==3
+    complete(queue,service,third['queue']['jobs'][2],tmp_path)
+    final=queue.tick(maximum_submissions=0)
+    assert final['coverage']['all_prepared'] and final['active']==0
+    assert len(service.submissions)==3
+
+
+def test_submission_quantum_preserves_fair_small_catalog_batching(remote,tmp_path):
+    queue,_,_=setup(remote,tmp_path,count=2,batch_size=None);runtime,service,_=remote
+    runtime.max_active_jobs=4
+    queue.resume(maximum_jobs=4)
+    first=queue.tick(maximum_submissions=1)
+    second=queue.tick(maximum_submissions=1)
+    assert len(service.submissions)==2 and second['active']==2
+    assert [len(job['members']) for job in second['queue']['jobs']]==[1,1]
+    assert second['queue']['jobs'][0]['id']==first['queue']['jobs'][0]['id']
+
+
+@pytest.mark.parametrize('limit',[-1,True,1.5,65])
+def test_invalid_submission_quantum_cannot_start_work(remote,tmp_path,limit):
+    queue,_,_=setup(remote,tmp_path);_,service,_=remote
+    queue.resume()
+    with pytest.raises(ValueError,match='submission limit'):
+        queue.tick(maximum_submissions=limit)
+    assert not service.submissions
+
+
 def complete(queue, service, task, tmp_path, *, states=None, mutate=None, manifest_extra=None):
     """Protocol-only fake worker; the native worker has separate integration tests."""
     from gpx_recipe.preparation.batch import read_plan, RESULT_SCHEMA
