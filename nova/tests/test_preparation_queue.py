@@ -81,6 +81,20 @@ def test_submission_quantum_preserves_fair_small_catalog_batching(remote,tmp_pat
     assert second['queue']['jobs'][0]['id']==first['queue']['jobs'][0]['id']
 
 
+def test_acknowledged_job_does_not_wait_for_a_second_history_upload(remote,tmp_path):
+    queue,snapshots,_=setup(remote,tmp_path,count=1);_,service,_=remote
+    def checkpoint(state):
+        if any(job.get('handle',{}).get('job') for job in state['jobs']):
+            raise AssertionError('A post-ack upload must not block the next collection pass')
+        snapshots.append(copy.deepcopy(state))
+    queue.checkpoint=checkpoint;queue.resume()
+    result=queue.tick(maximum_submissions=1)
+    assert len(service.submissions)==1 and result['active']==1
+    assert result['queue']['jobs'][0]['handle']['job'] is not None
+    assert snapshots[-1]['jobs'][0]['handle']['submission_started']
+    assert snapshots[-1]['jobs'][0]['handle']['job'] is None
+
+
 @pytest.mark.parametrize('limit',[-1,True,1.5,65])
 def test_invalid_submission_quantum_cannot_start_work(remote,tmp_path,limit):
     queue,_,_=setup(remote,tmp_path);_,service,_=remote

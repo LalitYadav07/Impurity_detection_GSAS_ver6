@@ -157,7 +157,12 @@ class PreparationQueue:
             if unsupported:state['paused']=True;self._paused.set()
             self._save(state,remote=unsupported);return
         job.update(handle=handle,phase='submitted' if handle['job'] else 'needs_recovery',reason='')
-        self._save(state,remote=True)
+        # The acknowledged pre-POST checkpoint already owns the immutable
+        # dispatch key and input packet. Recovery looks up that same job even
+        # if the viewer is lost before its local acknowledgment is backed up.
+        # Do not block collection/UI on a second History upload here. The next
+        # dispatch intent or collected result persists the acknowledgment too.
+        self._save(state)
 
     def _inputs(self,job):
         hashes=job['handle']['request']['input_hashes'];missing=False

@@ -130,6 +130,28 @@ def test_native_batch_finishing_after_viewer_loss_recovers_all_siblings(remote,t
     assert len(service.submissions)==1 and len(restored.snapshot()['jobs'][0]['members'])==6
 
 
+def test_viewer_loss_after_ack_recovers_from_the_durable_prepost_intent(remote,tmp_path,monkeypatch):
+    import shutil
+    from radar_pd_nova.models import RunStatus
+    queue,_=history_setup(remote,tmp_path,count=1);runtime,service,_=remote
+    queue.resume();queue.tick(maximum_submissions=1);task=queue.snapshot()['jobs'][0]
+    dataset=saved_preparations(service)[0]['dataset_id']
+    durable=json.loads(gzip.decompress(service.data[dataset]))['queue']['jobs'][0]['handle']
+    assert durable['submission_started'] and durable['job'] is None
+    complete(queue,service,task,tmp_path)
+    original=service.jobs[task['handle']['key']];original.status=RunStatus.QUEUED
+    shutil.rmtree(queue.library.root);shutil.rmtree(runtime.root)
+    registry=PreparationRegistry(tmp_path/'fresh-registry')
+    fresh=GalaxyModelRuntime(tmp_path/'fresh-runtime',service)
+    monkeypatch.setattr(fresh,'find_dispatch',lambda key:service.jobs.get(key))
+    _,restored,_=PreparationHistory.recover(tmp_path/'restore',fresh,registry,dataset)
+    assert restored.tick(maximum_submissions=0)['active']==1
+    assert restored.snapshot()['jobs'][0]['handle']['job']['galaxy_job_id']==original.galaxy_job_id
+    original.status=RunStatus.OK
+    assert restored.tick(maximum_submissions=0)['coverage']['all_prepared']
+    assert len(service.submissions)==1
+
+
 def test_recovery_preserves_failed_attempt_and_later_successful_retry(remote,tmp_path,monkeypatch):
     from radar_pd_nova.models import RunStatus
     queue,_=history_setup(remote,tmp_path,count=1);_,service,_=remote
