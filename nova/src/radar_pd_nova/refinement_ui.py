@@ -215,7 +215,7 @@ def refinement_dashboard(app):
                             select('Stage','rf_stage','rf_stages');select('Histogram','rf_histogram','rf_histograms')
                         with html.Div(classes='rf-toolbar'):
                             select('Coordinate','rf_axis',"[{title:'d-spacing (Å)',value:'d'},{title:'Q (Å⁻¹)',value:'Q'},{title:'Native coordinate',value:'native'}]")
-                            select('Show fits','rf_display',"[{title:'Original and selected',value:'compare'},{title:'Selected refinement',value:'polished'},{title:'Original RADAR-PD',value:'original'}]")
+                            select('Show fits','rf_display',"[{title:'Starting and selected',value:'compare'},{title:'Selected refinement',value:'polished'},{title:'Starting model',value:'original'}]")
                             v.VBtn('Reset zoom',click='rf_zoom += 1',variant='text',size='small');v.VBtn('Expand',click='rf_expanded = true',variant='text',size='small',prepend_icon='mdi-arrow-expand')
                         html.P('{{ rf_rwp_summary }}',style='font-size:14px;font-weight:600')
                         with html.Div(classes='rf-plot'):

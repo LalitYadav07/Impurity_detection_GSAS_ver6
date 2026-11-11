@@ -73,6 +73,8 @@ class SymmetryMixin(KSearchMixin):
             sx_structural_starts=4,sx_structural_seconds=DEFAULT_FIT_SECONDS,
             sx_structural_radius=.05,sx_structural_cells=DEFAULT_CELL_RADIUS,sx_structural_recovery=0.,sx_parent_reference='')
         for key,value in extra.items():setattr(s,key,value)
+        s.sx_recipe_busy=bool(getattr(self,'_symmetry_recipe_inflight',False));s.sx_selected_kind=''
+        extra.update(sx_recipe_busy=s.sx_recipe_busy,sx_selected_kind='')
         self._symmetry_defaults={**defaults,**extra}
         s.change('rf_mode')(self._symmetry_mode_changed)
         s.change('rf_experiment','sx_result_scope')(self._symmetry_mode_changed)
@@ -582,6 +584,7 @@ class SymmetryMixin(KSearchMixin):
         # Never leave another trial's derived direction under that selection.
         s.sx_parent_moments=[];s.sx_parent_moment_note='';s.sx_parameter_note=''
         row=next((r for r in self._symmetry_rows if r['id']==s.sx_selected),None)
+        s.sx_selected_kind=(row or {}).get('kind','')
         s.sx_fit_title=fit_caption(row)
         s.sx_expanded_title=s.sx_fit_title
         s.sx_source_notices=[];s.sx_source_display_notices=[];s.sx_source_notice_context=''
@@ -670,15 +673,8 @@ class SymmetryMixin(KSearchMixin):
         async def launch():
             try:
                 def capture():
-                    receipt=verify_receipt(row['directory'],dict(id=row['id'],protocol_sha256=row['protocol']))
-                    if digest(receipt)!=row.get('receipt_sha256'):raise ValueError('The receipt changed; refresh evidence before opening')
-                    source=confined(row['directory'],row['gpx_relative'])
-                    expected=receipt.get('files',{}).get(row['gpx_relative'])
-                    if not expected:raise ValueError('This native GPX is absent from the audited receipt')
-                    root=self._symmetry_root()/'desktop-inputs';root.mkdir(parents=True,exist_ok=True)
-                    target=root/(digest(receipt)+'.gpx');shutil.copyfile(source,target)
-                    if file_sha(target)!=expected:raise ValueError('The selected native GPX changed during capture')
-                    return target
+                    from .model_recipe_handoff import capture_gpx
+                    return capture_gpx(row,self._symmetry_root()/'desktop-inputs')[0]
                 path=await asyncio.to_thread(capture)
                 dataset=await asyncio.to_thread(self.service.upload_document,path,label='Audited model '+row['id'])
                 from .galaxy_service import GSASII_INTERACTIVE_TOOL_ID
@@ -689,6 +685,55 @@ class SymmetryMixin(KSearchMixin):
             except Exception as exc:
                 s.sx_error=str(exc);s.gsasii_session_status='error';s.gsasii_status_message=str(exc);s.flush()
         self._schedule_utility(launch(),'radar-model-gsasii')
+
+    def open_symmetry_refinement(self):
+        """Open one structural checkpoint for recipe review, without fitting."""
+        from .model_recipe_handoff import capture_gpx,structural_source,STRUCTURAL_REQUEST
+        from .refinement_handoff import open_source
+        s=self.server.state
+        if getattr(self,'_symmetry_recipe_inflight',False):return
+        row=next((copy.deepcopy(r) for r in self._symmetry_rows if r['id']==s.sx_selected),None)
+        if (not s.sx_results_current or not row or row.get('kind')!='structural'
+                or not row.get('native_verified') or not row.get('has_gpx') or not row.get('has_view')):
+            s.sx_error='Select a native structural-model checkpoint before opening a recipe.';s.flush();return
+        workspace=self._refinement_store()
+        identity=(s.sx_campaign,s.rf_experiment,s.sx_result_scope,s.sx_source,s.sx_selected)
+        def current():
+            return (workspace is self._refinement_store() and s.sx_results_current and
+                    identity==(s.sx_campaign,s.rf_experiment,s.sx_result_scope,s.sx_source,s.sx_selected))
+        self._symmetry_recipe_inflight=True
+        s.sx_recipe_busy=True;s.sx_error='';s.flush()
+        async def prepare():
+            try:
+                path,checksum=await asyncio.to_thread(capture_gpx,row,self._symmetry_root()/'recipe-inputs')
+                with workspace.lock:
+                    source=structural_source(workspace,identity[1],row,path,checksum)
+                    previous=copy.deepcopy(workspace.state['sources'].get(source['id']) or {})
+                if not current():raise ValueError('Selection changed; no recipe input was selected.')
+                dataset=previous.get('dataset_id') if previous.get('source_sha256')==checksum else None
+                if workspace.runtime.kind=='galaxy' and not dataset:
+                    dataset=await asyncio.to_thread(self.service.upload_document,path,
+                        label='Structural model checkpoint '+row['id'])
+                if not current():raise ValueError('Selection changed; no recipe input was selected.')
+                # The original input may have been superseded while the exact
+                # output was being published. Recheck its provenance first.
+                with workspace.lock:
+                    source=structural_source(workspace,identity[1],row,path,checksum)
+                    if dataset:source['dataset_id']=dataset
+                    workspace.observe([source],enroll_future=False,manual=True)
+                if workspace.runtime.kind=='galaxy':
+                    await asyncio.to_thread(workspace.checkpoint)
+                if not current():raise ValueError('Selection changed; the saved input remains available without starting a recipe.')
+                open_source(self,source,STRUCTURAL_REQUEST)
+            except Exception as exc:
+                s.sx_error=str(exc)
+            finally:
+                self._symmetry_recipe_inflight=False
+                s.sx_recipe_busy=False;s.flush()
+        request=prepare()
+        try:self._schedule_utility(request,'radar-structural-recipe-handoff')
+        except Exception:
+            request.close();self._symmetry_recipe_inflight=False;s.sx_recipe_busy=False;raise
 
     def symmetry_overview_click(self,event):
         points=event.get('points',[]) if isinstance(event,dict) else []

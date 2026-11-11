@@ -40,6 +40,27 @@ def test_future_following_adds_only_new_matching_scans_not_old_unselected(tmp_pa
     assert set(module.queue_sources(c,None))=={'selected','new'}
 
 
+def test_manual_model_input_is_available_only_when_explicitly_captured(tmp_path,monkeypatch):
+    c,rows=setup(tmp_path,monkeypatch)
+    manual=dict(rows[0][0],id='manual-model',manual_recipe_input=True)
+    rows.append((manual,'radar'))
+    assert set(module.queue_sources(c,None))=={'selected','new'}
+    template=c.setting('template')
+    template['existing_ids'].append('manual-model')
+    template['seen_ids'].append('manual-model')
+    c.set_setting('template',template)
+    assert set(module.queue_sources(c,None))=={'selected','new','manual-model'}
+
+
+def test_actual_catalog_observation_can_admit_a_previously_manual_input(tmp_path,monkeypatch):
+    c,rows=setup(tmp_path,monkeypatch)
+    manual=dict(rows[0][0],id='manual-model',manual_recipe_input=True)
+    rows.append((manual,'radar'))
+    module.queue_sources(c,None)
+    manual.pop('manual_recipe_input')
+    assert set(module.queue_sources(c,None))=={'selected','new','manual-model'}
+
+
 def test_priority_reorders_only_captured_queued_acquisitions_without_changing_the_plan(tmp_path,monkeypatch):
     c,_=setup(tmp_path,monkeypatch)
     entries=module.queue_sources(c,None)

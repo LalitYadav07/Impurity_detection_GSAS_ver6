@@ -135,7 +135,10 @@ def build_payload(request, context, previous=None):
         'convergence.max_shift_over_sigma is a final-cycle dimensionless shift/standard-uncertainty ceiling. '
         'It is not Controls["min dM/M"], a relative-objective tolerance, nor an observed shift. '
         'Honor every bound in convergence_request exactly. Never derive a retained ceiling from native '
-        'controls or diagnostics. If its questions are unresolved, ask them and return stages=[].')
+        'controls or diagnostics. GSAS-II numeric and analytic Jacobian minimizers do not save the '
+        'required final-cycle evidence; for those sources ask a concrete question and return stages=[] '
+        'if such a screen is requested. Do not drop the user criterion or change the source minimizer. '
+        'If its questions are unresolved, ask them and return stages=[].')
     atom_cards=natural_atom_only_cards(request,context,payload['explicit_stage_count'])
     if atom_cards:
         if not payload['stage_instruction_cards']:payload['stage_instruction_cards']=atom_cards

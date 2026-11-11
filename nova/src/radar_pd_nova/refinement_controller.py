@@ -168,11 +168,12 @@ def refinement_rwp_summary(notice):
     def number(value):return f'{value:.3f}%' if value is not None else '—'
     original=number(notice.get('original_rwp'))
     selected=number(notice.get('polished_rwp'))
+    starting=notice.get('starting_label') or 'Original'
     if notice.get('original_rwp') is None:
         return f'Starting model has no evaluated Rwp · selected {selected}'
     if notice.get('rwp_comparable'):
-        return f'Original Rwp {original} → selected {selected}'
-    return f'Original Rwp {original} · selected {selected} (weighted comparison not qualified; compare the curves, not these scores)'
+        return f'{starting} Rwp {original} → selected {selected}'
+    return f'{starting} Rwp {original} · selected {selected} (weighted comparison not qualified; compare the curves, not these scores)'
 
 
 def refinement_histogram_options(view, source):
@@ -1351,7 +1352,8 @@ class RefinementMixin(GuidedRefinementMixin):
             histogram=s.rf_histogram
             histogram_label=next((item['title'] for item in s.rf_histograms if item['value']==histogram),None)
             fig,notice=fit_figure(baseline,view,histogram=histogram,axis=s.rf_axis,display=s.rf_display,reset=s.rf_zoom,
-                                 histogram_label=histogram_label)
+                                 histogram_label=histogram_label,
+                                 starting_label='Starting structural model' if job['source'].get('model_checkpoint') else 'Starting model')
             s.rf_fit=figure_json(fig);s.rf_fit_notice=notice.get('notice','')
             s.rf_rwp_summary=refinement_rwp_summary(notice)
             s.rf_parameter_warnings=refinement_parameter_warnings(view)

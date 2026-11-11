@@ -98,6 +98,12 @@ def convergence_notice(view):
         parts = ['The native solver did not report convergence.']
     else:
         parts = ['The native convergence status is unavailable.']
+    if (evidence.get('method') in {'numeric', 'analytic Jacobian'}
+            and evidence.get('native_converged') is None
+            and evidence.get('last_cycle_complete') is not True):
+        parts.append('This GPX uses the GSAS-II '+evidence['method']+
+                     ' minimizer, which does not save the Hessian final-cycle diagnostics; '
+                     'this is not itself evidence that the solver failed.')
     value = evidence.get('last_cycle_max_shift_over_sigma')
     usable = finite(value) and value >= 0
     if evidence.get('last_cycle_complete') is True and usable:

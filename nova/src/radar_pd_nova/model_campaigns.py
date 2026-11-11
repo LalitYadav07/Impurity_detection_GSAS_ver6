@@ -137,7 +137,7 @@ def queue_sources(campaign,workspace):
             key=source['id']
             if key in entries or not matches(template,source,kind):continue
             captured=key in template['existing_ids']
-            future=following and key not in template['seen_ids']
+            future=following and key not in template['seen_ids'] and not source.get('manual_recipe_input')
             if not (captured or future):continue
             if len(entries)>=template['maximum_scans']:
                 _set_setting(db,'following',False)

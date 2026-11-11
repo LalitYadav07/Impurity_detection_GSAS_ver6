@@ -5,6 +5,17 @@ from numbers import Real
 SCHEMA = 'radar-native-convergence/v1'
 
 
+def require_screen_support(context):
+    """Reject a known-unavailable required diagnostic before running a fit."""
+    method = str((context.get('controls') or {}).get('deriv type') or '')
+    if method in {'numeric', 'analytic Jacobian'}:
+        raise ValueError(
+            f'The selected GPX uses the GSAS-II {method} minimizer, which does not '
+            'save the final-cycle shift/sigma evidence required by this stage. '
+            'Review the convergence requirement before running; the worker will '
+            'not change the minimizer or substitute total-run movement.')
+
+
 def finite(value):
     return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
 

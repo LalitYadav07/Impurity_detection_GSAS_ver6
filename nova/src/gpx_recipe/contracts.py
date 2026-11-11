@@ -54,11 +54,12 @@ def validate_plan(plan, context):
         if type(stage["cycles"]) is not int or not 1 <= stage["cycles"] <= 30:
             raise ValueError("Stage cycles must be an integer from 1 to 30")
         if stage.get('convergence') is not None:
-            from .convergence import finite
+            from .convergence import finite, require_screen_support
             exact_keys(stage['convergence'],{'max_shift_over_sigma'},{'max_shift_over_sigma'})
             ceiling=stage['convergence']['max_shift_over_sigma']
             if not finite(ceiling) or not 0 < ceiling <= 1:
                 raise ValueError('Convergence requires a final-cycle shift/sigma ceiling in (0, 1]')
+            require_screen_support(context)
         if not isinstance(stage["free"], list) or not stage["free"] or len(stage["free"]) > 500:
             raise ValueError("Every stage needs a bounded explicit active set")
         seen = set()
@@ -71,6 +72,11 @@ def validate_plan(plan, context):
             if kind not in KINDS:
                 raise ValueError("Unsupported active parameter family: " + str(kind))
             exact_keys(target, fields[kind], fields[kind])
+            if kind == 'instrument_profile':
+                # Width refinement always requires the native convergence
+                # screen, including when no explicit ceiling was supplied.
+                from .convergence import require_screen_support
+                require_screen_support(context)
             if "histogram" in target and target["histogram"] not in hists:
                 raise ValueError("Unknown histogram " + str(target["histogram"]))
             phase = phases.get(target.get("phase"))

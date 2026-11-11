@@ -1,12 +1,9 @@
 """Plan/approval boundaries and one-shot planner behavior without network calls."""
 import copy
 import json
-from pathlib import Path
-import sys
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from gpx_recipe.contracts import validate_plan, plan_hash, stage_table
 from gpx_recipe.compiler import approve, compile_script
 from gpx_recipe.planner import make_plan, build_payload
@@ -36,6 +33,31 @@ def test_full_active_sets_show_fixed_transition(context, plan):
     table = stage_table(plan)
     assert table[1]["free"] == ["p0:O1:U"]
     assert table[1]["newly_fixed"] == ["p0:O1:X"]
+
+
+@pytest.mark.parametrize('method', ['numeric', 'analytic Jacobian'])
+def test_unavailable_required_convergence_is_rejected_before_execution(context, plan, method):
+    context['controls'] = {'deriv type': method}
+    assert validate_plan(plan, context)
+    plan['stages'][0]['convergence'] = {'max_shift_over_sigma': .5}
+    with pytest.raises(ValueError, match='does not save the final-cycle'):
+        validate_plan(plan, context)
+    # Neither a solver switch nor a weakened requirement is made implicitly.
+    assert context['controls']['deriv type'] == method
+    assert plan['stages'][0]['convergence']['max_shift_over_sigma'] == .5
+
+
+def test_numeric_profile_refinement_cannot_bypass_its_implicit_convergence_screen(context, plan):
+    context['controls'] = {'deriv type': 'numeric'}
+    plan['stages'][0]['free'] = [{'kind': 'instrument_profile', 'histogram': 'h0', 'parameter': 'X'}]
+    with pytest.raises(ValueError, match='final-cycle shift/sigma'):
+        validate_plan(plan, context)
+
+
+def test_hessian_convergence_request_remains_supported(context, plan):
+    context['controls'] = {'deriv type': 'analytic Hessian'}
+    plan['stages'][0]['convergence'] = {'max_shift_over_sigma': .5}
+    assert validate_plan(plan, context)
 
 
 @pytest.mark.parametrize("change", ["unknown_atom", "wrong_model", "script", "unknown_kind", "duplicate", "symmetry_fixed", "boolean_cycles", "too_many_cycles", "unsupported_background"])

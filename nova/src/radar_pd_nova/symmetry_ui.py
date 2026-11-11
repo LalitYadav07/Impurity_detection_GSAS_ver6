@@ -300,6 +300,10 @@ def model_exploration(app):
                     html.P('Coordinate conversion of asymmetric-site representative moments only; the fit status above still applies. Projection onto the selected direct axis is signed; the angle to that axis is 0–90° and unchanged by reversing every moment. In a nonorthogonal cell, this is a geometric projection rather than a raw fractional component. These are not net magnetization or proof of ordering or canting. Derived uncertainties are unavailable; raw component uncertainties remain in the table above.',classes='rf-notice')
                     html.P('{{ sx_parent_moment_note }}',v_if='!!sx_parent_moment_note',classes='rf-notice')
                 with html.Div(classes='rf-actions'):
+                    v.VBtn('Refine this structural model',v_if="sx_selected_kind === 'structural'",
+                        click=app.open_symmetry_refinement,
+                        disabled=('!sx_has_gpx || sx_recipe_busy || !sx_results_current',),
+                        loading=('sx_recipe_busy',),variant='outlined',size='small')
                     v.VBtn('Open native-verified representative',v_if='!!sx_native_reference',
                         click=app.open_symmetry_representative,variant='outlined',size='small')
                     v.VBtn('Open selected GPX in GSAS-II',click=app.open_symmetry_in_gsasii,
@@ -309,6 +313,8 @@ def model_exploration(app):
                         v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",variant='flat',color='#15543c',size='small')
                     v.VBtn('Download native GPX',click=(app.download_symmetry_artifact,"['gpx']"),disabled=('!sx_has_gpx',),variant='outlined',size='small',prepend_icon='mdi-download')
                     v.VBtn('Download trial receipt',click=(app.download_symmetry_artifact,"['receipt']"),disabled=('!sx_has_receipt',),variant='text',size='small')
+                html.P('Open this exact structural GPX as one recipe input. Its constraints and review warnings are retained; no refinement starts until you approve and start a recipe.',
+                    v_if="sx_selected_kind === 'structural'",classes='rf-notice')
                 html.P('{{ gsasii_status_message }}',v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",classes='rf-notice',raw_attrs=['aria-live="polite"'])
                 html.P('Desktop target: {{ sx_gsas_model || "another GPX opened in this viewer" }}. Save and exit that desktop before opening a different model.',
                     v_if="gsasii_session_status === 'ready'",classes='rf-notice')

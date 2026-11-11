@@ -72,6 +72,15 @@ def test_missing_or_partial_convergence_does_not_use_total_run_movement():
     assert 'Largest available' not in message
 
 
+def test_numeric_solver_diagnostics_are_unavailable_not_reported_as_failure():
+    evidence = dict(schema=SCHEMA, method='numeric', native_converged=None,
+                    last_cycle_complete=False, total_run_max_shift_over_sigma=2e-11)
+    message = convergence_notice(dict(convergence=evidence))
+    assert 'numeric minimizer' in message and 'does not save' in message
+    assert 'not itself evidence that the solver failed' in message
+    assert '2e-11' not in message and 'reported convergence' not in message
+
+
 def test_objective_notice_distinguishes_native_tolerance_from_material_increase():
     evidence=dict(schema=SCHEMA,native_converged=True,last_cycle_complete=True,
                   last_cycle_max_shift_over_sigma=.02,relative_objective_change=-1e-7,

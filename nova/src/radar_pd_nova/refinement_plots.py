@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 from html import escape
 
 import numpy as np
@@ -86,7 +87,8 @@ def _coordinate(hist,axis):
     raise ValueError('Choose native coordinates, d-spacing or Q')
 
 
-def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',reset=0,histogram_label=None):
+def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',reset=0,histogram_label=None,
+               starting_label='Starting model'):
     if not baseline or not polished:return empty_figure(),{}
     name=histogram or polished['histograms'][0]['name']
     current=next((h for h in polished['histograms'] if h['name']==name),None)
@@ -102,7 +104,7 @@ def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',res
     y=np.where(valid[order],y,np.nan)
     figure.add_trace(go.Scattergl(x=x,y=y,mode='markers',marker=dict(color='#202c32',size=2.2),name='Observed',hovertemplate='%{x:.6g}<br>Observed %{y:.6g}<extra></extra>'),row=1,col=1)
     traces=[]
-    if display in {'original','compare'}:traces.append(('Original RADAR-PD',original,'#81908b','dash'))
+    if display in {'original','compare'}:traces.append((starting_label,original,'#81908b','dash'))
     if display in {'polished','compare'}:traces.append(('Selected refinement',current,'#2368c4','solid'))
     evaluated=[h for _,h,_,_ in traces if h.get('fit_statistics',{}).get('calculation_status')!='not_yet_evaluated']
     standardized=bool(evaluated) and all(h.get('weights') is not None and isinstance(h.get('weight_factor'),(int,float)) and h['weight_factor']>0 for h in evaluated)
@@ -119,6 +121,8 @@ def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',res
             residual=residual*np.sqrt(w*h['weight_factor'])
         figure.add_trace(go.Scattergl(x=x,y=np.where(fitted,residual,np.nan),mode='lines',line=dict(color=color,width=.9,dash=dash),name=label+' residual',showlegend=False),row=2,col=1)
     active=original if display=='original' else current
+    active_view=baseline if display=='original' else polished
+    phases={p['name']:p for p in active_view.get('phases',[]) if p.get('name')}
     for index,ticks in enumerate(active.get('ticks',[])):
         dd=np.asarray(ticks['d'],dtype=float)
         if axis=='d':positions=dd
@@ -126,6 +130,11 @@ def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',res
         else:
             positions=np.asarray(ticks['native'],dtype=float)
         label=ticks['phase']
+        group=phases.get(label,{}).get('space_group')
+        if isinstance(group,str) and group.strip():
+            # A constructed child can retain the parent's old display name.
+            # Use the actual saved symmetry, without changing native names.
+            label=re.sub(r'\s*\(SG\s+\d+\)\s*$','',label)+' · '+group.strip()
         color=COLORS[index%len(COLORS)]
         figure.add_trace(go.Scattergl(x=positions,y=[index]*len(positions),mode='markers',marker=dict(symbol='line-ns',size=11,color=color,line=dict(color=color,width=2)),name=label,legendgroup='phase-'+str(index),hovertemplate=label+'<br>%{x:.6g}<extra></extra>'),row=3,col=1)
     figure.update_layout(template='plotly_white',height=620,margin=dict(l=75,r=22,t=32,b=55),
@@ -146,6 +155,7 @@ def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',res
         'Identical observations, weights, masks and fit limits.' if comparable else
         'Observations, weights, masks or fit limits differ or lack provenance; the two Rwp values are not directly comparable.')
     return figure,dict(original_rwp=original.get('rwp'),polished_rwp=current.get('rwp'),rwp_comparable=comparable,
+        starting_label=starting_label,
         notice=comparison+diagnostic+
         (' Historical residual report: the first bin above the upper limit was omitted. A new battery comparison re-exports corrected metrics from the verified GPX.'
          if active.get('fit_range_convention')!=NATIVE_FIT_CONVENTION else '')+

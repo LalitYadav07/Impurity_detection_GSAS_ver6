@@ -11,8 +11,8 @@ from radar_pd_nova.symmetry_controller import SymmetryMixin
 @pytest.fixture
 def desktop(tmp_path,monkeypatch):
     source=tmp_path/'trial/results/model.gpx';source.parent.mkdir(parents=True);source.write_bytes(b'exact selected native checkpoint')
-    receipt=dict(id='selected',files={'results/model.gpx':file_sha(source)})
-    monkeypatch.setattr('radar_pd_nova.symmetry_controller.verify_receipt',lambda *args:receipt)
+    receipt=dict(id='selected',gpx='model.gpx',files={'results/model.gpx':file_sha(source)})
+    monkeypatch.setattr('radar_pd_nova.model_recipe_handoff.verify_receipt',lambda *args:receipt)
     state=SimpleNamespace(gsasii_session_status='',gsasii_launch_url='',sx_selected='selected',sx_error='',flush=lambda:None)
     class App(SymmetryMixin):
         def _symmetry_root(self):return tmp_path/'workspace'

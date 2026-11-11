@@ -23,6 +23,24 @@ def test_comparison_refuses_different_observed_data():
     with pytest.raises(ValueError,match='same measured'):fit_figure(view(),modified)
 
 
+def test_structural_checkpoint_has_accurate_starting_label_and_saved_child_symmetry():
+    from radar_pd_nova.refinement_controller import refinement_rwp_summary
+    before=view();after=view()
+    old_name='oxide (SG 166)'
+    for record,group in [(before,'R -3 m'),(after,'C 2/m')]:
+        record['histograms'][0]['ticks'][0]['phase']=old_name
+        record['phases']=[dict(name=old_name,space_group=group)]
+    original=copy.deepcopy((before,after))
+    fig,notice=fit_figure(before,after,starting_label='Starting structural model')
+    assert 'Starting structural model' in [trace.name for trace in fig.data]
+    assert fig.data[-1].name=='oxide · C 2/m'
+    assert 'SG 166' not in fig.data[-1].name
+    assert refinement_rwp_summary(notice).startswith('Starting structural model Rwp')
+    reference,_=fit_figure(before,after,display='original')
+    assert reference.data[-1].name=='oxide · R -3 m'
+    assert (before,after)==original
+
+
 def test_native_mask_reset_cannot_turn_an_invalid_zero_weight_bin_into_a_measurement():
     from gpx_recipe.fit_domain import fit_domain_digest
     from gpx_recipe.worker import trend_view
