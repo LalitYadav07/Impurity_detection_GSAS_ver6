@@ -122,7 +122,15 @@ def _job_failure_message(stdout: str, stderr: str, dependency_error: str = "", *
     return primary + separator + stderr[-available:] if available > 0 else primary
 
 
-def _interactive_pending_message(tool_id: str) -> str:
+def _interactive_pending_message(tool_id: str, *, running: bool = False,
+                                 address_retry: bool = False) -> str:
+    if running:
+        name = "GSAS-II desktop" if tool_id == GSASII_INTERACTIVE_TOOL_ID else "interactive result viewer"
+        if address_retry:
+            return (f"Galaxy reports the {name} job is running, but its connection address "
+                    "could not be checked. Retrying the same session; no replacement job was submitted.")
+        return (f"Galaxy reports the {name} job is running. Waiting for its connection address; "
+                "the container may still be starting or loading the selected project.")
     if tool_id == GSASII_INTERACTIVE_TOOL_ID:
         return (
             "Waiting for NDIP to allocate the GSAS-II desktop. If this lasts more than a few minutes, "
@@ -2333,15 +2341,16 @@ class GalaxyService:
                             action.status = RunStatus.ERROR
                             action.message = stderr[-2000:] or "Result Explorer stopped before its NDIP entry point became active"
                     elif action.status == RunStatus.RUNNING and not active and not action.outputs.get("launch_url"):
-                        action.message = _interactive_pending_message(action.tool_id)
+                        action.message = _interactive_pending_message(action.tool_id, running=True)
                 elif action.status == RunStatus.RUNNING and not action.outputs.get("launch_url"):
-                    action.message = _interactive_pending_message(action.tool_id)
+                    action.message = _interactive_pending_message(action.tool_id, running=True)
                 elif action.status == RunStatus.OK and action.tool_id == RESULT_EXPLORER_TOOL_ID:
                     action.status = RunStatus.ERROR
                     action.message = stderr[-2000:] or "Result Explorer stopped before its NDIP entry point became active"
             except Exception:
                 if action.status == RunStatus.RUNNING and not action.outputs.get("launch_url"):
-                    action.message = _interactive_pending_message(action.tool_id)
+                    action.message = _interactive_pending_message(action.tool_id, running=True,
+                                                                  address_retry=True)
         action.updated_utc = datetime.now(timezone.utc).isoformat()
         return action
 

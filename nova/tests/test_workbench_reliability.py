@@ -499,13 +499,16 @@ def test_gsasii_interactive_session_tracks_ready_and_normal_close(
     assert closed.message == "GSAS-II session closed; the saved project is available in Galaxy History"
 
 
-def test_gsasii_interactive_session_explains_pending_entrypoint(tmp_path: Path, monkeypatch: Any) -> None:
+@pytest.mark.parametrize("entries", [[], [{"id": "starting", "active": False, "target": None}]])
+def test_gsasii_interactive_session_explains_pending_entrypoint(
+    tmp_path: Path, monkeypatch: Any, entries: list[dict[str, Any]]
+) -> None:
     class Response:
         def raise_for_status(self) -> None:
             pass
 
         def json(self) -> list[dict[str, Any]]:
-            return []
+            return entries
 
     monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", lambda *args, **kwargs: Response())
     service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
@@ -520,8 +523,29 @@ def test_gsasii_interactive_session_explains_pending_entrypoint(tmp_path: Path, 
     pending = service.refresh_utility(action)
 
     assert pending.status is RunStatus.RUNNING
-    assert "Waiting for NDIP to allocate the GSAS-II desktop" in pending.message
-    assert "Interactive Tool" in pending.message
+    assert "GSAS-II desktop job is running" in pending.message
+    assert "Waiting for its connection address" in pending.message
+    assert "allocate" not in pending.message
+    assert "launch_url" not in pending.outputs
+
+
+def test_running_desktop_with_unreadable_entrypoint_keeps_its_job(tmp_path: Path, monkeypatch: Any) -> None:
+    def unavailable(*args: Any, **kwargs: Any) -> None:
+        raise ConnectionError("temporary address lookup failure")
+
+    monkeypatch.setattr("radar_pd_nova.galaxy_service.requests.get", unavailable)
+    service = GalaxyService("https://example.invalid", "key", "history", output_root=tmp_path)
+    service._job_details = lambda job_id: {"state": "running"}  # type: ignore[method-assign]
+    action = UtilityActionRecord(uid="utility", tool_id=GSASII_INTERACTIVE_TOOL_ID,
+                                 name="GSAS-II", galaxy_job_id="same-desktop")
+
+    pending = service.refresh_utility(action)
+
+    assert pending.status is RunStatus.RUNNING
+    assert pending.galaxy_job_id == "same-desktop"
+    assert "could not be checked" in pending.message
+    assert "Retrying the same session" in pending.message
+    assert "launch_url" not in pending.outputs
 
 
 def test_collection_creation_and_element_mapping_use_public_galaxy_ids(
