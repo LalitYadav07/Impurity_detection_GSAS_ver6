@@ -37,6 +37,23 @@ def structural_timing_summary(value):
             f'{total:.1f} s combined service time. Other worker tasks, queue, startup and transfer are additional.')
 
 
+def structural_preparation_summary(value):
+    """Expose actual curve reuse separately from an attached library or a fit."""
+    if not isinstance(value,dict):return ''
+    preparation=value.get('portable_preparation')
+    if not isinstance(preparation,dict):return ''
+    if preparation.get('curve_bytes_reused') is True:
+        return 'Stored starting curves were reused after native compatibility checks. The final fit still uses the native calculation.'
+    discarded=preparation.get('discarded_entries')
+    if preparation.get('curve_bytes_reused') is False and isinstance(discarded,list) and discarded:
+        reasons=list(dict.fromkeys(str(r.get('reason','')).strip() for r in discarded
+            if isinstance(r,dict) and r.get('reason')))
+        suffix=(' '+ '; '.join(reasons)[:700]+'.') if reasons else ''
+        return ('Stored starting curves were not reused; current starting curves were generated.'
+                +suffix+' The final fit still uses the native calculation.')
+    return ''
+
+
 def candidate_display_name(catalog,candidate):
     """Use the authoritative constructed-child label, including its subgroup."""
     if candidate.get('magnetic_space_group'):return candidate['magnetic_space_group']

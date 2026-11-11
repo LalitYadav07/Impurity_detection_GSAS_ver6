@@ -21,6 +21,19 @@ def test_structural_timing_display_distinguishes_missing_and_inconsistent_old_re
     assert structural_timing_summary(dict(timing,scope={}))==''
 
 
+def test_prepared_curve_message_uses_actual_reuse_receipt_not_library_attachment():
+    from radar_pd_nova.symmetry_workspace import structural_preparation_summary
+    assert structural_preparation_summary({})==''
+    assert structural_preparation_summary(dict(portable_preparation=dict(attached_entries=9)))==''
+    reused=dict(portable_preparation=dict(curve_bytes_reused=True,attached_entries=1))
+    assert 'were reused' in structural_preparation_summary(reused)
+    rebuilt=dict(portable_preparation=dict(curve_bytes_reused=False,attached_entries=1,
+        discarded_entries=[dict(reason='Current cell differs from preparation')]))
+    message=structural_preparation_summary(rebuilt)
+    assert 'not reused' in message and 'Current cell differs' in message
+    assert 'final fit still uses the native calculation' in message
+
+
 def test_structural_parameters_use_child_cell_and_mode_units_without_inventing_errors():
     from radar_pd_nova.symmetry_workspace import parameter_note
     view=dict(phases=[dict(name='child',cell=[5.,6.,7.,90.,103.,90.],
