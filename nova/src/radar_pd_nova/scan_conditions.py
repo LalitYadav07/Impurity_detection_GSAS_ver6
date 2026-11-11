@@ -40,7 +40,8 @@ def condition_display(metric, label):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return ""
     unit = str(metric.get("unit") or "[unit not reported]")
-    statistic = "time-weighted mean " if metric.get("statistic") == "time_weighted_step_hold" else ""
+    statistic = "time-weighted mean " if metric.get("statistic")=="time_weighted_step_hold" else (
+        "counting-time weighted point mean " if metric.get("statistic")=="counting_time_weighted_point_samples" else "")
     text = f"{label}: {statistic}{value:.6g} {unit}"
     low, high = metric.get("minimum"), metric.get("maximum")
     if (all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (low, high))

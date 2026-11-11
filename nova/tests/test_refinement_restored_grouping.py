@@ -173,3 +173,59 @@ def test_same_label_distinct_jobs_are_not_one_publication(tmp_path):
     assert old['id'] != second['id'] and old['experiment'] != second['experiment']
     assert len(w.state['sources']) == 2
     assert {s['source_sha256'] for s in w.state['sources'].values()} == {'b'*64}
+
+
+def hb2a_publication(tmp_path, *, experiment=1000, scan=1, name=None, acquisition=None):
+    record, payload=publication(tmp_path,uid=f'hb2a-{experiment}-{scan}',known_acquisition=False,
+                               job=f'hb2a-{experiment}-{scan}')
+    record.name=name or f'IPTS-1_HB2A_EXP{experiment}_SCAN{scan:04d}_0123456789abcdef'
+    payload['summary']['provenance']={'input':{'instrument':'HB2A','source_bank':1,
+        'experiment_number':experiment,'scan_number':scan}}
+    if acquisition:payload['summary']['acquisition']=acquisition
+    return source_from_record(record,payload,None,'history')
+
+
+def test_hb2a_saved_identity_uses_the_verified_experiment_and_scan(tmp_path):
+    first=hb2a_publication(tmp_path)
+    repeated_number=hb2a_publication(tmp_path,experiment=1001)
+    assert first['experiment']==repeated_number['experiment']==experiment_key('history','HB2A','IPTS-1')
+    assert first['run_number']==1 and first['metadata']['experiment_number']==1000
+    assert first['scan_key']!=repeated_number['scan_key']
+    assert first['sample_key']!=repeated_number['sample_key']
+    assert first['scan_label']=='Exp 1000 · Scan 1 · bank 1'
+    assert first['run_id']=='HB2A_EXP1000_SCAN0001'
+    assert repeated_number['run_id']=='HB2A_EXP1001_SCAN0001'
+    assert first['sample_label']=='Sample not recorded'
+
+
+@pytest.mark.parametrize('name',[
+    'IPTS-1_HB2A_EXP1001_SCAN0001_0123456789abcdef',
+    'IPTS-1_HB2A_EXP1000_SCAN0002_0123456789abcdef',
+    'IPTS-1_HB2A_EXP1000_SCAN0001_0123456789abcdef_unverified',
+])
+def test_hb2a_conflicting_run_names_do_not_invent_a_proposal(tmp_path,name):
+    row=hb2a_publication(tmp_path,name=name)
+    assert row['experiment']==experiment_key('history','','',record_uid='hb2a-1000-1')
+
+
+def test_hb2a_published_sample_identity_does_not_require_the_generated_filename(tmp_path):
+    row=hb2a_publication(tmp_path,name='User-labelled cold scan',acquisition={
+        'instrument':'HB2A','ipts':'IPTS-1','run_number':1,'experiment_number':1000,
+        'sample_id':'EXP1000:ID:3','sample_name':'Rare-earth silicate'})
+    assert row['experiment_label']=='HB2A · IPTS-1'
+    assert row['sample_key']=='id:EXP1000:ID:3'
+    assert row['sample_label']=='EXP1000:ID:3 · Rare-earth silicate'
+    assert row['scan_label']=='Exp 1000 · Scan 1 · bank 1'
+
+
+def test_monitored_hb2a_scan_does_not_hide_another_experiments_same_scan_number(tmp_path):
+    workspace,_=create(tmp_path/'workspace')
+    watched=hb2a_publication(tmp_path,experiment=1000)
+    watched['live_watch']=True
+    recovered=hb2a_publication(tmp_path,experiment=1001)
+    duplicate=dict(watched,id='alternate-publication',record_uid='alternate-job',
+                   galaxy_job_id='alternate-job',live_watch=False)
+    workspace.observe([watched,recovered,duplicate])
+    assert {s['run_id'] for s in workspace.sources(watched['experiment'])}=={
+        'HB2A_EXP1000_SCAN0001','HB2A_EXP1001_SCAN0001'}
+    assert len(workspace.sources(watched['experiment']))==2

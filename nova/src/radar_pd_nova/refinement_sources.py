@@ -232,15 +232,29 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     metadata={**published_condition_metadata(acquisition),**dict(acquisition.get('metadata') or {})}
     # The published acquisition contract stores these fields directly. Older
     # history records often have no live-watch row or recoverable input contract.
-    for key in ('instrument','run_number','sample_id','sample_name'):
+    for key in ('instrument','ipts','run_number','sample_id','sample_name','experiment_number'):
         if acquisition.get(key) is not None:metadata.setdefault(key,acquisition[key])
-    for key in ('source_bank','instrument','product_id','product_kind','member_runs'):
+    for key in ('source_bank','instrument','ipts','product_id','product_kind','member_runs',
+                'experiment_number','scan_number'):
         if provenance_input.get(key) is not None:metadata.setdefault(key,provenance_input[key])
     metadata.update(scan.get('metadata') or {})
     scan={**dict(run_number=getattr(selection,'run_number',None),bank=getattr(selection,'bank',''),instrument=getattr(selection,'instrument',''),ipts=getattr(selection,'ipts','')),**scan}
     instrument = str(scan.get('instrument') or metadata.get('instrument') or '')
     ipts = str(scan.get('ipts') or metadata.get('ipts') or '')
     run_number=scan.get('run_number') or metadata.get('run_number')
+    experiment_number=scan.get('experiment_number') or metadata.get('experiment_number')
+    if instrument=='HB2A':
+        # HFIR restarts scan numbers in each SPICE experiment. The published
+        # provenance is authoritative; a filename can only recover its IPTS
+        # when both independently recorded numbers agree.
+        if not run_number:run_number=metadata.get('scan_number')
+        if experiment_number:metadata['experiment_number']=experiment_number
+        if not ipts:
+            named=re.fullmatch(r'(IPTS-[1-9]\d*)_HB2A_EXP([1-9]\d*)_SCAN0*([1-9]\d*)'
+                              r'_[a-f0-9]{8,64}(?:_retry[1-9]\d*)?',str(record.name))
+            if (named and str(experiment_number)==named[2]
+                    and str(run_number)==named[3]):
+                ipts=named[1]
     if not ipts:
         # A recovered Live job can have a Galaxy data input and no saved
         # ndip_delivery block. Accept only the unambiguous run-name contract.
@@ -266,8 +280,10 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
             not re.fullmatch(r'SLICE_[0-9]+(?:P[0-9]+)?|SUM_[A-F0-9]{12}',product_id)):
         raise ValueError('Unsupported or conflicting derived-product identity')
     run_id = str(scan.get('run_id') or (f'{instrument}_{run_number}'+('_'+product_id if product_id else '') if run_number else job_identity))
+    if not scan.get('run_id') and instrument=='HB2A' and experiment_number and run_number:
+        run_id=f'HB2A_EXP{experiment_number}_SCAN{int(run_number):04d}'
     bank = str(scan.get('bank') or metadata.get('source_bank') or metadata.get('bank') or '')
-    scan_key = digest([exp,scan.get('experiment_number'),run_number or job_identity,bank,*([product_id] if product_id else [])])[:24]
+    scan_key = digest([exp,experiment_number,run_number or job_identity,bank,*([product_id] if product_id else [])])[:24]
     publication = str(project.get('collection_name') or Path(str(project.get('collection_path') or project.get('path') or '')).name)
     # Watch metadata can arrive after the archive. It must not create a second
     # source identity or enroll the same published result a second time.
@@ -275,6 +291,8 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     # uses the acknowledged Galaxy job ID; both must identify the same GPX.
     uid = digest([history, job_identity, project.get('sha256'), project.get('published_sha256'), publication])[:24]
     scan_label=str(scan.get('scan_label') or record.name)
+    if not scan.get('scan_label') and instrument=='HB2A' and experiment_number and run_number:
+        scan_label=f'Exp {experiment_number} · Scan {run_number}'
     if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
     warnings=[]
     for document in (result,scan):
@@ -287,7 +305,8 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
     return dict(id=uid, experiment=exp, experiment_label=(f'{instrument} · {ipts}' if ipts else record.name),
                 scan_key=scan_key, record_uid=record.uid, galaxy_job_id=job_identity, run_id=run_id,
                 run_number=run_number, bank=bank, sample_key=sample_key,
-                sample_label=scan_sample_label or ' · '.join(x for x in [sample_id, sample_name] if x) or 'Unassigned sample',
+                sample_label=scan_sample_label or ' · '.join(x for x in [sample_id, sample_name] if x)
+                    or ('Sample not recorded' if instrument=='HB2A' else 'Unassigned sample'),
                 scan_label=scan_label, metadata=metadata, axis_overrides=scan.get('axis_overrides') or {},
                 source_path=str(path) if path else None, source_sha256=checksum,
                 internal_source_sha256=project.get('sha256'), collection_id=collection,

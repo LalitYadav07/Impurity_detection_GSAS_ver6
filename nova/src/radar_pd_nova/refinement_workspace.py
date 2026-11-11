@@ -173,7 +173,15 @@ class RefinementWorkspace:
         values=list(self.state['sources'].values())
         def identity(source):
             run=source.get('run_number')
-            return (source['experiment'],str(run),str(source.get('bank') or '')) if run is not None else None
+            if run is None:return None
+            metadata=source.get('metadata') or {}
+            if metadata.get('instrument')=='HB2A':
+                # SPICE scan numbers restart for every experiment, including
+                # experiments in one IPTS. A monitored scan must not hide an
+                # unrelated recovered experiment's same-numbered scan.
+                experiment=metadata.get('experiment_number')
+                return (source['experiment'],'HB2A',experiment or source['id'],str(run),str(source.get('bank') or ''))
+            return (source['experiment'],str(run),str(source.get('bank') or ''))
         monitored={identity(source) for source in values if source.get('live_watch') and not source.get('manual_recipe_input') and identity(source) is not None}
         superseded={source['model_parent_id'] for source in values if source.get('model_parent_id')}
         return [source for source in values if source['id'] not in superseded and

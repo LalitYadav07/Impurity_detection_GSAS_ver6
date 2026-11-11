@@ -38,6 +38,23 @@ def test_temperature_handoff_changes_only_acquisition_metadata():
     assert len(changed[0][2][1])==2
 
 
+def test_hb2a_counted_point_handoff_retains_statistics_and_fitted_arrays():
+    p=packet()
+    p.update(instrument='HB2A',ipts='IPTS-1',run_number=22,experiment_number=853,
+             product_window_basis='Individual reduced product matched to its SPICE experiment/scan; '
+                                  'readbacks are counting-time weighted point samples, not continuous wall-time logs')
+    p['channels'][0].update(statistic='counting_time_weighted_point_samples',
+                           coverage_basis='counted_spice_points',sampled_points=32,counting_seconds=480.)
+    validated=validate_acquisition(p)
+    changed=records();original=deepcopy(changed)
+    receipt=annotate_gpx_records(changed,validated)
+    assert receipt['temperature_written']
+    assert changed[0][1][1]['Temperature']==322.5178
+    assert changed[0][0]==original[0][0] and changed[1:]==original[1:]
+    assert changed[0][-1][1]['metadata']['channels'][0]['coverage_basis']=='counted_spice_points'
+    assert 'counting_time_weighted_point_samples' in changed[0][2][1][-1]
+
+
 def test_unqualified_interval_and_multihistograms_never_receive_a_temperature():
     p=packet();p['product_window_verified']=False
     data=records();receipt=annotate_gpx_records(data,p)

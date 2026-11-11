@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 
 from .scan_conditions import qualified_metadata
 from .facility_metadata import parse_nexus_timestamp
@@ -106,6 +107,11 @@ def acquisition_context(metadata, *, instrument, run_number, source, script_sha2
     if instrument == 'SNAP' and conditions.get('window_scope') == 'reviewed_full_parent_run':
         window_verified = True
         basis = conditions['product_window_basis']
+    if (instrument == 'HB2A' and conditions.get('registry') == 'HFIR-HB2A-SPICE-conditions/1'
+            and conditions.get('window_scope') == 'individual_spice_scan'):
+        window_verified = True
+        basis = ('Individual reduced product matched to its SPICE experiment/scan; '
+                 'readbacks are counting-time weighted point samples, not continuous wall-time logs')
     if instrument == 'PG3' and _full_powgen_run(source, metadata, script_sha256):
         window_verified = True
         basis = 'one matching NeXus file in hashed SNSPowderReduction script; no time/split selection'
@@ -116,13 +122,21 @@ def acquisition_context(metadata, *, instrument, run_number, source, script_sha2
             continue
         if metric.get('requires_binding') and not metric.get('binding_verified'):
             continue
+        if instrument=='HB2A' and (metric.get('statistic')!='counting_time_weighted_point_samples'
+                or metric.get('coverage_basis')!='counted_spice_points'
+                or metric.get('reviewed_binding') is not True
+                or type(metric.get('sampled_points')) is not int or metric['sampled_points']<1
+                or type(metric.get('counting_seconds')) not in (int,float)
+                or not math.isfinite(metric['counting_seconds']) or metric['counting_seconds']<=0):
+            continue
         value, coverage = metric.get('value'), metric.get('coverage_fraction')
         if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (value, coverage)):
             continue
-        if coverage < 1 - 1e-6 or not metric.get('source') or not metric.get('unit'):
+        if not 1-1e-6<=coverage<=1+1e-6 or not metric.get('source') or not metric.get('unit'):
             continue
         allowed = ('quantity', 'value', 'unit', 'source', 'minimum', 'maximum',
-                   'statistic', 'coverage_fraction', 'role', 'status', 'acquisition_window')
+                   'statistic', 'coverage_fraction', 'role', 'status', 'acquisition_window',
+                   'coverage_basis', 'sampled_points', 'counting_seconds', 'approximation', 'channel')
         channel = {k: metric[k] for k in allowed if k in metric}
         channel['quantity'] = quantity
         channels.append(channel)
@@ -132,6 +146,11 @@ def acquisition_context(metadata, *, instrument, run_number, source, script_sha2
         'acquisition_window': conditions.get('acquisition_window') or {},
         'product_window_verified': window_verified, 'product_window_basis': basis,
         'source_metadata_sha256': conditions.get('metadata_sha256'), 'channels': channels}
+    ipts=str(metadata.get('ipts') or '')
+    if re.fullmatch(r'IPTS-[1-9]\d*',ipts):payload['ipts']=ipts
+    experiment=metadata.get('experiment_number')
+    if instrument=='HB2A' and type(experiment) is int and experiment>0:
+        payload['experiment_number']=experiment
     # No trajectories or arbitrary metadata objects may spill into this header.
     if len(json.dumps(payload, allow_nan=False).encode('ascii')) > 6000:
         raise ValueError('Acquisition context exceeds the powder-header limit')

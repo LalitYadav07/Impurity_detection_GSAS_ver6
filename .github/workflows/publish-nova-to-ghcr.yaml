@@ -138,6 +138,10 @@ jobs:
             /validation-tests/test_live_assistant.py \
             /validation-tests/test_live_assistant_integration.py \
             /validation-tests/test_live_assistant_inventory.py \
+            /validation-tests/test_hb2a.py \
+            /validation-tests/test_hb2a_live_setup.py \
+            /validation-tests/test_acquisition.py \
+            /validation-tests/test_refinement_restored_grouping.py \
             /validation-tests/test_powgen_discovery_revisions.py \
             /validation-tests/test_webmon_cancelled_job.py \
             /validation-tests/test_webmon_checkpoints.py \

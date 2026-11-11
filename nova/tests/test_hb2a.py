@@ -305,6 +305,56 @@ def test_he3_inventory_and_staging_record_actual_selected_thermometer(archive,pr
     assert receipt['setup']['metadata']['temperature']['value']==pytest.approx(.28)
 
 
+def test_staging_publishes_bounded_acquisition_and_counted_temperature(archive,profile,tmp_path):
+    from radar_pd_nova.acquisition import published_condition_metadata
+    data,_=add(archive)
+    binding={'temperature':{'channel':'sample_temp','unit':'K','reviewed':True}}
+    setup=hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings=binding)
+    staged,_,_=hb2a.stage_pattern(data,setup,profile,tmp_path/'publication',acknowledged=True)
+    provenance=json.loads(staged.read_text().splitlines()[0].split(': ',1)[1])
+    acquisition=provenance['acquisition']
+    assert acquisition['instrument']=='HB2A' and acquisition['ipts']=='IPTS-1'
+    assert acquisition['experiment_number']==1000 and acquisition['run_number']==1
+    assert acquisition['sample_name']=='Synthetic, sample'
+    assert acquisition['sample_id'].startswith('EXP1000:NAME:')
+    assert acquisition['product_window_verified']
+    assert len(acquisition['channels'])==1
+    temperature=acquisition['channels'][0]
+    assert temperature['statistic']=='counting_time_weighted_point_samples'
+    assert temperature['coverage_basis']=='counted_spice_points'
+    assert temperature['sampled_points']==32 and temperature['counting_seconds']==480
+    restored=published_condition_metadata(acquisition)
+    assert restored['temperature']['value']==pytest.approx(setup.metadata['temperature']['value'])
+    assert restored['temperature']['minimum']==100 and restored['temperature']['maximum']==131
+    assert restored['temperature']['coverage_basis']=='counted_spice_points'
+    assert staged.read_bytes().endswith(data.read_bytes())
+
+
+def test_unselected_or_ambiguous_thermometer_is_not_published(archive,profile,tmp_path):
+    data,_=add(archive)
+    setup=hb2a.inspect_reduced_setup(data,ipts='IPTS-1')
+    staged,_,_=hb2a.stage_pattern(data,setup,profile,tmp_path/'no-temperature',acknowledged=True)
+    acquisition=json.loads(staged.read_text().splitlines()[0].split(': ',1)[1])['acquisition']
+    assert acquisition['sample_name']=='Synthetic, sample'
+    assert acquisition['channels']==[]
+
+
+@pytest.mark.parametrize('change',[
+    {'reviewed_binding':False},{'coverage_fraction':.5},{'coverage_fraction':1.5},
+    {'counting_seconds':0},{'sampled_points':0},{'coverage_basis':'continuous_log'},
+])
+def test_incomplete_point_readbacks_never_gain_publication_qualification(archive,change):
+    from copy import deepcopy
+    from radar_pd_nova.acquisition import acquisition_context
+    data,_=add(archive)
+    setup=hb2a.inspect_reduced_setup(data,ipts='IPTS-1',condition_bindings={
+        'temperature':{'channel':'sample_temp','unit':'K','reviewed':True}})
+    metadata=deepcopy(setup.metadata)
+    metadata['conditions']['channels'][0].update(change)
+    acquisition=acquisition_context(metadata,instrument='HB2A',run_number=1,source=data)
+    assert acquisition['channels']==[]
+
+
 def test_profile_review_type_wavelength_duplicates_and_physical_range(archive,profile):
     data,_=add(archive);setup=hb2a.inspect_reduced_setup(data,ipts='IPTS-1')
     with pytest.raises(ValueError,match='Confirm'):hb2a.validate_profile(setup,profile)

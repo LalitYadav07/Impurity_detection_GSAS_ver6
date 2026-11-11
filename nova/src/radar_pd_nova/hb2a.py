@@ -223,7 +223,7 @@ def read_spice(path, *, ipts, experiment, scan, condition_bindings=None,
                      f'EXP{experiment}:NAME:{sha256(name.encode()).hexdigest()[:12]}')
         basis = 'SPICE sample ID scoped to experiment' if reported else 'SPICE sample name scoped to experiment; no sample ID recorded'
     source = str(Path(path))
-    result = {'schema_version': 3, 'instrument': 'HB2A', 'facility': 'HFIR', 'available': True,
+    result = {'schema_version': 3, 'instrument': 'HB2A', 'facility': 'HFIR', 'ipts':str(ipts), 'available': True,
         'run_number': scan, 'scan_number': scan, 'experiment_number': experiment,
         'source_run_id': f'HB2A_EXP{experiment}_SCAN{scan:04d}',
         'sample_id': sample_id, 'sample_name': name, 'identity_basis': basis,
@@ -246,6 +246,7 @@ def read_spice(path, *, ipts, experiment, scan, condition_bindings=None,
             *(['Collimation supplied by reviewed user mapping because colltrans is absent.'] if not coll and collimator else []),
             *(['Stopped acquisition: review its measured angular coverage.'] if stopped else [])]}
     conditions = {}
+    window={'start':result['start_time'],'end':result['end_time']}
     from .hb2a_temperature import HE3_AUTOMATIC_CHANNEL, HE3_CHANNELS, resolve_he3_temperature
     for quantity, binding in (condition_bindings or {}).items():
         if quantity not in {'temperature', 'magnetic_field', 'pressure', 'voltage'}:
@@ -279,6 +280,8 @@ def read_spice(path, *, ipts, experiment, scan, condition_bindings=None,
             'channel': channel, 'statistic': 'counting_time_weighted_point_samples',
             'quantity':quantity,'status':'recorded','role':'measured','binding_verified':True,
             'reviewed_binding': True,'sampled_points':len(values),
+            'coverage_fraction':1.,'coverage_basis':'counted_spice_points',
+            'counting_seconds':sum(times),'acquisition_window':dict(window),
             'approximation':'Counting-time weighting of measured point samples; no between-point interpolation'}
         if sensor_resolution:
             observation['sensor_resolution']=sensor_resolution
@@ -288,6 +291,7 @@ def read_spice(path, *, ipts, experiment, scan, condition_bindings=None,
         conditions[quantity] = observation
     packet={'$schema':'radar-pd-conditions/v1','registry':'HFIR-HB2A-SPICE-conditions/1',
         'channels':list(conditions.values()),'source_sha256':result['spice_sha256'],
+        'acquisition_window':window,'window_scope':'individual_spice_scan',
         'acquisition_start':result['start_time'],'acquisition_end':result['end_time']}
     packet['metadata_sha256']=sha256(json.dumps(packet,sort_keys=True,allow_nan=False).encode()).hexdigest()
     result['conditions'] = packet
@@ -411,11 +415,16 @@ def stage_pattern(source, setup, profile_path, destination, *, acknowledged=Fals
         # GSAS-II's XYE reader masks zero/nonpositive sigma; preserve the bytes.
         warnings.append({'code':'hb2a_masked_bins', 'message':f'{setup.masked_points} zero-intensity/zero-uncertainty bins require importer mask verification.'})
     metadata = setup.metadata
+    from .acquisition import acquisition_context
+    acquisition=acquisition_context(metadata,instrument='HB2A',run_number=setup.scan,source=source)
+    if acquisition is None:
+        raise ValueError('HB-2A acquisition requires its dated SPICE scan interval')
     input_provenance = {'schema':'radar-pd-input-provenance/v1', 'instrument':'HB2A', 'source_bank':1,
         'reduction_family':'HB2A individual reduced XYE', 'calibration':receipt['profile_sha256'],
         'source_sha256':setup.source_sha256, 'spice_sha256':metadata['spice_sha256'],
         'condition_receipt_sha256':metadata['conditions']['metadata_sha256'],
         'experiment_number':setup.experiment, 'scan_number':setup.scan,
+        'ipts':metadata['ipts'],'acquisition':acquisition,
         'profile_sha256':receipt['profile_sha256'], 'reduction_setup':{
             'experiment_number':setup.experiment, 'ge_reflection':metadata['ge_reflection'],
             'collimator':metadata['collimator'], 'normalization':setup.normalization,
