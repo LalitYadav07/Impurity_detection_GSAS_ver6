@@ -113,6 +113,8 @@ def libraries_panel(app):
     with v.VCard(variant='outlined',classes='pa-4 mb-4'):
         html.H2('Prepared libraries',classes='text-h6')
         v.VSelect(label='Library or input inspection',v_model=('prep_library',),items=('prep_library_options',),disabled=('prep_busy',),variant='outlined',density='compact')
+        html.P('Choose a saved library above to inspect or reuse it. Clearing the workspace keeps these libraries but removes the active selection.',
+            v_if='!prep_library && prep_library_options.length',classes='text-body-2')
         html.P('{{ prep_library_kind }} · {{ prep_coverage }}',v_if='!!prep_library',classes='text-body-2')
         html.P('{{ prep_active_jobs }} active Galaxy jobs attached to this workspace.',v_if='!!prep_library',classes='text-caption')
         with html.Div(v_if='!!prep_library',classes='d-flex flex-wrap my-3',style='gap:8px'):

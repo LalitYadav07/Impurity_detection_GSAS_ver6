@@ -179,6 +179,13 @@ class PreparationRegistry:
             state['selected'] = key
             write_json(self.path, state)
 
+    def clear_selection(self):
+        """Retire active reuse without deleting any registered library."""
+        with self._transaction():
+            state = self._read()
+            state['selected'] = ''
+            write_json(self.path, state)
+
     def selected_key(self):
         """Read the selection without opening or hashing scientific assets."""
         return self._read()['selected']

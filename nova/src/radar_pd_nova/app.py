@@ -1022,7 +1022,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             )
             vuetify.VBtn(
                 "Clear workspace",
-                v_if="run_rows.length || rf_experiments.length || rf_jobs.length || !!powgen_ipts || !!selected_run_uid",
+                v_if="run_rows.length || rf_experiments.length || rf_jobs.length || !!powgen_ipts || !!selected_run_uid || !!prep_library || !!prep_reference || !!prep_parent_path || !!prep_profile_path",
                 prepend_icon="mdi-broom",
                 variant="text",
                 size="small",
@@ -1032,7 +1032,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 with vuetify.VCard():
                     vuetify.VCardTitle("Clear this workspace")
                     vuetify.VCardText(
-                        "Stop Live monitoring and queued/future refinement work, release loaded run and plot data, and reset the IPTS setup. Already-submitted Galaxy jobs continue. Saved results and refinement receipts remain in History and can be reopened."
+                        "Stop Live monitoring and queued/future refinement and preparation work, release loaded run and plot data, and reset the IPTS and preparation setup. Already-submitted Galaxy jobs continue. Saved results and refinement receipts remain in History. Prepared libraries are kept but deselected."
                     )
                     vuetify.VCardText(
                         "{{ session_save_message }} Please keep this session open.",
@@ -1208,6 +1208,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.flush()
         try:
             await self._stop_session_enrollment()
+            await self._clear_preparation_workspace()
         except Exception as exc:
             state.workspace_clearing = False
             state.clear_workspace_dialog = False
@@ -1362,6 +1363,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         self._clear_live_restore_selection()
         state.workspace_notice = (
             "Workspace cleared. Galaxy jobs, saved results and refinement receipts remain in History. "
+            "Prepared libraries are kept; choose one again to reuse it. "
             "Enter another IPTS or show earlier recent runs when needed."
         )
         state.workspace_notice_kind = "success"
@@ -2926,9 +2928,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
 
     def _workspace_page(self) -> None:
         with html.Div(classes="radar-workspace-inner"):
+            vuetify.VAlert(v_if="!!workspace_notice", text=("workspace_notice",),
+                type=("workspace_notice_kind",), variant="tonal", density="compact", classes="mb-2")
             with html.Div(v_if="!['planning','preparation'].includes(workspace_view)"):
-                vuetify.VAlert(v_if="!!workspace_notice", text=("workspace_notice",),
-                    type=("workspace_notice_kind",), variant="tonal", density="compact", classes="mb-2")
                 vuetify.VAlert(v_if="selected_run_loading", text=("selected_result_load_message",),
                     type="info", variant="tonal", density="compact", classes="mb-2")
                 vuetify.VProgressLinear(v_if="selected_run_loading", indeterminate=True, height=3, color="#15543c")

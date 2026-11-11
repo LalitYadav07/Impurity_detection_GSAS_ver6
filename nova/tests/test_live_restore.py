@@ -19,6 +19,7 @@ class SavedHistory:
     history_id = "history-1"
     galaxy_url = "https://local.invalid"
     galaxy_key = "synthetic-key"
+    output_root = None
 
     def __init__(self):
         self.payloads = {}
@@ -78,7 +79,8 @@ def checkpoint(service, instrument="PG3", *, partial=True):
 
 
 @pytest.fixture
-def app(monkeypatch):
+def app(monkeypatch, tmp_path):
+    monkeypatch.setenv('RADAR_PD_PREPARATION_ROOT', str(tmp_path/'preparation'))
     instance = RadarPdNovaApp()
     instance.service = SavedHistory()
     instance._sync_activities = lambda: None

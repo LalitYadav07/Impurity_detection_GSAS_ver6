@@ -23,6 +23,7 @@ from .model_runtime import identifier
 from .preparation_training_runtime import PreparationRuntime
 from .preparation_discovery import PreparationDiscovery,k_vector,require_structural_coverage
 from .preparation_workspace import PreparationWorkspace
+from .preparation_registry import PreparationRegistry
 from .preparation_limits import PREPARATION_JOBS
 from .uploads import inspect_cif_upload
 
@@ -70,6 +71,7 @@ class PreparationMixin:
             prep_training_record_open=False,prep_training_record_title='',prep_training_record=None,
             prep_saved='',prep_saved_options=[],prep_import_path='',prep_import_source='upload',
             prep_history_archive='',prep_history_archives=[],prep_download_href='')
+        self._prep_reset_values=copy.deepcopy(values)
         for key,value in values.items():setattr(s,key,value)
         s.change('prep_parent_path')(self._preparation_inputs_changed)
         s.change('prep_reference')(self._preparation_reference_changed)
@@ -80,11 +82,14 @@ class PreparationMixin:
         s.change('prep_page','prep_entry_filter','prep_stage_filter','prep_entry_search')(self._preparation_table_changed)
         s.change('prep_profile_path')(self._preparation_profile_changed)
 
+    def _preparation_root(self):
+        base=Path(os.environ.get('RADAR_PD_PREPARATION_ROOT') or
+            Path(getattr(self.service,'output_root',None) or tempfile.gettempdir())/'experiment-preparation')
+        return base/digest([str(getattr(self.service,'history_id',None) or 'unconfigured')])[:16]
+
     def _preparation_store(self):
         if self._preparation_workspace is None:
-            base=Path(os.environ.get('RADAR_PD_PREPARATION_ROOT') or
-                Path(getattr(self.service,'output_root',None) or tempfile.gettempdir())/'experiment-preparation')
-            root=base/digest([str(self.service.history_id or 'unconfigured')])[:16]
+            root=self._preparation_root()
             runtime=PreparationRuntime(root/'runtime',self.service,max_active_jobs=PREPARATION_JOBS)
             self._preparation_workspace=PreparationWorkspace(root,runtime)
         return self._preparation_workspace
@@ -97,7 +102,12 @@ class PreparationMixin:
 
     def _prep_action(self,coroutine,title):
         """Start one tracked action without making Trame await its lifetime."""
-        if self.server.state.prep_busy:
+        s=self.server.state
+        if getattr(s,'workspace_clearing',False) or getattr(s,'session_closing',False):
+            coroutine.close()
+            s.prep_error='Wait for the workspace reset or session shutdown to finish before starting preparation.'
+            s.flush();return None
+        if s.prep_busy:
             coroutine.close();return None
         try:asyncio.get_running_loop()
         except RuntimeError:coroutine.close();return None
@@ -634,3 +644,26 @@ class PreparationMixin:
             for queue in list(store._queues.values()):await asyncio.to_thread(queue.pause)
         task=getattr(self,'_prep_driver',None)
         if task is not None and not task.done():await task
+
+    async def _clear_preparation_workspace(self):
+        """After checkpointing, clear this experiment's setup and active reuse."""
+        store=self._preparation_workspace
+        registry=store.registry if store is not None else None
+        # A reopened session may not have visited Preparation yet. Clear an
+        # existing saved selection without creating an unused runtime or store.
+        root=self._preparation_root()/'registry'
+        if registry is None and (root/'registry.json').exists():
+            registry=await asyncio.to_thread(PreparationRegistry,root)
+        if registry is not None:
+            await asyncio.to_thread(registry.clear_selection)
+        tasks=[task for task in self._prep_tasks if not task.done()]
+        for task in tasks:task.cancel()
+        if tasks:await asyncio.gather(*tasks,return_exceptions=True)
+        self._prep_tasks.clear();self._prep_driver=None
+        self._preparation_workspace=None
+        self._prep_banks={};self._prep_bank_names={};self._prep_queue_errors={}
+        self._prep_context=None;self._prep_catalogs=[];self._prep_discovered_identity=None
+        self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
+        self._prep_profile_handoff=None;self._prep_input_revision+=1
+        for key,value in self._prep_reset_values.items():
+            setattr(self.server.state,key,copy.deepcopy(value))
