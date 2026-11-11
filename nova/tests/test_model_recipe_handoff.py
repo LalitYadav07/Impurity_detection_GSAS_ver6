@@ -178,6 +178,8 @@ def test_remote_handoff_does_not_select_stale_or_unpublished_results(selected,tm
 
 def test_remote_handoff_reuses_its_published_gpx_and_checkpoints_without_submitting_a_fit(selected,tmp_path):
     workspace,row,_,_,_=selected;app=controller(workspace,row,tmp_path)
+    messages=[]
+    app.server.state.flush=lambda:messages.append(getattr(app.server.state,'sx_recipe_message',''))
     workspace.runtime.kind='galaxy';backups=[];workspace.checkpoint=lambda:backups.append(True)
     uploads=[];app.service=SimpleNamespace(upload_document=lambda path,**kwargs:uploads.append(path) or 'model-hda')
     for _ in range(2):
@@ -185,6 +187,9 @@ def test_remote_handoff_reuses_its_published_gpx_and_checkpoints_without_submitt
     source=workspace.state['sources'][app.server.state.rf_source]
     assert source['dataset_id']=='model-hda' and len(uploads)==1 and len(backups)==2
     assert len(workspace.state['sources'])==2 and not workspace.state['jobs']
+    assert any('exact structural GPX to Galaxy' in message for message in messages)
+    assert any('recovery checkpoint' in message for message in messages)
+    assert not app.server.state.sx_recipe_message
 
 
 def test_failed_checkpoint_can_retry_without_uploading_or_inspecting_again(selected,tmp_path):

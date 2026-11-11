@@ -307,6 +307,7 @@ def model_exploration(app):
                         click=app.open_symmetry_refinement,
                         disabled=('!sx_has_gpx || sx_recipe_busy || !sx_results_current',),
                         loading=('sx_recipe_busy',),variant='outlined',size='small')
+                    html.P('{{ sx_recipe_message }}',v_if='sx_recipe_busy && !!sx_recipe_message',classes='rf-notice',role='status')
                     v.VBtn('Open native-verified representative',v_if='!!sx_native_reference',
                         click=app.open_symmetry_representative,variant='outlined',size='small')
                     v.VBtn('Open selected GPX in GSAS-II',click=app.open_symmetry_in_gsasii,

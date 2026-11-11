@@ -65,7 +65,7 @@ class SymmetryMixin(KSearchMixin):
             sx_parent_axis='c',sx_parent='',sx_parents=[],sx_histogram='',sx_histograms=[],sx_k='',sx_sites=[],sx_site_options=[],sx_form_factors='',sx_lande='',sx_directions=['x','y','z'],sx_adequate=None,sx_max_moment='',sx_cycles=20,sx_slots=4,sx_moment_model='symmetry_allowed',sx_refine_scale=False,sx_refine_background=False,
             sx_kind='magnetic',sx_magnetic_optimizer='profiled_quadratic',sx_optimizer_iterations=120,sx_mag_d_min=0.,sx_max_mode=.5,sx_start_mode=.1,sx_candidate_options=[],sx_candidates=[],sx_mode_options=[],sx_modes=[],sx_discovered=False,sx_discovery_scope='',sx_discovery_rows=[],
             sx_plan_ready=False,sx_approved=False,sx_plan_summary='',sx_plan_candidates=[],sx_setup=False,sx_expanded=False,sx_expanded_layout={},sx_has_context=False,sx_has_gpx=False,sx_has_receipt=False,sx_resumable=False,sx_native_reference='',
-            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='',sx_preparation_notice='')
+            sx_request='',sx_planning_summary='',sx_planning_notes=[],sx_planning_usage='',sx_planning_cost='',sx_has_setup_details=False,sx_sign_starts=True,sx_coverage=[],sx_group_limit=12,sx_result_scope='experiment',sx_start_source='',sx_start_sources=[],sx_results_current=False,sx_scope_progress='',sx_preparation_notice='',sx_recipe_message='')
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=8,
             sx_queue_notice='',sx_backend='',sx_batches=[],sx_dispatch_recovery_notice='',sx_dispatch_retry_ready=False,sx_dispatch_retry_ack=False,sx_structural_priority_rows=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
@@ -711,7 +711,7 @@ class SymmetryMixin(KSearchMixin):
             return (workspace is self._refinement_store() and s.sx_results_current and
                     identity==(s.sx_campaign,s.rf_experiment,s.sx_result_scope,s.sx_source,s.sx_selected))
         self._symmetry_recipe_inflight=True
-        s.sx_recipe_busy=True;s.sx_error='';s.flush()
+        s.sx_recipe_busy=True;s.sx_recipe_message='Checking the selected structural GPX and its source.';s.sx_error='';s.flush()
         async def prepare():
             try:
                 path,checksum=await asyncio.to_thread(capture_gpx,row,self._symmetry_root()/'recipe-inputs')
@@ -721,6 +721,7 @@ class SymmetryMixin(KSearchMixin):
                 if not current():raise ValueError('Selection changed; no recipe input was selected.')
                 dataset=previous.get('dataset_id') if previous.get('source_sha256')==checksum else None
                 if workspace.runtime.kind=='galaxy' and not dataset:
+                    s.sx_recipe_message='Saving this exact structural GPX to Galaxy for recipe refinement. No refinement has started.';s.flush()
                     dataset=await asyncio.to_thread(self.service.upload_document,path,
                         label='Structural model checkpoint '+row['id'])
                 if not current():raise ValueError('Selection changed; no recipe input was selected.')
@@ -731,6 +732,7 @@ class SymmetryMixin(KSearchMixin):
                     if dataset:source['dataset_id']=dataset
                     workspace.observe([source],enroll_future=False,manual=True)
                 if workspace.runtime.kind=='galaxy':
+                    s.sx_recipe_message='Saving the recovery checkpoint before opening the recipe. No refinement has started.';s.flush()
                     await asyncio.to_thread(workspace.checkpoint)
                 if not current():raise ValueError('Selection changed; the saved input remains available without starting a recipe.')
                 open_source(self,source,STRUCTURAL_REQUEST)
@@ -738,7 +740,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_error=str(exc)
             finally:
                 self._symmetry_recipe_inflight=False
-                s.sx_recipe_busy=False;s.flush()
+                s.sx_recipe_busy=False;s.sx_recipe_message='';s.flush()
         request=prepare()
         try:self._schedule_utility(request,'radar-structural-recipe-handoff')
         except Exception:
