@@ -1,4 +1,5 @@
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +27,7 @@ def missing(remote,saved,tmp_path,monkeypatch):
     t.state['chunks']['missing']=dict(key='missing',members=[uid],protocol=t.campaign.trials()[0]['protocol'],
         request={'sealed':'request'},pending=True,job=None)
     t.state['members'][uid]='missing';t.save()
-    monkeypatch.setattr(t.runtime,'find_dispatches_complete',lambda keys:{k:None for k in keys})
+    monkeypatch.setattr(t.runtime,'find_dispatches_complete',lambda keys,**kw:{k:None for k in keys})
     return t,service,uid
 
 
@@ -49,7 +50,7 @@ def test_failed_or_stale_review_does_not_reset_missing_job(missing,monkeypatch,f
     if failure=='expired':t.state['dispatch_recovery_review']['checked_at']=0
     elif failure=='changed':t.state['chunks']['missing']['request']={'changed':True}
     else:
-        def fail(keys):raise RuntimeUnavailable('Cannot complete job lookup')
+        def fail(keys,**kw):raise RuntimeUnavailable('Cannot complete job lookup')
         monkeypatch.setattr(t.runtime,'find_dispatches_complete',fail)
     with pytest.raises((ValueError,RuntimeUnavailable)):retry_reviewed(t,acknowledged=True)
     assert t.campaign.trials()[0]['state']=='needs_recovery'
@@ -59,7 +60,7 @@ def test_failed_or_stale_review_does_not_reset_missing_job(missing,monkeypatch,f
 def test_late_job_is_adopted_instead_of_retried(missing,monkeypatch):
     t,service,uid=missing;inspect_missing(t)
     job=UtilityActionRecord(uid='late',tool_id=MODEL_TOOL_ID,name='late',galaxy_job_id='job1',status=RunStatus.RUNNING)
-    monkeypatch.setattr(t.runtime,'find_dispatches_complete',lambda keys:{k:job for k in keys})
+    monkeypatch.setattr(t.runtime,'find_dispatches_complete',lambda keys,**kw:{k:job for k in keys})
     monkeypatch.setattr(t.runtime,'verify_job',lambda *args:None)
     monkeypatch.setattr(t,'poll',lambda handle,directory:dict(state='running',handle=handle))
     result=retry_reviewed(t,acknowledged=True)
@@ -100,3 +101,81 @@ def test_ignored_job_pagination_is_not_absence(tmp_path,monkeypatch):
         def json(self):return [{'id':f'job{i}'} for i in range(200)]
     monkeypatch.setattr('requests.get',lambda *a,**k:Response())
     with pytest.raises(RuntimeUnavailable,match='repeated'):runtime.find_dispatches_complete({'missing'})
+
+
+def test_review_then_continue_submits_one_replacement_and_retains_old_attempt(missing,monkeypatch):
+    from gpx_recipe.symmetry.compiler import job_inputs
+    t,service,uid=missing
+    row=next(row for row in t.campaign.trials() if row['id']==uid)
+    directory=t.campaign.trial_directory(row)
+    request=json.loads((directory/'job.json').read_text())
+    source=dict(id='scan',dataset_id='source-data',source_sha256=request['protocol']['source']['sha256'])
+    t.prepare_source(request['protocol'],job_inputs(directory,request),source)
+    monkeypatch.setattr(t,'checkpoint',lambda **kw:None)
+    assert inspect_missing(t)['missing_batches']==1
+    assert retry_reviewed(t,acknowledged=True)['retried_batches']==1
+    assert service.submissions==[]
+    t.campaign.set_setting('paused',False)
+    t.resume()
+    handles=t.submit_many([(uid,directory)],workers=1)
+    assert len(service.submissions)==1
+    assert handles[uid]['dispatch_key']!='missing'
+    assert t.state['chunks']['missing']['explicit_retry']
+    assert t.state['members'][uid]==handles[uid]['dispatch_key']
+    assert t.submit_many([(uid,directory)],workers=1)==handles
+    assert len(service.submissions)==1
+
+
+@pytest.mark.parametrize('change_selection,fail',[(False,False),(False,True),(True,False),(True,True)])
+def test_recovery_progress_stays_on_event_loop_and_selected_campaign(missing,monkeypatch,change_selection,fail):
+    import asyncio
+    import threading
+    import radar_pd_nova.model_dispatch_recovery as recovery
+    from radar_pd_nova.symmetry_controller import SymmetryMixin
+    t,service,_=missing
+    t.campaign.set_setting('template',{'scope':{'experiment':'IPTS-1'}})
+    flushed=[];main_thread=threading.get_ident()
+    class State(SimpleNamespace):
+        def flush(self):
+            assert threading.get_ident()==main_thread
+            flushed.append(self.sx_dispatch_recovery_notice)
+    state=State(sx_campaign=t.campaign.root.name,rf_experiment='IPTS-1',sx_busy=False,
+                sx_campaign_running=False,sx_pause_pending=False,sx_dispatch_retry_ack=False,
+                sx_dispatch_recovery_notice='',sx_error='')
+    app=SymmetryMixin();app.server=SimpleNamespace(state=state);app._symmetry_task=None
+    app._symmetry_root=lambda:t.campaign.root.parent
+    app._symmetry_campaign=lambda root:t.campaign
+    app._symmetry_transport=lambda campaign:t
+    def finish():state.sx_busy=False;state.flush()
+    app._finish_symmetry_preparation=finish
+    monkeypatch.setattr(t.campaign,'recover',lambda transport:None)
+    async def run():
+        loop=asyncio.get_running_loop();tasks=[]
+        def lookup(transport,*,progress):
+            assert threading.get_ident()!=main_thread
+            progress(4)
+            if change_selection:
+                loop.call_soon_threadsafe(setattr,state,'rf_experiment','IPTS-2')
+                loop.call_soon_threadsafe(setattr,state,'sx_dispatch_recovery_notice','New selection')
+            progress(8)
+            if fail:raise RuntimeUnavailable('Job history unavailable')
+            return dict(missing_batches=1,missing_starts=1,recovered_batches=0)
+        monkeypatch.setattr(recovery,'inspect_missing',lookup)
+        def schedule(coro,*args):
+            tasks.append(asyncio.create_task(coro));return tasks[-1]
+        app._refinement_schedule=schedule
+        app.inspect_missing_model_submissions()
+        app.inspect_missing_model_submissions()
+        assert len(tasks)==1
+        await tasks[0]
+    asyncio.run(run())
+    assert any('Checked 4 model jobs' in message for message in flushed)
+    assert not state.sx_busy and not service.submissions
+    if change_selection:
+        assert state.sx_dispatch_recovery_notice=='New selection'
+        assert state.sx_error=='' and not state.sx_dispatch_retry_ready
+        assert not any('Checked 8 model jobs' in message for message in flushed)
+    elif fail:
+        assert state.sx_error=='Job history unavailable' and not state.sx_dispatch_retry_ready
+    else:
+        assert state.sx_dispatch_retry_ready and 'No new jobs were submitted' in state.sx_dispatch_recovery_notice

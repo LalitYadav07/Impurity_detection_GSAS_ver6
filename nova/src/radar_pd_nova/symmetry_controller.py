@@ -1366,6 +1366,14 @@ class SymmetryMixin(KSearchMixin):
         acknowledged=bool(s.sx_dispatch_retry_ack)
         async def reconcile():
             from .model_dispatch_recovery import inspect_missing,retry_reviewed
+            loop=asyncio.get_running_loop()
+            lookup_active=True
+            def publish_progress(checked):
+                if lookup_active and selected==(s.sx_campaign,s.rf_experiment):
+                    s.sx_dispatch_recovery_notice=(f'Checked {checked:,} model jobs in this History. '
+                        'The complete lookup must finish before a missing batch can be retried.')
+                    s.flush()
+            def progress(checked):loop.call_soon_threadsafe(publish_progress,checked)
             s.sx_busy=True;s.sx_error='';s.sx_dispatch_retry_ready=False;s.sx_dispatch_retry_ack=False
             s.sx_dispatch_recovery_notice='Checking this History for accepted jobs, including jobs without named outputs.'
             s.flush()
@@ -1380,23 +1388,27 @@ class SymmetryMixin(KSearchMixin):
                 if not isinstance(transport,GalaxyChunkTransport):
                     raise ValueError('This recovery action is for Galaxy model batches')
                 if retry:
-                    result=await asyncio.to_thread(retry_reviewed,transport,acknowledged=acknowledged)
+                    result=await asyncio.to_thread(retry_reviewed,transport,acknowledged=acknowledged,progress=progress)
                     message=(f"Returned {result['retried_batches']} missing batch(es) to the reviewed queue; "
                              f"recovered {result['recovered_batches']} accepted job(s). Click Continue saved campaign to run the queue.")
                 else:
-                    result=await asyncio.to_thread(inspect_missing,transport)
+                    result=await asyncio.to_thread(inspect_missing,transport,progress=progress)
                     await asyncio.to_thread(campaign.recover,transport)
                     message=(f"Recovered {result['recovered_batches']} accepted job(s). "
                              f"No matching Galaxy job was found for {result['missing_batches']} batch(es), "
                              f"containing {result['missing_starts']} starts. No new jobs were submitted.")
+                lookup_active=False
                 if selected==(s.sx_campaign,s.rf_experiment):
                     s.sx_dispatch_recovery_notice=message
                     s.sx_dispatch_retry_ready=bool(not retry and result['missing_batches'])
                 self._symmetry_refresh_pending=True
             except Exception as exc:
-                s.sx_error=str(exc)
-                s.sx_dispatch_recovery_notice='Recovery stopped without submitting a replacement batch.'
-            finally:self._finish_symmetry_preparation()
+                if selected==(s.sx_campaign,s.rf_experiment):
+                    s.sx_error=str(exc)
+                    s.sx_dispatch_recovery_notice='Recovery stopped without submitting a replacement batch.'
+            finally:
+                lookup_active=False
+                self._finish_symmetry_preparation()
         self._symmetry_task=self._refinement_schedule(reconcile(),'radar-model-dispatch-recovery')
 
     def continue_symmetry_campaign(self):

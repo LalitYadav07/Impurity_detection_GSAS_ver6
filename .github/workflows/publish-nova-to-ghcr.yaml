@@ -232,6 +232,8 @@ jobs:
           python -m pip install --quiet pytest==8.4.2 &&
           mkdir -p /tmp/model-recovery-tests &&
           cp /validation-tests/test_model_preparation_retry.py /validation-tests/test_model_runtime.py \
+             /validation-tests/test_model_dispatch_recovery.py /validation-tests/test_model_recovery_lookup.py \
+             /validation-tests/test_model_ledger_recovery.py \
              /validation-tests/test_model_group_budget.py /validation-tests/test_model_batch_budget.py \
              /validation-tests/test_model_checkpoint_coalescing.py /validation-tests/test_model_enrollment.py \
              /validation-tests/test_checkpoint_uploads.py /validation-tests/test_model_checkpoint.py \
@@ -241,6 +243,7 @@ jobs:
              /validation-tests/test_powgen_controller.py /tmp/model-recovery-tests/ &&
           cd /tmp/model-recovery-tests &&
           PYTHONPATH=/src/src:/scientific-test-support python -m pytest -q test_model_preparation_retry.py test_model_runtime.py \
+            test_model_dispatch_recovery.py test_model_recovery_lookup.py test_model_ledger_recovery.py \
             test_model_group_budget.py test_model_batch_budget.py \
             test_model_checkpoint_coalescing.py test_model_enrollment.py test_checkpoint_uploads.py \
             test_model_checkpoint.py test_native_job_admission.py test_restored_display_inputs.py \

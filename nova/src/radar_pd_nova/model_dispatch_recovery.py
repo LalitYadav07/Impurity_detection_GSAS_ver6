@@ -30,14 +30,14 @@ def _fingerprint(chunks):
                         'request':row.get('request')} for key,row in chunks.items()})
 
 
-def inspect_missing(transport):
+def inspect_missing(transport,*,progress=None):
     """Reconcile with a complete job lookup; save an expiring review, not a POST."""
     chunks=missing_chunks(transport)
     transport.state.pop('dispatch_recovery_review',None)
     if not chunks:
         transport.save()
         return dict(missing_batches=0,missing_starts=0,recovered_batches=0)
-    found=transport.runtime.find_dispatches_complete(set(chunks))
+    found=transport.runtime.find_dispatches_complete(set(chunks),progress=progress)
     recovered=0
     for key,job in found.items():
         if job is not None:
@@ -55,7 +55,7 @@ def inspect_missing(transport):
                 recovered_batches=recovered)
 
 
-def retry_reviewed(transport,*,acknowledged=False):
+def retry_reviewed(transport,*,acknowledged=False,progress=None):
     """Retire reviewed absent attempts. Continue remains a separate action.
 
     Galaxy has no client-enforced exactly-once POST. This explicit action
@@ -73,7 +73,7 @@ def retry_reviewed(transport,*,acknowledged=False):
     selected={key:chunks[key] for key in review['keys'] if key in chunks}
     if len(selected)!=len(review['keys']) or _fingerprint(selected)!=review['fingerprint']:
         raise ValueError('The missing submissions changed; check them again')
-    found=transport.runtime.find_dispatches_complete(set(selected))
+    found=transport.runtime.find_dispatches_complete(set(selected),progress=progress)
     retried=recovered=0
     for key,chunk in selected.items():
         if found[key] is not None:

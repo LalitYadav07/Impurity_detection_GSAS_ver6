@@ -2,6 +2,7 @@
 from __future__ import annotations
 from .tool_ids import tool_id
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 import hashlib
 import json
@@ -23,6 +24,7 @@ from .checkpoint_uploads import CheckpointUploadPending
 MODEL_TOOL_ID=tool_id('model_campaign')
 CAMPAIGN_LABEL='RADAR-PD Model campaign '
 MODEL_BATCH_LIMITS=(1,2,4,8)
+MODEL_RECOVERY_READERS=4
 EMPTY_PACKET_NAME='radar-model-packet.json'
 EMPTY_PACKET_BYTES=b'{"schema":"radar-model-packet/v1","files":{}}\n'
 EMPTY_PACKET_SHA256=hashlib.sha256(EMPTY_PACKET_BYTES).hexdigest()
@@ -155,45 +157,62 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             raise RuntimeUnavailable('Galaxy did not report the model resource queue')
         return self.max_active_jobs-len(jobs)
 
-    def find_dispatches_complete(self,keys):
+    def find_dispatches_complete(self,keys,*,progress=None):
         """Exception-only reconciliation, including jobs without named outputs.
 
         Pagination, details and ownership must all succeed before absence is
-        reported. Ordinary polling keeps the cheap exact-output lookup.
+        reported. Detail reads run in bounded groups so an error cannot queue
+        an entire History of requests. Ordinary polling keeps the cheap
+        exact-output lookup. Progress counts verified jobs, not completion.
         """
         import requests
         from .galaxy_service import _parameter_value,normalize_status
         keys=set(keys)
         found={key:None for key in keys}
+        if not keys:return found
+        origin=(self.service.galaxy_url,self.service.history_id,self.tool_id)
+        def check_origin():
+            if origin!=(self.service.galaxy_url,self.service.history_id,self.tool_id):
+                raise RuntimeUnavailable('The model History changed during lookup; check missing submissions again')
         seen=set();page_size=200
-        for offset in range(0,10000,page_size):
-            response=requests.get(self.service.galaxy_url+'/api/jobs',
-                headers=self.service._headers,
-                params={'history_id':self.service.history_id,'tool_id':self.tool_id,
-                        'order':'create_time-asc','limit':page_size,'offset':offset},
-                timeout=30,allow_redirects=False)
-            response.raise_for_status();rows=response.json()
-            if not isinstance(rows,list) or len(rows)>page_size:
-                raise RuntimeUnavailable('Galaxy did not return a complete model-job listing')
-            for row in rows:
-                uid=identifier(row.get('id'))
-                if uid in seen:
+        checked=0
+        if progress:progress(checked)
+        with ThreadPoolExecutor(max_workers=MODEL_RECOVERY_READERS) as readers:
+            for offset in range(0,10000,page_size):
+                check_origin()
+                response=requests.get(origin[0]+'/api/jobs',
+                    headers=self.service._headers,
+                    params={'history_id':origin[1],'tool_id':origin[2],
+                            'order':'create_time-asc','limit':page_size,'offset':offset},
+                    timeout=30,allow_redirects=False)
+                response.raise_for_status();rows=response.json()
+                if not isinstance(rows,list) or len(rows)>page_size or any(not isinstance(row,dict) for row in rows):
+                    raise RuntimeUnavailable('Galaxy did not return a complete model-job listing')
+                ids=[identifier(row.get('id')) for row in rows]
+                if len(set(ids))!=len(ids) or seen.intersection(ids):
                     raise RuntimeUnavailable('Galaxy repeated a job-list page; absence could not be verified')
-                seen.add(uid)
-                job=self.service._job_details(uid)
-                if (job.get('id')!=uid or job.get('history_id')!=self.service.history_id
-                        or job.get('tool_id')!=self.tool_id):
-                    raise RuntimeUnavailable('Galaxy returned a model job outside this History or tool')
-                key=_parameter_value(job.get('params') or job.get('parameters') or {},'dispatch_key')
-                if key not in keys:continue
-                if found[key] is not None:
-                    raise RuntimeUnavailable('Several Galaxy jobs share a model dispatch; review them before retrying')
-                record=UtilityActionRecord(uid='model-'+key,tool_id=self.tool_id,
-                    name='Recovered model '+key,galaxy_job_id=uid,
-                    status=normalize_status(job.get('state')),outputs=self.service._job_output_ids(job))
-                self.verify_job(record,key)
-                found[key]=record
-            if len(rows)<page_size:return found
+                seen.update(ids)
+                for start in range(0,len(ids),MODEL_RECOVERY_READERS):
+                    batch=ids[start:start+MODEL_RECOVERY_READERS]
+                    for uid,job in zip(batch,readers.map(self.service._job_details,batch)):
+                        check_origin()
+                        if (not isinstance(job,dict) or job.get('id')!=uid
+                                or job.get('history_id')!=self.service.history_id
+                                or job.get('tool_id')!=self.tool_id):
+                            raise RuntimeUnavailable('Galaxy returned a model job outside this History or tool')
+                        key=_parameter_value(job.get('params') or job.get('parameters') or {},'dispatch_key')
+                        if key not in keys:continue
+                        if found[key] is not None:
+                            raise RuntimeUnavailable('Several Galaxy jobs share a model dispatch; review them before retrying')
+                        record=UtilityActionRecord(uid='model-'+key,tool_id=self.tool_id,
+                            name='Recovered model '+key,galaxy_job_id=uid,
+                            status=normalize_status(job.get('state')),outputs=self.service._job_output_ids(job))
+                        self._verify_job_details(job,uid,key)
+                        found[key]=record
+                    checked+=len(batch)
+                    if progress:progress(checked)
+                    check_origin()
+                if len(rows)<page_size:return found
         raise RuntimeUnavailable('The model-job lookup reached its safety limit; absence was not established')
 
     def wait_capacity(self,cancel=None):
@@ -346,16 +365,20 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
         Keep that search in find_dispatch; do not make recovery depend on an
         output HDA having been named or published yet.
         """
-        from .galaxy_service import _parameter_value
         identity=(str(job.galaxy_job_id),key)
         if identity not in self._verified_jobs:
             details=self.service._job_details(identifier(identity[0]))
-            if (not isinstance(details,dict) or details.get('id')!=identity[0]
-                    or details.get('history_id')!=self.service.history_id
-                    or details.get('tool_id')!=self.tool_id
-                    or _parameter_value(details.get('params') or details.get('parameters') or {},'dispatch_key')!=key):
-                raise RuntimeUnavailable('The saved model job does not belong to this History and dispatch')
-            self._verified_jobs.add(identity)
+            self._verify_job_details(details,identity[0],key)
+
+    def _verify_job_details(self,details,uid,key):
+        """Reuse an authenticated detail read without weakening its binding."""
+        from .galaxy_service import _parameter_value
+        if (not isinstance(details,dict) or details.get('id')!=uid
+                or details.get('history_id')!=self.service.history_id
+                or details.get('tool_id')!=self.tool_id
+                or _parameter_value(details.get('params') or details.get('parameters') or {},'dispatch_key')!=key):
+            raise RuntimeUnavailable('The saved model job does not belong to this History and dispatch')
+        self._verified_jobs.add((uid,key))
 
     def cancel_job(self,job,key):
         import requests
