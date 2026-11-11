@@ -229,8 +229,8 @@ def model_exploration(app):
             html.P('{{ sx_execution_detail }}',classes='rf-notice')
         with html.Details(v_if='!sx_setup && sx_results_current && sx_batches.length',classes='rf-card mb-4'):
             html.Summary('Galaxy batch status ({{ sx_batches.length }})')
-            html.P('Elapsed time starts at submission and includes queueing. Last status check is in UTC. Assigned work may still be waiting for a worker.',classes='rf-notice')
-            v.VDataTable(items=('sx_batches',),headers=("[{title:'Batch',key:'batch'},{title:'Galaxy job',key:'job'},{title:'State',key:'state'},{title:sx_prepared_structural ? 'Model fits' : 'Starts',key:'starts'},{title:'Since submission',key:'elapsed'},{title:'Last status check (UTC)',key:'checked'}]",),items_per_page=8,density='compact')
+            html.P('Observed elapsed includes queueing. It stops at the final job-status check for finished jobs; a missing final timestamp shows a dash. Native calculation time is reported with each fit. Assigned work may still be waiting for a worker.',classes='rf-notice')
+            v.VDataTable(items=('sx_batches',),headers=("[{title:'Batch',key:'batch'},{title:'Galaxy job',key:'job'},{title:'State',key:'state'},{title:sx_prepared_structural ? 'Model fits' : 'Starts',key:'starts'},{title:'Observed elapsed',key:'elapsed'},{title:'Last status check (UTC)',key:'checked'}]",),items_per_page=8,density='compact')
         html.P("{{ sx_prepared_structural ? 'Each structural model fit contains the reviewed starting guesses. Completed model fits publish independently; jobs can be queued or running. Native workers are reported separately from model fits.' : 'Starts assigned to a batch share a Galaxy job after its recovery checkpoint is ready. Jobs can be queued or running. The native worker count is reported after the first batch; it is separate from the number of starts.' }}",
             v_if='!sx_setup && sx_results_current && sx_campaign_running',classes='rf-notice')
         with html.Details(v_if='!sx_setup && sx_enrollments.length',classes='rf-card mb-4'):

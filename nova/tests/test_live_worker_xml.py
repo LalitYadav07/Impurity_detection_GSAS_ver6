@@ -12,7 +12,8 @@ from Cheetah.Template import Template
 def test_live_tool_command_preserves_arguments_and_redirection(tmp_path,cache,worker_exit):
     root=ET.parse(Path(__file__).resolve().parents[2]/'galaxy/radar_pd_live_snapshot.xml.in').getroot()
     values={'result_bundle':'result bundle.zip','response_cache_output':'cache output.zip',
-            'console_output':'console.txt','packet':'input packet.zip','response_cache':cache}
+            'console_output':'console.txt','packet':'input packet.zip','response_cache':cache,
+            'preparation_provenance':'preparation evidence.json'}
     rendered=str(Template(root.find('command').text,searchList=[values]))
     # Galaxy's ToolEvaluator._build_command_line strips each rendered line,
     # then joins newlines with spaces. A shell continuation becomes a literal
@@ -27,6 +28,7 @@ def test_live_tool_command_preserves_arguments_and_redirection(tmp_path,cache,wo
     completed=subprocess.run(['/bin/sh','-ec',command],cwd=tmp_path,capture_output=True,text=True,
                    env={'PATH':str(binary)+':/usr/bin:/bin','RECORDED_ARGS':str(output),'WORKER_EXIT':str(worker_exit)})
     expected=['-m','gpx_recipe.live.galaxy_worker','input packet.zip','worker','result bundle.zip','cache output.zip']
+    expected+=['--preparation-evidence','preparation evidence.json']
     if cache:expected+=['--cache','prior cache.zip']
     assert output.read_text().splitlines()==expected
     assert completed.returncode==worker_exit

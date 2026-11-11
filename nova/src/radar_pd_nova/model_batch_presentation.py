@@ -28,12 +28,17 @@ def batch_rows(chunks,*,now=None):
         elif status in {'error','cancelled'}:state=status.capitalize()
         else:state='Galaxy queued'
         created=job.get('created_utc');age='—'
-        if created:
+        terminal=(chunk.get('complete') or chunk.get('explicit_retry')
+                  or status in {'ok','error','cancelled'})
+        end=job.get('updated_utc') if terminal else now
+        if created and end:
             try:
                 start=datetime.fromisoformat(created.replace('Z','+00:00'))
                 if start.tzinfo is None:start=start.replace(tzinfo=timezone.utc)
-                seconds=max(0,int((now-start).total_seconds()))
-                age=f'{seconds//60}m {seconds%60:02d}s'
+                finish=datetime.fromisoformat(end.replace('Z','+00:00')) if isinstance(end,str) else end
+                if finish.tzinfo is None:finish=finish.replace(tzinfo=timezone.utc)
+                seconds=int((finish-start).total_seconds())
+                if seconds>=0:age=f'{seconds//60}m {seconds%60:02d}s'
             except (TypeError,ValueError):pass
         rows.append(dict(batch=key[:8],job=job.get('galaxy_job_id') or '—',state=state,
                          starts=len(chunk.get('members') or []),elapsed=age,

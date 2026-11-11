@@ -96,7 +96,7 @@ def test_tab_entry_preserves_prepared_search_or_discovery_failure(tmp_path, monk
     state.sx_discovered = not failed
     state.sx_error = 'ISODISTORT is unavailable' if failed else ''
     state.sx_message = 'Candidate discovery stopped' if failed else '9 ready to refine'
-    app._symmetry_scan_choices = lambda: None
+    app._symmetry_scan_choices = lambda choices=None: None
     before = (state.sx_error, state.sx_message, state.sx_discovered)
     asyncio.run(run_action(app, app.refresh_symmetry))
     assert not state.sx_busy

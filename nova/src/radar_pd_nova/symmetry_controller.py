@@ -178,12 +178,12 @@ class SymmetryMixin(KSearchMixin):
         s.sx_sites=[];s.sx_form_factors='';s.sx_lande=''
         self._symmetry_scan_choices()
 
-    def _symmetry_scan_choices(self):
+    def _symmetry_scan_choices(self,choices=None):
         s=self.server.state;w=getattr(self,'_refinement_store',lambda:None)()
         if not w:return
         # A newly selected manual checkpoint may not have been present during
         # the last campaign refresh. Publish its label with its selected ID.
-        choices=start_choices(w,s.rf_experiment)
+        if choices is None:choices=start_choices(w,s.rf_experiment)
         s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
         candidates=model_choices(w,s.rf_experiment)
         reference=next(((v,origin) for v,origin in candidates if v['id']==s.sx_start_source),None)
@@ -369,7 +369,10 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_start_sources=[dict(title=entry['title'],value=entry['id']) for entry in choices]
                 if s.sx_start_source not in {entry['id'] for entry in choices}:
                     s.sx_start_source=s.rf_source if s.rf_source in {entry['id'] for entry in choices} else (choices[0]['id'] if choices else '')
-                self._symmetry_scan_choices()
+                # Reuse this refresh's catalog snapshot. A second lookup can
+                # repeat expensive reconstruction and observe a different
+                # catalog while a result arrives.
+                self._symmetry_scan_choices(choices)
                 roots=list(self._symmetry_root().glob('*/campaign.sqlite'))
                 if scope is not None:
                     roots=[p for p in roots if (Campaign(p.parent).setting('template',{}) or {}).get('scope',{}).get('experiment')==scope]
