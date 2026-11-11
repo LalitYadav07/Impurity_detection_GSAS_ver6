@@ -101,12 +101,49 @@ CUDA=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.device_count
 @pytest.fixture(autouse=True)
 def measured_real_cuda_case(request,record_property):
     measured=request.node.name.startswith('test_real_cuda') and torch.cuda.is_available() and torch.cuda.device_count()==1
-    if measured:torch.cuda.reset_peak_memory_stats(0)
+    if measured:
+        # Each pytest worker is a fresh process. Visibility alone does not
+        # initialize its CUDA allocator. Use the same checked device and
+        # application memory cap as training before measuring that allocator.
+        backend.cuda_backend()
+        torch.cuda.reset_peak_memory_stats(0)
     yield
     if measured:
         torch.cuda.synchronize(0)
         record_property('cuda_peak_allocated_bytes',int(torch.cuda.max_memory_allocated(0)))
         record_property('cuda_peak_reserved_bytes',int(torch.cuda.max_memory_reserved(0)))
+
+
+def test_cuda_measurement_initializes_the_checked_backend_before_reset(monkeypatch):
+    from types import SimpleNamespace
+    calls=[];properties=[]
+    monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
+    monkeypatch.setattr(torch.cuda,'device_count',lambda:1)
+    monkeypatch.setattr(backend,'cuda_backend',lambda:calls.append('checked_backend'))
+    monkeypatch.setattr(torch.cuda,'reset_peak_memory_stats',lambda device:calls.append(('reset',device)))
+    monkeypatch.setattr(torch.cuda,'synchronize',lambda device:calls.append(('sync',device)))
+    monkeypatch.setattr(torch.cuda,'max_memory_allocated',lambda device:16)
+    monkeypatch.setattr(torch.cuda,'max_memory_reserved',lambda device:32)
+    measured=measured_real_cuda_case.__wrapped__(
+        SimpleNamespace(node=SimpleNamespace(name='test_real_cuda_measurement_probe')),
+        lambda name,value:properties.append((name,value)))
+    next(measured)
+    assert calls==['checked_backend',('reset',0)]
+    with pytest.raises(StopIteration):next(measured)
+    assert calls[-1]==('sync',0)
+    assert properties==[('cuda_peak_allocated_bytes',16),('cuda_peak_reserved_bytes',32)]
+
+
+def test_cuda_measurement_does_not_hide_backend_initialization_failure(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
+    monkeypatch.setattr(torch.cuda,'device_count',lambda:1)
+    def unavailable():raise ValueError('Bound device is unusable')
+    monkeypatch.setattr(backend,'cuda_backend',unavailable)
+    monkeypatch.setattr(torch.cuda,'reset_peak_memory_stats',lambda device:pytest.fail('Allocator was not initialized'))
+    measured=measured_real_cuda_case.__wrapped__(
+        SimpleNamespace(node=SimpleNamespace(name='test_real_cuda_measurement_probe')),lambda *args:None)
+    with pytest.raises(ValueError,match='Bound device is unusable'):next(measured)
 
 
 @pytest.mark.parametrize('length',[1,16,25,128,129,257,1024])
