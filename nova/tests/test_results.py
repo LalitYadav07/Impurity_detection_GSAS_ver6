@@ -25,6 +25,7 @@ from radar_pd_nova.results import (
     load_plot_with_fallback,
     phase_fraction_rows,
     read_plot_payload,
+    run_status_badge,
     total_elapsed_seconds,
 )
 
@@ -71,6 +72,20 @@ def test_result_status_retains_explicit_scientific_review_requirement(tmp_path):
         "label": "Status", "value": "Complete · scientific review required",
     }
     assert view.metrics[2]["value"] == "0.105%"
+    assert view.review_status == "needs_review"
+    assert run_status_badge("Ok", view.review_status) == {
+        "label": "Needs scientific review", "color": "#fff0d4",
+    }
+
+
+def test_result_badge_does_not_present_missing_convergence_as_success(tmp_path):
+    view = build_result_view({
+        "status": "complete", "analysis_mode": "full", "final_rwp": 0.1,
+    }, tmp_path)
+    assert view.review_status == "unknown"
+    assert run_status_badge("Ok", view.review_status)["label"] == "Convergence unknown"
+    assert run_status_badge("Error", view.review_status)["label"] == "Error"
+    assert run_status_badge("Running", "needs_review")["label"] == "Running"
 
 
 def test_experiment_summary_preserves_explicit_final_rwp_separately_from_candidate_metrics():

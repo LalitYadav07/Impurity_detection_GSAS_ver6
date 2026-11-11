@@ -47,7 +47,7 @@ TASKS = [
          details=[("Choose scans and exclude unrelated runs",
                    "Open <b>Run titles and initial monitoring scope</b>. Review <b>When monitoring starts</b>, background/empty and ramp/cooling switches, and <b>Exclude runs or reduced products</b>. A sample ID alone does not prove that the specimen is present. Numbered assistant options refer to samples; use an explicit phrase such as “bank 2” for a bank."),
                   ("Beamline-specific choices",
-                   "POWGEN can match supported profiles per run; review the detected wavelength and source bank. NOMAD requires a reviewed supplied profile and physical-bank mapping. HB-2A and SNAP retain preview status and additional normalization/profile checks. Follow the notices for your selected source; do not copy another instrument’s profile.")]),
+                   "POWGEN can match supported profiles per run; review the detected wavelength and source bank. NOMAD requires a reviewed supplied profile and physical-bank mapping. Changing a NOMAD or SNAP experiment, reduction folder, source bank or profile clears the profile acknowledgement: review the new pairing again. HB-2A and SNAP retain preview status and additional normalization/profile checks. Follow the notices for your selected source; do not copy another instrument’s profile.")]),
     dict(id="inputs", group="First Live result", title="Choose structures, chemistry and a matching profile",
          purpose="Give the search the structures and instrument description it is allowed to use.",
          shot="07-two-cif-input", alt="Historical AGES example adding two CIF structures to a small candidate library.",
@@ -96,7 +96,7 @@ TASKS = [
          steps=[
              "Select a completed scan in <b>Results</b> and open its full result. Expand the fit.",
              "Inspect observed and calculated curves, the residual, and each phase’s Bragg ticks. Zoom both a strong-peak region and weak unexplained signal.",
-             "Read the reported convergence/qualification notices and resolved settings. Keep the selected scan, bank, fit interval and checkpoint with your interpretation."
+             "Read the reported convergence/qualification notices and resolved settings. A header marked <b>Needs scientific review</b> or <b>Convergence unknown</b> is not an accepted scientific result, even though its Galaxy job finished. Keep the selected scan, bank, fit interval and checkpoint with your interpretation."
          ],
          expected="You can identify which scan and model produced the fit, where discrepancies remain, and whether a verified refinement is available.",
          details=[("Reading Rwp and phase fractions",

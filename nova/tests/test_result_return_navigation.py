@@ -11,6 +11,31 @@ from radar_pd_nova.galaxy_service import GalaxyService
 from radar_pd_nova.models import AnalysisMode, ResultStatus, RunRecord, RunStatus
 
 
+def test_result_review_badge_is_bound_to_the_displayed_run_and_cleared_on_selection():
+    app = RadarPdNovaApp()
+    original = RunRecord(uid='selected', galaxy_job_id='job-selected', history_id='history',
+                         name='Selected run', mode=AnalysisMode.FULL,
+                         status=RunStatus.OK, result_status=ResultStatus.READY)
+    app._select_record(original)
+    state = app.server.state
+    state.result_owner_uid = original.uid
+    state.result_review_status = 'needs_review'
+    app._sync_selected_run_status(original)
+    assert state.selected_run_status == 'Ok', 'Job state remains available to lifecycle controls'
+    assert state.selected_run_badge == 'Needs scientific review'
+
+    other = original.model_copy(update={'uid': 'other', 'name': 'Other run'})
+    app._select_record(other)
+    assert state.result_owner_uid == ''
+    assert state.selected_run_badge == 'Complete', 'Do not borrow the previous fit qualification'
+    state.result_owner_uid = other.uid
+    state.result_review_status = 'unknown'
+    app._sync_selected_run_status(other)
+    assert state.selected_run_badge == 'Convergence unknown'
+    app._reset_result_state()
+    assert state.selected_run_badge == 'Complete'
+
+
 @pytest.mark.parametrize('workspace', ['refinement', 'battery', 'experiment', 'preparation'])
 def test_selected_status_updates_without_taking_over_another_workspace(workspace):
     app = RadarPdNovaApp()

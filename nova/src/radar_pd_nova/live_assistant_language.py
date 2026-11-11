@@ -262,6 +262,15 @@ def _experiment(text: str, context: ReplyContext) -> ParsedReply | None:
     residual = lower
     for match in sorted(matches + beams + tentative, key=lambda m: m.start(), reverse=True):
         residual = residual[:match.start()] + " " + residual[match.end():]
+    if context.step == "experiment":
+        # A terminal request to discover the list is the normal next step,
+        # not a sample/bank selection. Keep other trailing instructions intact.
+        item = r"(?:the\s+)?(?:(?:available|reduced[- ]data)\s+)?(?:sample\s+ids?|samples?|banks?)"
+        residual = re.sub(
+            r"(?:^|[.!?;])\s*(?:please\s+)?(?:find|list|show|load|discover)\s+"
+            r"(?:me\s+)?" + item + r"(?:\s+and\s+" + item + r")?\s*[.!?]?\s*$",
+            " ", residual,
+        )
     fillers = {"i", "i'm", "am", "we", "we're", "are", "working", "work", "at", "on", "using", "use", "my", "our", "the", "beamline", "instrument", "is", "it's", "and", "with", "for", "experiment", "proposal", "number", "id", "please", "actually", "instead", "switch", "change", "to", "select", "choose", "set", "it", "this", "thanks"}
     unknown = [word for word in re.findall(r"[\w']+", residual) if word not in fillers]
     label = "Use " + " / ".join(([LIVE_BEAMLINES[values["live_beamline"]].name] if "live_beamline" in values else []) + ipts)
@@ -794,6 +803,12 @@ def interpret_reply(text: str, context: ReplyContext | None = None) -> ParsedRep
     literal = re.sub(r"^(?:with\s+)?ids?\s*[:# ]\s*", "", literal, flags=re.I).strip(" \"'")
     if context.step == "selection" and any(literal == s.value or _key(literal) in _sample_aliases(s) for s in context.samples):
         return _interpret_single_reply(text, context)
+    if context.step == "experiment":
+        # Interpret a complete, exact experiment header before splitting
+        # "show sample IDs and banks" into apparent selection commands.
+        experiment = _experiment(text, context)
+        if experiment and experiment.action == "patch":
+            return experiment
     clauses = _reply_clauses(text)
     if len(clauses) <= 1:
         return _interpret_single_reply(text, context)

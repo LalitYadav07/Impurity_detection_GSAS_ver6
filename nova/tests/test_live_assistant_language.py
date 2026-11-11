@@ -17,6 +17,25 @@ SELECTION = ReplyContext(step="selection", samples=SAMPLES, shown_samples=SAMPLE
 CHEMISTRY = ReplyContext(step="chemistry")
 
 
+@pytest.mark.parametrize('beamline,code', [('NOMAD','NOM'),('POWGEN','PG3'),('SNAP','SNAP'),('HB2A','HB2A')])
+@pytest.mark.parametrize('description', ['Please find the samples and reduced-data banks.',
+                                     'Show available sample IDs and banks.'])
+def test_explicit_experiment_with_discovery_request_does_not_invent_unresolved_selection(beamline, code, description):
+    reply = interpret_reply(f'I am on {beamline}, IPTS 21886. {description}')
+    assert reply.action == 'patch'
+    assert reply.value == {'live_beamline':code, 'powgen_ipts':'IPTS-21886'}
+    assert not reply.choices
+
+
+@pytest.mark.parametrize('description', ['Find sample 123 and bank 2.',
+                                     'Find the samples and delete the old data.',
+                                     'Find the samples and use iron only.'])
+def test_discovery_words_do_not_silently_discard_other_instructions(description):
+    reply = interpret_reply('NOMAD IPTS 21886. '+description)
+    assert reply.action == 'clarify'
+    assert reply.value is None
+
+
 def test_narrative_can_description_recovers_only_explicit_experiment_choice():
     reply = interpret_reply(
         "I want to analyse Er SSL (Er2Be2GeO7) on HB-2A, IPTS-28749, experiment 853. "

@@ -101,6 +101,32 @@ def test_nomad_source_and_wavelength_labels_follow_the_selected_reduction_family
     assert state.powgen_dashboard_wavelength=='Broadband neutron TOF'
 
 
+@pytest.mark.parametrize('field,value', [
+    ('powgen_source_subfolder', 'shared/autoNOM/GSAS'),
+    ('powgen_ipts', 'IPTS-54321'), ('nomad_physical_bank', 3),
+    ('nomad_profile_bank', 2), ('powgen_instrument_path', '/profiles/replacement.instprm'),
+    ('powgen_instrument_dataset_id', 'replacement-profile'),
+    ('snap_product_family', 'replacement-reduction'),
+])
+@pytest.mark.parametrize('beamline', ['NOM', 'SNAP'])
+def test_supplied_profile_review_does_not_carry_to_another_source_context(field, value, beamline):
+    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state = _State(live_beamline=beamline, powgen_ipts='IPTS-12345',
+        powgen_source_subfolder='shared/autoreduce', snap_product_family='',
+        nomad_physical_bank=2, nomad_profile_bank=1,
+        powgen_instrument_source='upload', powgen_instrument_path='/profiles/old.instprm',
+        powgen_instrument_dataset_id='', nomad_profile_acknowledged=False)
+    app.server = SimpleNamespace(state=state)
+    app._nomad_profile_context_changed()
+    state.nomad_profile_acknowledged = True
+    state.powgen_ipts = '12345'
+    app._nomad_profile_context_changed()
+    assert state.nomad_profile_acknowledged, 'Equivalent IPTS formatting keeps the same reviewed context'
+    setattr(state, field, value)
+    app._nomad_profile_context_changed()
+    assert not state.nomad_profile_acknowledged
+
+
 def test_live_beamline_switch_clears_incompatible_inputs_and_results():
     app = RadarPdNovaApp()
     state = app.server.state
@@ -411,6 +437,7 @@ def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_p
     plot_path = str(tmp_path / "best.plotdata.json")
     view = {
         "mode": "full",
+        "review_status": "",
         "metrics": [],
         "warnings": [],
         "phases": [],

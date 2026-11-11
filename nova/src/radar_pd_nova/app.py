@@ -109,6 +109,7 @@ from .results import (
     phase_fraction_rows,
     read_plot_payload,
     read_table,
+    run_status_badge,
 )
 from .uploads import NamedFileUpload, build_cif_source_archive
 
@@ -376,6 +377,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         self.server.state.change('live_beamline','powgen_ipts','powgen_source_subfolder','snap_product_family',
             'powgen_processing_scope','powgen_processing_sample_ids')(self._snap_condition_context_changed)
         self.server.state.change("nomad_profile_bank", "nomad_profile_acknowledged", "nomad_allow_exploratory")(self._powgen_processing_changed)
+        self.server.state.change('live_beamline', 'powgen_ipts', 'powgen_source_subfolder',
+            'snap_product_family', 'nomad_physical_bank', 'nomad_profile_bank',
+            'powgen_instrument_source', 'powgen_instrument_path',
+            'powgen_instrument_dataset_id')(self._nomad_profile_context_changed)
         self.server.state.change('hb2a_normalization','hb2a_profile_acknowledged','hb2a_temperature_channel','hb2a_temperature_unit','hb2a_condition_reviewed','hb2a_collimator_override','hb2a_allow_stopped')(self._powgen_processing_changed)
         self.server.state.change('hb2a_normalization')(self._hb2a_normalization_changed)
         self.server.state.change('hb2a_magnetic_field_channel','hb2a_magnetic_field_unit','hb2a_magnetic_field_reviewed','hb2a_pressure_channel','hb2a_pressure_unit','hb2a_pressure_reviewed')(self._powgen_processing_changed)
@@ -549,6 +554,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.selected_run_name = "No run selected"
         state.selected_run_display_name = "No run selected"
         state.selected_run_status = "-"
+        state.selected_run_badge = "-"
+        state.selected_run_badge_color = "#fff0d4"
         state.selected_analysis_status = "-"
         state.selected_result_status = "-"
         state.selected_publication_status = "-"
@@ -573,6 +580,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.summary_cards = []
         state.result_owner_uid = ""
         state.result_metrics = []
+        state.result_review_status = ""
         state.result_warnings = []
         state.phase_total = "-"
         state.viewed_run_mode = ""
@@ -995,8 +1003,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             )
             vuetify.VChip(
                 v_if="!!selected_run_uid && !['experiment','preparation','planning'].includes(workspace_view)",
-                text=("selected_run_status",),
-                color=("selected_run_status === 'Ok' ? '#dff2e8' : selected_run_status === 'Error' ? '#fde7e7' : '#fff0d4'",),
+                text=("selected_run_badge",),
+                color=("selected_run_badge_color",),
                 variant="flat",
                 size="small",
             )
@@ -2988,7 +2996,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                                classes="radar-run-technical-id")
                         html.P("Refinement has its own experiment and scan selection below.",
                             v_if="workspace_view === 'refinement'", classes="radar-help-copy")
-                    vuetify.VChip(text=("selected_run_status",), color=("selected_run_status === 'Ok' ? '#dff2e8' : selected_run_status === 'Error' ? '#fde7e7' : '#fff0d4'",), variant="flat")
+                    vuetify.VChip(text=("selected_run_badge",), color=("selected_run_badge_color",), variant="flat")
                 with vuetify.VBtnToggle(
                     v_model=("workspace_view",),
                     update_modelValue=(self.select_workspace_view, "[$event]"),
@@ -5552,6 +5560,24 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.powgen_message = state.powgen_preflight_message
         state.flush()
 
+    def _nomad_profile_context_changed(self, **_: Any) -> None:
+        """A prior bank/profile acknowledgement cannot approve a new source."""
+        state = self.server.state
+        if getattr(state, 'live_beamline', '') not in {'NOM', 'SNAP'}:
+            return
+        keys = ('live_beamline', 'powgen_ipts', 'powgen_source_subfolder',
+            'snap_product_family', 'nomad_physical_bank', 'nomad_profile_bank',
+            'powgen_instrument_source', 'powgen_instrument_path', 'powgen_instrument_dataset_id')
+        values = {key: getattr(state, key, None) for key in keys}
+        try:
+            values['powgen_ipts'] = self._normalize_powgen_ipts(values['powgen_ipts'])
+        except (TypeError, ValueError):
+            pass
+        context = tuple(values[key] for key in keys)
+        if context != getattr(self, '_nomad_profile_context', None):
+            self._nomad_profile_context = context
+            state.nomad_profile_acknowledged = False
+
     def _hb2a_normalization_changed(self, **_):
         if self._live_adapter().instrument != 'HB2A':
             return
@@ -7576,6 +7602,16 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.selected_run_console = record.console_tail
         state.monitor_stages = self._monitor_stage_rows(record)
         state.selected_run_elapsed = run_elapsed_label(record)
+        self._sync_selected_run_badge()
+
+    def _sync_selected_run_badge(self) -> None:
+        state = self.server.state
+        owns_result = bool(getattr(state, "selected_run_uid", "") and
+            getattr(state, "result_owner_uid", "") == state.selected_run_uid)
+        badge = run_status_badge(getattr(state, "selected_run_status", "-"),
+            getattr(state, "result_review_status", "") if owns_result else "")
+        state.selected_run_badge = badge["label"]
+        state.selected_run_badge_color = badge["color"]
 
     def use_selected_configuration(self, **_: Any) -> None:
         uid = self.server.state.selected_run_uid
@@ -8183,6 +8219,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         view = build_result_view(result_document, root, submitted_mode=record.mode.value).to_state()
         state.viewed_run_mode = view["mode"]
         state.result_metrics = view["metrics"]
+        state.result_review_status = view["review_status"]
         state.summary_cards = view["metrics"]
         state.result_warnings = view["warnings"]
         state.phase_rows = view["phases"]
@@ -8247,6 +8284,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             )
         self._sync_workspace_options(view["mode"])
         state.result_owner_uid = record.uid
+        self._sync_selected_run_badge()
         self._result_display_binding = (self.service, getattr(self, "_result_context", None),
                                         *self._result_display_state(record))
         state.flush()
@@ -8288,6 +8326,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.result_owner_uid = ""
         state.summary_cards = []
         state.result_metrics = []
+        state.result_review_status = ""
+        self._sync_selected_run_badge()
         state.result_warnings = []
         state.phase_rows = []
         state.phase_total = "-"
@@ -9197,10 +9237,11 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         body { margin: 0; background: #f2f7f4; color: var(--radar-ink); font-family: Inter, "Segoe UI", Arial, sans-serif; }
         .radar-app-shell { min-height: calc(100vh - 64px); background: #f2f7f4; }
         .radar-context-header {
-          min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 8px 18px;
+          min-height: 58px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 18px;
           background: var(--radar-surface); border-bottom: 1px solid var(--radar-line); position: sticky; top: 0; z-index: 8;
         }
-        .radar-context-title { min-width: 220px; }
+        .radar-context-header > .v-chip, .radar-context-header > .v-btn { flex-shrink: 0; }
+        .radar-context-title { min-width: 0; }
         .radar-product-name { color: var(--radar-brand-900); font-size: 16px; font-weight: 800; line-height: 1.2; }
         .radar-product-subtitle { color: var(--radar-muted); font-size: 12px; margin-top: 2px; }
         .radar-run-chip { max-width: 310px; }

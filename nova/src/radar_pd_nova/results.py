@@ -414,11 +414,23 @@ class ResultView:
     full_models: list[dict[str, str]] = field(default_factory=list)
     checkpoints: list[CheckpointDescriptor] = field(default_factory=list)
     file_groups: list[dict[str, Any]] = field(default_factory=list)
+    review_status: str = ""
 
     def to_state(self) -> dict[str, Any]:
         """Convert dataclasses into Trame-serializable dictionaries."""
 
         return asdict(self)
+
+
+def run_status_badge(status: str, review_status: str = "") -> dict[str, str]:
+    """Keep job completion distinct from the loaded result's qualification."""
+    if status == "Ok":
+        if review_status == "needs_review":
+            return {"label": "Needs scientific review", "color": "#fff0d4"}
+        if review_status == "unknown":
+            return {"label": "Convergence unknown", "color": "#fff0d4"}
+        return {"label": "Complete", "color": "#dff2e8"}
+    return {"label": status, "color": "#fde7e7" if status in {"Error", "Cancelled"} else "#fff0d4"}
 
 
 def _humanize(value: str) -> str:
@@ -2608,12 +2620,17 @@ def build_result_view(
             seen_progression.add(key)
             progression.append({"stage": stage, "status": state})
 
+    review_status = (
+        "needs_review" if result.get("scientific_status") == "needs_review"
+        or (convergence and convergence["status"] == "needs_review")
+        else "unknown" if convergence and convergence["status"] == "unknown" else ""
+    )
     metrics = [
         {"label": "Analysis", "value": "Rapid Hypothesis" if mode == "rapid" else "Full RADAR-PD"},
         {"label": "Status", "value": (
             f"{status} · scientific review required"
-            if result.get("scientific_status") == "needs_review" or (convergence and convergence["status"] == "needs_review")
-            else f"{status} · convergence unknown" if convergence and convergence["status"] == "unknown" else status
+            if review_status == "needs_review"
+            else f"{status} · convergence unknown" if review_status == "unknown" else status
         )},
         {"label": "Best Rwp", "value": f"{best_rwp:.3f}%" if best_rwp is not None else "-"},
         {"label": "Reported phases", "value": str(len(phase_rows)) if phase_rows else "-"},
@@ -2631,6 +2648,7 @@ def build_result_view(
         mode=mode,
         status=status,
         result_stage=result_stage,
+        review_status=review_status,
         metrics=metrics,
         warnings=warnings,
         phases=phase_rows,
