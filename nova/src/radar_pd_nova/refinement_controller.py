@@ -236,6 +236,21 @@ def refinement_parameter_warnings(view):
     return warnings
 
 
+def refinement_stage_positions(result, plan=None):
+    """Keep approved stage numbers after a rejected stage is omitted from GPXs."""
+    for rows in ((plan or {}).get('stages'), result.get('stage_outcomes')):
+        if not isinstance(rows, list) or not rows:
+            continue
+        ids = [row.get('id') if isinstance(row, dict) else None for row in rows]
+        if all(isinstance(value, str) and value for value in ids) and len(set(ids)) == len(ids):
+            return {value: index + 1 for index, value in enumerate(ids)}
+    # Legacy stopped recipes contain consecutive verified stages. When a
+    # recovered recipe lacks its original order, do not invent new numbers.
+    if not result.get('rejected_stages'):
+        return {row['id']: index + 1 for index, row in enumerate(result.get('stages') or [])}
+    return {}
+
+
 def selected_refinement_dataset(result, stage):
     if stage=='final':return result.get('final_dataset_id')
     return (result.get('stage_dataset_ids') or {}).get(stage)
@@ -272,7 +287,7 @@ def refinement_result_title(job, recipes):
     return f"{job['source']['scan_label']} · {job['source']['sample_label']} · {recipe}"
 
 
-def refinement_output_provenance(result, stage):
+def refinement_output_provenance(result, stage, plan=None):
     if stage=='final' and result.get('final_gpx'):
         location=(f"Galaxy History → Verified refinement-stage GPXs → final (dataset {result['final_dataset_id']})"
                   if result.get('final_dataset_id') else 'available in Verified output')
@@ -283,7 +298,9 @@ def refinement_output_provenance(result, stage):
     dataset=selected_refinement_dataset(result,stage)
     location=(f'Galaxy History → Verified refinement-stage GPXs → {stage} (dataset {dataset})'
               if dataset else 'available in Verified output')
-    message=f'Verified intermediate GPX: {location}. This is stage {stages.index(selected)+1} of the recipe. '
+    number=refinement_stage_positions(result,plan).get(stage)
+    identity=f'This is stage {number} of the recipe. ' if number is not None else 'This is a retained recipe stage. '
+    message=f'Verified intermediate GPX: {location}. '+identity
     if not result.get('final_gpx'):
         return message+'No final GPX was accepted.'
     final_location='Galaxy History' if result.get('final_dataset_id') else 'Verified output'
@@ -399,7 +416,8 @@ class RefinementMixin(GuidedRefinementMixin):
         self.server.state.change('rf_selected_job')(self._refinement_selection_changed)
         self.server.state.change('rf_request')(self._refinement_request_changed)
         self.server.state.change('rf_setup_mode')(self._refinement_setup_changed)
-        self.server.state.change('rf_stage','rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
+        self.server.state.change('rf_stage')(self._refinement_stage_changed)
+        self.server.state.change('rf_histogram','rf_axis','rf_display','rf_zoom')(self._refinement_plot_changed)
         self.server.state.change('rf_trend_stage','rf_trend_metric','rf_trend_axis','rf_trend_display','rf_trend_temperature_span')(self._refinement_trend_changed)
         self.server.state.change('rf_recipe_filter')(self._refinement_recipe_filter_changed)
         self.server.state.change('rf_parallel_jobs')(self._refinement_parallel_changed)
@@ -1185,7 +1203,10 @@ class RefinementMixin(GuidedRefinementMixin):
                 if not current():return
                 s.rf_error=str(exc)
         stages=result.get('stages') or []
-        s.rf_stages=([dict(title='Final refined result',value='final')] if result.get('final_view') else [])+[dict(title=f"{i+1}. {v['title']}",value=v['id']) for i,v in enumerate(stages)]
+        recipe_plan=(w.state.get('recipes',{}).get(job.get('recipe_id'),{}) or {}).get('plan')
+        positions=refinement_stage_positions(result,recipe_plan)
+        s.rf_stages=([dict(title='Final refined result',value='final')] if result.get('final_view') else [])+[
+            dict(title=(f"{positions[v['id']]}. " if v['id'] in positions else '')+v['title'],value=v['id']) for v in stages]
         baseline=None
         if s.rf_stages:
             if not result.get('final_view'):s.rf_stage=s.rf_stages[-1]['value']
@@ -1203,7 +1224,8 @@ class RefinementMixin(GuidedRefinementMixin):
             except Exception as exc:
                 if not current():return
                 s.rf_error=str(exc);s.rf_has_output=False;baseline=None
-        stage_labels={v['gpx']:f"Stage {i+1} GPX · {v['title']}" for i,v in enumerate(stages)}
+        stage_labels={v['gpx']:(f"Stage {positions[v['id']]} GPX" if v['id'] in positions else 'Retained stage GPX')+
+                      f" · {v['title']}" for v in stages}
         s.rf_downloads=[dict(title=('Final refined GPX' if name==result.get('final_gpx') else stage_labels.get(name,name)),value=name,
             filename=refinement_artifact_filename(job,name,w.state.get('recipes',{})))
             for name in sorted(result.get('files',{})) if name.endswith('.gpx') or name in ['refine.py','polished.execution.json','plan.json','approval.json']]
@@ -1212,6 +1234,18 @@ class RefinementMixin(GuidedRefinementMixin):
         if not current():return
         s.rf_has_output=baseline is not None
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
+
+    def _refinement_stage_changed(self,**_):
+        """Default the download to the stage the user just selected."""
+        s=self.server.state;w=self._refinement_workspace
+        job=w.state['jobs'].get(s.rf_selected_job) if w else None
+        if job and job['source']['experiment']==s.rf_experiment:
+            result=job.get('result') or {}
+            name=(result.get('final_gpx') if s.rf_stage=='final' else
+                  next((row.get('gpx') for row in result.get('stages',[]) if row['id']==s.rf_stage),None))
+            if name and name in result.get('files',{}):
+                s.rf_download=name
+        self._refinement_plot_changed()
 
     def _refinement_plot_changed(self,**_):
         s=self.server.state;w=self._refinement_workspace
@@ -1263,7 +1297,8 @@ class RefinementMixin(GuidedRefinementMixin):
                 criteria=stages[-1].get('convergence') if stages else None
                 if retain_review_evidence(result,view,criteria):
                     w.save();self._refinement_sync()
-            s.rf_output_provenance=refinement_output_provenance(result,s.rf_stage)
+            s.rf_output_provenance=refinement_output_provenance(result,s.rf_stage,
+                (w.state.get('recipes',{}).get(job.get('recipe_id'),{}) or {}).get('plan'))
             s.rf_can_open_gsas=bool(selected_refinement_dataset(result,s.rf_stage))
             s.rf_open_gsas_label=('Open final refined GPX in GSAS-II' if s.rf_stage=='final' else 'Open selected verified stage in GSAS-II')
             labels={'refined':'Refined','refined_in_prior_stage':'Refined earlier; held now','fixed':'Held','fixed_by_model':'Fixed by model','derived':'Derived','configured':'Released; not estimated','unknown':'Not estimated'}

@@ -5,7 +5,61 @@ import hashlib
 import re
 from types import SimpleNamespace
 
-from radar_pd_nova.refinement_controller import RefinementMixin,refinement_artifact_filename
+from radar_pd_nova.refinement_controller import RefinementMixin,refinement_artifact_filename,refinement_stage_positions,refinement_output_provenance
+
+
+def test_recovered_recipe_keeps_original_numbers_and_prefers_approved_order():
+    result={'stages':[{'id':'background'},{'id':'finish'}],
+            'rejected_stages':['width'],
+            'stage_outcomes':[{'id':'background'},{'id':'width'},{'id':'finish'}]}
+    assert refinement_stage_positions(result)=={'background':1,'width':2,'finish':3}
+    plan={'stages':[{'id':'background'},{'id':'width'},{'id':'held'},{'id':'finish'}]}
+    assert refinement_stage_positions(result,plan)['finish']==4
+
+
+def test_recovered_recipe_with_missing_order_is_not_renumbered():
+    result={'stages':[{'id':'background'},{'id':'finish'}],'rejected_stages':['width']}
+    assert refinement_stage_positions(result)=={}
+    result['stage_outcomes']=[{'id':'background'},{'id':'background'}]
+    assert refinement_stage_positions(result)=={}
+
+
+def test_legacy_consecutive_verified_stages_keep_their_order():
+    result={'stages':[{'id':'background'},{'id':'cell'}]}
+    assert refinement_stage_positions(result)=={'background':1,'cell':2}
+
+
+def test_output_footer_uses_approved_stage_number_after_rollback():
+    result={'stages':[{'id':'background'},{'id':'finish'}],'rejected_stages':['width'],
+            'stage_outcomes':[{'id':'background'},{'id':'width'},{'id':'finish'}]}
+    assert 'stage 3 of the recipe' in refinement_output_provenance(result,'finish')
+    result.pop('stage_outcomes')
+    assert 'retained recipe stage' in refinement_output_provenance(result,'finish')
+    plan={'stages':[{'id':'background'},{'id':'width'},{'id':'finish'}]}
+    assert 'stage 3 of the recipe' in refinement_output_provenance(result,'finish',plan)
+
+
+def test_selected_stage_defaults_to_its_own_gpx_download():
+    class App(RefinementMixin):
+        def _refinement_plot_changed(self):pass
+    app=App()
+    job={'source':{'experiment':'selected-experiment'},'result':{
+        'final_gpx':'final.gpx','stages':[{'id':'finish','gpx':'stage3.gpx'}],
+        'files':{'final.gpx':'final-sha','stage3.gpx':'stage-sha','execution.json':'audit-sha'}}}
+    app._refinement_workspace=SimpleNamespace(state={'jobs':{'selected-job':job}})
+    state=SimpleNamespace(rf_selected_job='selected-job',rf_experiment='selected-experiment',
+                          rf_stage='finish',rf_download='final.gpx')
+    app.server=SimpleNamespace(state=state)
+    app._refinement_stage_changed()
+    assert state.rf_download=='stage3.gpx'
+    # A separately chosen artifact is retained while zoom/axis redraw the plot.
+    state.rf_download='execution.json';app._refinement_plot_changed()
+    assert state.rf_download=='execution.json'
+    state.rf_stage='final';app._refinement_stage_changed()
+    assert state.rf_download=='final.gpx'
+    state.rf_experiment='other-experiment';state.rf_stage='finish'
+    app._refinement_stage_changed()
+    assert state.rf_download=='final.gpx'
 
 
 def saved_job(run=64301,uid='copper-one'):
