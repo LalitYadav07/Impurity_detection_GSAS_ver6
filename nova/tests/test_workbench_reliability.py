@@ -500,8 +500,10 @@ def test_gsasii_interactive_session_tracks_ready_and_normal_close(
 
 
 @pytest.mark.parametrize("entries", [[], [{"id": "starting", "active": False, "target": None}]])
+@pytest.mark.parametrize("tool_id, name", [(GSASII_INTERACTIVE_TOOL_ID, "GSAS-II desktop"),
+                                           (RESULT_EXPLORER_TOOL_ID, "interactive result viewer")])
 def test_gsasii_interactive_session_explains_pending_entrypoint(
-    tmp_path: Path, monkeypatch: Any, entries: list[dict[str, Any]]
+    tmp_path: Path, monkeypatch: Any, entries: list[dict[str, Any]], tool_id: str, name: str
 ) -> None:
     class Response:
         def raise_for_status(self) -> None:
@@ -515,7 +517,7 @@ def test_gsasii_interactive_session_explains_pending_entrypoint(
     service._job_details = lambda job_id: {"state": "running"}  # type: ignore[method-assign]
     action = UtilityActionRecord(
         uid="utility",
-        tool_id=GSASII_INTERACTIVE_TOOL_ID,
+        tool_id=tool_id,
         name="GSAS-II",
         galaxy_job_id="job",
     )
@@ -523,7 +525,7 @@ def test_gsasii_interactive_session_explains_pending_entrypoint(
     pending = service.refresh_utility(action)
 
     assert pending.status is RunStatus.RUNNING
-    assert "GSAS-II desktop job is running" in pending.message
+    assert name + " job is running" in pending.message
     assert "Waiting for its connection address" in pending.message
     assert "allocate" not in pending.message
     assert "launch_url" not in pending.outputs
