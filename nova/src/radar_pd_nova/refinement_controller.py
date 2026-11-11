@@ -19,7 +19,7 @@ from gpx_recipe.contracts import stage_table, plan_hash
 from gpx_recipe.usage import usage_labels
 from .refinement_plots import empty_figure, fit_figure, trend_figure, electrical_exposure, refinement_axis_options, refinement_parameter_label
 from .refinement_runtime import configured_runtime, verify_result_files
-from .refinement_sources import RefinementScope, digest, source_from_record
+from .refinement_sources import RefinementScope, CheckpointSelectionRequired, digest, source_from_record, refinement_source_title
 from .refinement_workspace import RefinementWorkspace
 from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence, galaxy_refinement_activity, review_notices, final_stage_criterion
 from .results import experiment_axis_options
@@ -332,7 +332,7 @@ def refinement_output_provenance(result, stage, plan=None):
     return message+f'The final refined GPX is also available in {final_location}.'
 
 
-def published_refinement_source(service, workspace, record, scan, sha_cache):
+def published_refinement_source(service, workspace, record, scan, sha_cache, *, checkpoint_key=None):
     root=record.local_output_dir
     has_index=root and any(p.is_file() for p in [root/'gpx_index.json',root/'ndip/gpx_index.json'])
     if not has_index and record.output_dataset_ids.get('summary') and record.output_dataset_ids.get('gpx_projects'):
@@ -352,7 +352,8 @@ def published_refinement_source(service, workspace, record, scan, sha_cache):
     for name in ['summary','gpx_index']:
         p=next((p for p in [root/(name+'.json'),root/'ndip'/(name+'.json')] if p.is_file()),None)
         if p:payload[name]=json.loads(p.read_text())
-    source=source_from_record(record,payload,scan,workspace.history_id,sha_cache=sha_cache,root_override=root)
+    source=source_from_record(record,payload,scan,workspace.history_id,sha_cache=sha_cache,root_override=root,
+                              checkpoint_key=checkpoint_key)
     canonical=getattr(workspace,'canonical_source',None)
     return canonical(source) if canonical else source
 
@@ -435,6 +436,8 @@ class RefinementMixin(GuidedRefinementMixin):
         self._refinement_approving=False
         self._refinement_inspecting=False
         self._refinement_preparations={}
+        self._refinement_checkpoint_catalog={}
+        self._refinement_checkpoint_owner=None
         s=self.server.state
         for key,value in self._refinement_state_defaults().items():setattr(s,key,value)
         self._init_guided_refinement()
@@ -450,6 +453,7 @@ class RefinementMixin(GuidedRefinementMixin):
         self.server.state.change('rf_trend_stage','rf_trend_metric','rf_trend_axis','rf_trend_display','rf_trend_temperature_span')(self._refinement_trend_changed)
         self.server.state.change('rf_recipe_filter')(self._refinement_recipe_filter_changed)
         self.server.state.change('rf_parallel_jobs')(self._refinement_parallel_changed)
+        self.server.state.change('rf_checkpoint_run')(self._refinement_checkpoint_run_changed)
 
     @staticmethod
     def _refinement_state_defaults():
@@ -457,6 +461,7 @@ class RefinementMixin(GuidedRefinementMixin):
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
             rf_failure_policy='stop',rf_failure_policy_explicit=False,rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_question_answer='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
+            rf_checkpoint_runs=[],rf_checkpoint_run='',rf_checkpoint_options=[],rf_checkpoint_key='',rf_checkpoint_busy=False,rf_checkpoint_message='',rf_checkpoint_error='',
             rf_compatibility_rows=[],rf_compatibility_summary='',rf_compatibility_blocked=False,
             rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=2,
@@ -564,7 +569,7 @@ class RefinementMixin(GuidedRefinementMixin):
             if not owns_workspace():return
             sha_cache=dict(self._refinement_sha_cache)
             def catalog():
-                sources=[];warnings=[]
+                sources=[];warnings=[];checkpoints={}
                 for uid,record in records.items():
                     if uid in failures:
                         warnings.append(dict(scan=record.name,reason='Could not read published project metadata: '+'; '.join(failures[uid])))
@@ -573,9 +578,13 @@ class RefinementMixin(GuidedRefinementMixin):
                         source=published_refinement_source(service,workspace,record,rows.get(record.uid),sha_cache)
                         source['live_watch']=record.uid in watched_uids
                         sources.append(source)
+                    except CheckpointSelectionRequired as exc:
+                        warnings.append(dict(scan=record.name,reason=str(exc)))
+                        if exc.choices:
+                            checkpoints[uid]=dict(record=record,scan=rows.get(uid),stamp=stamps[uid],choices=exc.choices)
                     except Exception as exc:warnings.append(dict(scan=record.name,reason=str(exc)))
-                return sources,warnings
-            sources,warnings=await asyncio.to_thread(catalog)
+                return sources,warnings,checkpoints
+            sources,warnings,checkpoints=await asyncio.to_thread(catalog)
             if not owns_workspace():return
             warnings=recovery_warnings+warnings
             current_records=live_records();current_rows={r.get('record_uid'):r for r in (s.powgen_all_scientific_rows or [])}
@@ -603,6 +612,12 @@ class RefinementMixin(GuidedRefinementMixin):
             active_ids=None if warnings else {source['id'] for source in sources if source.get('live_watch')}
             await asyncio.to_thread(workspace.observe,sources,active_live_ids=active_ids)
             if not owns_workspace():return
+            self._refinement_checkpoint_catalog={uid:entry for uid,entry in checkpoints.items()
+                if uid in current_records and _refinement_record_stamp(current_records[uid])==entry['stamp']
+                and current_rows.get(uid)==entry['scan']}
+            s.rf_checkpoint_runs=[dict(value=uid,title=f"{entry['record'].name} · {len(entry['choices'])} candidates")
+                for uid,entry in sorted(self._refinement_checkpoint_catalog.items(),key=lambda item:item[1]['record'].name)]
+            self._refinement_checkpoint_run_changed()
             # Legacy publications need a checksum captured from actual bytes.
             # Download only newly enrolled future matches here; backlog choices
             # remain browsable before materializing the user's selected scope.
@@ -636,6 +651,71 @@ class RefinementMixin(GuidedRefinementMixin):
                 if self._refinement_refresh_again:
                     self._refinement_refresh_again=False
                     self._refinement_refresh_task=None;self.refresh_refinement_sources()
+
+    def _refinement_checkpoint_run_changed(self,**_):
+        s=self.server.state
+        entry=getattr(self,'_refinement_checkpoint_catalog',{}).get(s.rf_checkpoint_run)
+        s.rf_checkpoint_options=copy.deepcopy(entry['choices']) if entry else []
+        if s.rf_checkpoint_key not in {choice['value'] for choice in s.rf_checkpoint_options}:
+            s.rf_checkpoint_key=''
+        if not entry:s.rf_checkpoint_run=''
+
+    def choose_published_checkpoint(self,**_):
+        if not self.server.state.rf_checkpoint_busy:
+            return self._refinement_schedule(self._choose_published_checkpoint(),'radar-select-published-checkpoint')
+
+    async def _choose_published_checkpoint(self):
+        s=self.server.state
+        if s.rf_checkpoint_busy:return
+        owner=object();self._refinement_checkpoint_owner=owner
+        s.rf_checkpoint_busy=True;s.rf_checkpoint_message='';s.rf_checkpoint_error='';s.flush()
+        service=self.service;workspace=self._refinement_workspace
+        controller=getattr(self,'_powgen_controller',None)
+        selection=(s.rf_checkpoint_run,s.rf_checkpoint_key)
+        entry=getattr(self,'_refinement_checkpoint_catalog',{}).get(selection[0])
+        def current():
+            if (self.service is not service or self._refinement_workspace is not workspace
+                    or self._refinement_checkpoint_owner is not owner
+                    or getattr(self,'_powgen_controller',None) is not controller
+                    or selection!=(s.rf_checkpoint_run,s.rf_checkpoint_key)):
+                return False
+            records=dict(self.records)
+            if controller:records.update({record.uid:record for record in controller.records.values()})
+            record=records.get(selection[0])
+            row=next((row for row in (s.powgen_all_scientific_rows or []) if row.get('record_uid')==selection[0]),None)
+            return (entry is not None and record is not None and _refinement_record_stamp(record)==entry['stamp']
+                    and row==entry['scan'])
+        try:
+            if (workspace is None or entry is None or not current()
+                    or selection[1] not in {choice['value'] for choice in entry['choices']}):
+                raise ValueError('Choose a current run and its published checkpoint; refresh if the result changed')
+            source=await asyncio.to_thread(published_refinement_source,service,workspace,
+                copy.deepcopy(entry['record']),copy.deepcopy(entry['scan']),{},checkpoint_key=selection[1])
+            if not current():raise ValueError('The selected result changed while loading; refresh and choose its checkpoint again')
+            workspace.observe([source],manual=True,enroll_future=False)
+            self._refinement_internal=True
+            try:
+                if s.rf_experiment!=source['experiment']:s.rf_request=''
+                s.rf_experiment=source['experiment'];s.rf_source=source['id']
+                s.rf_scope='scans';s.rf_scans=['source:'+source['id']];s.rf_samples=[];s.rf_banks=[]
+                s.rf_existing=True;s.rf_future=False;s.rf_approved=False;s.rf_recipe_id=''
+                self._clear_refinement_output(clear_trends=True)
+                experiments=refinement_experiment_options(workspace)
+                s.rf_experiments=[dict(title=value,value=key) for key,value in sorted(experiments.items(),key=lambda item:item[1])]
+            finally:self._refinement_internal=False
+            self._refinement_hold_enrollment()
+            self._refinement_sync()
+            if getattr(self,'_symmetry_start_changed',None):
+                s.sx_start_source=source['id'];self._symmetry_start_changed()
+            self._refinement_checkpoint()
+            s.rf_checkpoint_message=('Selected '+source['collection_name']+'. No calculation was submitted. '
+                'Only this saved result is selected; inspect its starting model before preparing a recipe or model search.')
+        except Exception as exc:
+            if self.service is service and self._refinement_workspace is workspace:
+                s.rf_checkpoint_error=str(exc)
+        finally:
+            if self._refinement_checkpoint_owner is owner:
+                s.rf_checkpoint_busy=False;s.flush()
 
     def _refinement_experiment_changed(self,**_):
         if self._refinement_internal:return
@@ -831,7 +911,7 @@ class RefinementMixin(GuidedRefinementMixin):
                 selected=[v for v in sources if scope.matches(v)];self._refinement_selection_token=token;s.rf_scope_token=token
                 s.rf_scope_summary=f"{len(selected)} available run results"+(' · matching future arrivals' if s.rf_future else ' · existing scans only')
             except ValueError as exc:selected=[];self._refinement_selection_token='';s.rf_scope_token='';s.rf_scope_summary=str(exc)
-            s.rf_sources=[dict(title=f"{v['scan_label']} · {v['sample_label']}",value=v['id']) for v in selected]
+            s.rf_sources=[dict(title=refinement_source_title(v),value=v['id']) for v in selected]
             if s.rf_source not in {v['id'] for v in selected}:s.rf_source=selected[0]['id'] if selected else ''
             self._refinement_sync_source()
             draft=w.state['drafts'].get(s.rf_experiment) or {}

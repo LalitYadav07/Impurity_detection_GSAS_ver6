@@ -66,8 +66,15 @@ def published_selection_key(source: dict) -> str:
     return 'source:' + str(source['id'])
 
 
+def refinement_source_title(source: dict) -> str:
+    title=f"{source['scan_label']} · {source['sample_label']}"
+    if source.get('explicit_checkpoint'):
+        title+=' · candidate '+str(source.get('collection_name') or source['id'])
+    return title
+
+
 def refinement_scan_options(sources: list[dict], selected=()) -> list[dict]:
-    options = [dict(title=f"{s['scan_label']} · {s['sample_label']}",
+    options = [dict(title=refinement_source_title(s),
                     value=published_selection_key(s)) for s in sources]
     for key in dict.fromkeys(selected):
         if str(key).startswith('source:'):
@@ -129,12 +136,56 @@ def _inside(root: Path, value: Any) -> Path | None:
     return target
 
 
-def select_published_project(result: dict, index: dict) -> dict:
+def checkpoint_selection_key(project: dict) -> str:
+    """Bind a choice to a publication and its exact model bytes, not list order."""
+    return digest({key: project.get(key) for key in (
+        'sha256', 'source_sha256', 'published_sha256', 'collection_name',
+        'collection_path', 'stage', 'status')})
+
+
+def _checkpoint_choices(projects: list[dict]) -> list[dict]:
+    choices = {}
+    for project in projects:
+        name = project.get('collection_name')
+        path = project.get('collection_path')
+        if (project.get('status') not in {'accepted', 'checkpoint'}
+                or not isinstance(project.get('stage'), str) or not project['stage']
+                or not all(re.fullmatch(r'[a-f0-9]{64}', str(project.get(key) or ''))
+                           for key in ('sha256', 'published_sha256'))
+                or not isinstance(name, str) or not name.endswith('.gpx')
+                or Path(name).name != name or '\\' in name):
+            continue
+        if path and (not isinstance(path, str) or Path(path).is_absolute()
+                     or '..' in Path(path).parts or '\\' in path or Path(path).name != name):
+            continue
+        key = checkpoint_selection_key(project)
+        choices[key] = dict(value=key, title=f"{name} · {project['status']} · {project['published_sha256'][:10]}")
+    return sorted(choices.values(), key=lambda value: value['title'])
+
+
+class CheckpointSelectionRequired(ValueError):
+    def __init__(self, message: str, projects: list[dict]):
+        super().__init__(message)
+        self.choices = _checkpoint_choices(projects)
+
+
+def select_published_project(result: dict, index: dict, *, checkpoint_key: str | None = None) -> dict:
     """Select the exact indexed baseline, never an arbitrary filesystem GPX."""
     projects = [p for p in (result.get('gpx_projects') or index.get('projects') or [])
                 if isinstance(p, dict) and p.get('status') not in {'failed', 'rollback'}]
     if not projects:
         raise ValueError('The completed RADAR-PD run has no published GPX yet')
+    if checkpoint_key is not None:
+        # Only resolve genuine ambiguity. An explicit choice must not bypass a
+        # stale selected-model hash or silently replace a newly accepted final.
+        try:
+            select_published_project(result, index)
+        except CheckpointSelectionRequired as exc:
+            if checkpoint_key not in {choice['value'] for choice in exc.choices}:
+                raise ValueError('The selected published checkpoint is no longer available; refresh and choose again') from exc
+            return dict(next(project for project in projects
+                             if checkpoint_selection_key(project) == checkpoint_key))
+        raise ValueError('This result no longer needs a checkpoint choice; refresh its accepted model')
     model_hash = (result.get('observables') or {}).get('source_gpx_sha256')
     if not model_hash:
         model_hash = (result.get('pattern_observation') or {}).get('source_gpx_sha256')
@@ -158,17 +209,17 @@ def select_published_project(result: dict, index: dict) -> dict:
                             str(project.get('collection_path') or ''),
                             str(project.get('source_path') or project.get('path') or ''))
                 return dict(min(final, key=publication_order))
-            raise ValueError('Several published GPXs claim the selected model; choose a checkpoint explicitly')
+            raise CheckpointSelectionRequired('Several published GPXs claim the selected model; choose a checkpoint explicitly', exact)
         # A stale summary/index must not silently select a different solution.
         raise ValueError('The published GPX index does not identify the model used by this result')
     priorities = {'final_refinement': 0, 'main_phase_anchor': 1, 'targeted_refinement': 2}
     ranked = [p for p in projects if p.get('stage') in priorities and p.get('status') == 'accepted']
     if not ranked:
-        raise ValueError('No accepted final GPX is identified; choose a checkpoint explicitly')
+        raise CheckpointSelectionRequired('No accepted final GPX is identified; choose a checkpoint explicitly', projects)
     best = min(priorities[p['stage']] for p in ranked)
     finalists = [p for p in ranked if priorities[p['stage']] == best]
     if len(finalists) != 1:
-        raise ValueError('Several accepted GPX solutions exist; choose a checkpoint explicitly')
+        raise CheckpointSelectionRequired('Several accepted GPX solutions exist; choose a checkpoint explicitly', finalists)
     return dict(finalists[0])
 
 
@@ -200,11 +251,12 @@ def published_project_path(root: Path, project: dict) -> Path | None:
 
 
 def source_from_record(record, payload: dict, scan: dict | None, history: str,
-                       *, sha_cache: dict | None = None, root_override: Path | None = None) -> dict:
+                       *, sha_cache: dict | None = None, root_override: Path | None = None,
+                       checkpoint_key: str | None = None) -> dict:
     scan = scan or {}
     result = payload.get('summary') or {}
     index = payload.get('gpx_index') or {}
-    project = select_published_project(result, index)
+    project = select_published_project(result, index, checkpoint_key=checkpoint_key)
     root = root_override or record.local_output_dir
     if root is None:
         raise ValueError('RADAR-PD result files are not downloaded yet')
@@ -295,6 +347,9 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
         scan_label=f'Exp {experiment_number} · Scan {run_number}'
     if bank and 'bank' not in scan_label.lower():scan_label+=' · bank '+bank
     warnings=[]
+    if checkpoint_key is not None:
+        warnings.append('Explicitly selected candidate checkpoint; not an accepted final model. '
+                        'Inspect its native fit and parameters before approving further refinement.')
     for document in (result,scan):
         for field in ('scientific_warnings','warnings'):
             values=document.get(field) or []
@@ -311,7 +366,8 @@ def source_from_record(record, payload: dict, scan: dict | None, history: str,
                 source_path=str(path) if path else None, source_sha256=checksum,
                 internal_source_sha256=project.get('sha256'), collection_id=collection,
                 collection_name=publication, published_sha256=project.get('published_sha256'),
-                base_rwp=scan.get('rwp', result.get('final_rwp', result.get('rwp'))),
-                scientific_status=scan.get('scientific_status') or result.get('scientific_status'),
+                base_rwp=None if checkpoint_key is not None else scan.get('rwp', result.get('final_rwp', result.get('rwp'))),
+                scientific_status='needs_review' if checkpoint_key is not None else scan.get('scientific_status') or result.get('scientific_status'),
+                **({'explicit_checkpoint': True} if checkpoint_key is not None else {}),
                 scientific_warnings=list(dict.fromkeys(warnings)),
                 project=project, **({'fallback_record_uid':job_identity} if not ipts else {}))

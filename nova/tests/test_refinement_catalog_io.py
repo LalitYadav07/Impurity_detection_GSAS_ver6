@@ -85,6 +85,103 @@ class App(RefinementMixin):
     def _refinement_start_pump(self):self.pumps+=1
 
 
+def rapid_app(path):
+    """Use a real workspace to exercise explicit selection and saved ownership."""
+    from radar_pd_nova.refinement_workspace import RefinementWorkspace
+    records=[record(1),record(2)]
+    service=Service(records)
+    base=service.documents['summary-1']['gpx_projects'][0]
+    service.documents['summary-1']['gpx_projects']=[dict(base,
+        stage='hypothesis_refinement',status='checkpoint',sha256=character*64,
+        published_sha256=published*64,collection_name=name+'.gpx',collection_path='gpx/'+name+'.gpx')
+        for character,published,name in [('a','c','cleanup'),('b','d','background')]]
+    service.documents['index-1']['projects']=copy.deepcopy(service.documents['summary-1']['gpx_projects'])
+    app=App(path,records,service)
+    app._refinement_workspace=RefinementWorkspace(path,history_id='history',runtime=SimpleNamespace(kind='galaxy'))
+    app._refinement_internal=False;app.checkpoints=0
+    def checkpoint():app.checkpoints+=1
+    app._refinement_checkpoint=checkpoint
+    return app
+
+
+def test_rapid_catalog_requires_manual_choice_without_submitting_or_choosing(tmp_path):
+    app=rapid_app(tmp_path)
+    asyncio.run(app._refresh_refinement_sources())
+    state=app.server.state;workspace=app._refinement_workspace
+    assert len(workspace.state['sources'])==1
+    assert state.rf_checkpoint_runs==[dict(value='record-1',title='scan-1 · 2 candidates')]
+    assert state.rf_checkpoint_run==state.rf_checkpoint_key==''
+    assert not state.rf_checkpoint_options and not workspace.state['jobs']
+    state.rf_checkpoint_run='record-1';app._refinement_checkpoint_run_changed()
+    assert len(state.rf_checkpoint_options)==2 and state.rf_checkpoint_key==''
+
+
+def test_explicit_choice_is_saved_without_auto_enrollment_and_survives_refresh(tmp_path):
+    from radar_pd_nova.symmetry_sources import start_choices
+    app=rapid_app(tmp_path);state=app.server.state;workspace=app._refinement_workspace
+    asyncio.run(app._refresh_refinement_sources())
+    state.rf_checkpoint_run='record-1';app._refinement_checkpoint_run_changed()
+    state.rf_checkpoint_key=next(choice['value'] for choice in state.rf_checkpoint_options if choice['title'].startswith('background'))
+    state.rf_future=True;state.rf_scope='all'
+    workspace.state['recipes']['other']=dict(experiment='unrelated',armed=True)
+    asyncio.run(app._choose_published_checkpoint())
+    assert not state.rf_checkpoint_error
+    source=workspace.state['sources'][state.rf_source]
+    assert source['manual_recipe_input'] is True and source['explicit_checkpoint'] is True
+    assert source['collection_name']=='background.gpx' and source['source_sha256']=='d'*64
+    assert state.rf_scope=='scans' and state.rf_scans==['source:'+source['id']]
+    assert state.rf_future is False and state.rf_existing is True
+    assert not workspace.state['jobs'] and workspace.state['recipes']['other']['armed'] is True
+    assert 'No calculation was submitted' in state.rf_checkpoint_message
+    entry=next(entry for entry in start_choices(workspace,source['experiment']) if entry['id']==source['id'])
+    assert 'Candidate checkpoint' in entry['title'] and 'background.gpx' in entry['title']
+    restored=json.loads(workspace.manifest.read_text())['sources'][source['id']]
+    assert restored['source_sha256']==source['source_sha256'] and restored['manual_recipe_input'] is True
+    asyncio.run(app._refresh_refinement_sources())
+    assert workspace.state['sources'][source['id']]['manual_recipe_input'] is True
+    assert state.rf_source==source['id'] and not workspace.state['jobs']
+    assert not any('output' in key for key in app.service.calls)
+
+
+@pytest.mark.parametrize('mutation',['record','row','selection','service','workspace'])
+def test_explicit_selection_ignores_stale_async_completion(tmp_path,monkeypatch,mutation):
+    import radar_pd_nova.refinement_controller as controller_module
+    app=rapid_app(tmp_path);state=app.server.state;workspace=app._refinement_workspace
+    asyncio.run(app._refresh_refinement_sources())
+    state.rf_checkpoint_run='record-1';app._refinement_checkpoint_run_changed()
+    state.rf_checkpoint_key=state.rf_checkpoint_options[0]['value']
+    entered=threading.Event();release=threading.Event()
+    original=controller_module.published_refinement_source
+    def delayed(*args,**kwargs):
+        entered.set();assert release.wait(5)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(controller_module,'published_refinement_source',delayed)
+    async def run():
+        pending=asyncio.create_task(app._choose_published_checkpoint())
+        assert await asyncio.to_thread(entered.wait,5)
+        if mutation=='record':app.records['record-1'].output_dataset_ids['summary']='new-summary'
+        elif mutation=='row':state.powgen_all_scientific_rows=[dict(record_uid='record-1',sample_key='new-sample')]
+        elif mutation=='selection':state.rf_checkpoint_key=state.rf_checkpoint_options[1]['value']
+        elif mutation=='service':app.service=Service([record(9)])
+        else:app._refinement_workspace=Workspace(tmp_path/'replacement')
+        release.set();await pending
+    asyncio.run(run())
+    assert len(workspace.state['sources'])==1 and not workspace.state['jobs']
+    assert app.checkpoints==0
+    if mutation not in {'service','workspace'}:
+        assert 'changed while loading' in state.rf_checkpoint_error
+    assert state.rf_checkpoint_busy is False
+
+
+def test_explicit_selection_rejects_forged_key(tmp_path):
+    app=rapid_app(tmp_path);state=app.server.state;workspace=app._refinement_workspace
+    asyncio.run(app._refresh_refinement_sources())
+    state.rf_checkpoint_run='record-1';state.rf_checkpoint_key='forged'
+    asyncio.run(app._choose_published_checkpoint())
+    assert 'Choose a current run' in state.rf_checkpoint_error
+    assert len(workspace.state['sources'])==1 and app.checkpoints==0
+
+
 def test_metadata_prefetch_has_exactly_two_workers_and_reuses_complete_cache(tmp_path):
     records=[record(i) for i in range(4)];original=[r.model_dump() for r in records]
     service=Service(records);service.release=threading.Event();workspace=Workspace(tmp_path)

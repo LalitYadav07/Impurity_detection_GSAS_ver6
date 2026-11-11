@@ -90,8 +90,10 @@ def _with_recipe_review(source, result):
 def start_choices(workspace, experiment):
     entries=[]
     for source in workspace.sources(experiment):
-        label='Structural model' if source.get('model_checkpoint') else 'RADAR-PD'
-        entries.append(dict(id=source['id'],title=label+' · '+_scan_title(source),source=source))
+        label='Structural model' if source.get('model_checkpoint') else 'Candidate checkpoint' if source.get('explicit_checkpoint') else 'RADAR-PD'
+        title=label+' · '+_scan_title(source)
+        if source.get('explicit_checkpoint'):title+=' · '+source.get('collection_name',source['id'])
+        entries.append(dict(id=source['id'],title=title,source=source))
     for job_id,job in workspace.state.get('jobs',{}).items():
         result=job.get('result') or {};source=recipe_source(workspace,job)
         if (job.get('status') not in {'completed','needs_review'}

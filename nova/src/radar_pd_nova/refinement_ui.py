@@ -55,6 +55,20 @@ def refinement_dashboard(app):
         with html.Details(v_if='rf_source_warnings.length',classes='mb-4'):
             html.Summary('{{ rf_source_warnings.length }} completed project(s) need attention before refinement',style='cursor:pointer;color:#8b6028;font-size:13px')
             v.VDataTable(items=('rf_source_warnings',),headers=("[{title:'Scan',key:'scan'},{title:'Reason',key:'reason'}]",),items_per_page=5,density='compact')
+        with html.Details(v_if='rf_checkpoint_runs.length',classes='rf-card mb-4',open=("!rf_experiments.length",)):
+            html.Summary('Choose a published candidate checkpoint ({{ rf_checkpoint_runs.length }} runs)')
+            html.P('These runs have saved candidates but no unique accepted final GPX. Choose the exact candidate to inspect; its original review status is retained.',classes='rf-notice mt-3')
+            with html.Div(classes='rf-fields mt-3'):
+                v.VAutocomplete(label='Run with candidate checkpoints',v_model=('rf_checkpoint_run',),items=('rf_checkpoint_runs',),
+                    disabled=('rf_loading || rf_checkpoint_busy',),density='compact',variant='outlined',hide_details=True,clearable=True)
+                select('Published checkpoint','rf_checkpoint_key','rf_checkpoint_options',
+                    disabled=('!rf_checkpoint_run || rf_loading || rf_checkpoint_busy',))
+            v.VBtn('Use selected checkpoint',click=app.choose_published_checkpoint,
+                disabled=('!rf_checkpoint_key || rf_loading || rf_checkpoint_busy',),loading=('rf_checkpoint_busy',),
+                variant='outlined',size='small',classes='mt-3')
+            html.P('Selection submits no calculation and enrolls no other or future scans.',classes='rf-help')
+        v.VAlert(v_if='!!rf_checkpoint_error',text=('rf_checkpoint_error',),type='error',variant='tonal',density='compact',classes='mb-3')
+        v.VAlert(v_if='!!rf_checkpoint_message',text=('rf_checkpoint_message',),type='info',variant='tonal',density='compact',classes='mb-3')
         with html.Details(v_if="rf_mode === 'recipe' && !!rf_source_qualification",classes='rf-context-details'):
             html.Summary('Starting model qualification')
             html.P('{{ rf_source_qualification }}')
