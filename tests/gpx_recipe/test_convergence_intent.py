@@ -129,3 +129,20 @@ def test_negated_or_descriptive_retention_does_not_force_a_previous_limit(text):
 @pytest.mark.parametrize('text', ['shift/sigma <= 0.5; shift/sigma <= 0.1.', 'shift/sigma <= 0.', 'shift/sigma <= 2.'])
 def test_conflicting_or_invalid_limits_require_clarification(text):
     assert bind_convergence(text, None, 'model')['questions']
+
+
+@pytest.mark.parametrize('text', [
+    'Retain native convergence.',
+    'Keep the GSAS-II convergence criterion.',
+    'Preserve the native solver convergence settings.',
+    'Keep the minimizer convergence threshold unchanged.',
+])
+@pytest.mark.parametrize('previous', [None, plan(.5)])
+def test_native_solver_convergence_does_not_request_a_shift_sigma_screen(text, previous):
+    bound = bind_convergence(text, previous, 'model')
+    assert bound['global_maximum'] is None and bound['questions'] == []
+
+
+def test_native_convergence_does_not_hide_an_explicit_shift_sigma_requirement():
+    bound = bind_convergence('Keep native convergence. Retain the original shift/sigma threshold.', plan(.5), 'model')
+    assert bound['global_maximum'] == .5 and bound['source'] == 'previous compatible recipe'

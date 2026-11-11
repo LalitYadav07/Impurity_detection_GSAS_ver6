@@ -80,3 +80,58 @@ def test_global_budget_is_not_silently_multiplied_across_stages():
     with pytest.raises(ValueError,match='whole recipe'):
         check_limits(p,requested_limits('Use at most 400 residual evaluations.',context()))
     check_limits(p,requested_limits('Use at most 400 residual evaluations per stage.',context()))
+
+
+@pytest.mark.parametrize('text', [
+    'Use at most 200 residual/function evaluations per stage.',
+    'Maximum function evaluations = 200 per stage.',
+    'Maximum residual evaluations: 200 per stage.',
+    'max_function_evaluations=200 per stage.',
+])
+def test_common_evaluation_budget_wording_is_bound(text):
+    limits = requested_limits(text, context())
+    assert limits['global_maximum'] == 200
+    assert limits['global_per_stage'] and not limits['questions']
+    check_limits(plan(200), limits)
+    with pytest.raises(ValueError, match='ceiling of 200'):
+        check_limits(plan(201), limits)
+
+
+def test_answering_the_cycle_question_resolves_the_old_request_only():
+    original = ('Use at most 30 cycles per stage.\n'
+                'Stage 1: Refine background.\nStage 2: Refine histogram scale.')
+    request = original + '\n\nClarification for this draft:\nUse at most 200 residual/function evaluations per stage instead of cycles.'
+    limits = requested_limits(request, context())
+    assert not limits['questions']
+    assert limits['global_maximum'] == 200 and limits['global_per_stage']
+    assert limits['stage_maxima'] == {}
+    p = plan(200)
+    p['stages'].append(dict(p['stages'][0], id='scale'))
+    check_limits(p, limits)
+
+
+def test_a_clarification_with_a_new_cycle_request_still_needs_an_answer():
+    request = ('Use at most 30 cycles.\n\nClarification for this draft:\n'
+               'Use at most 200 function evaluations per stage, but run three cycles.')
+    assert requested_limits(request, context())['questions']
+
+
+def test_a_partial_stage_answer_does_not_clear_other_stage_cycle_limits():
+    request = ('Stage 1: Run three cycles for background.\n'
+               'Stage 2: Run three cycles for scale.\n\n'
+               'Clarification for this draft:\nStage 1: Use at most 200 function evaluations.')
+    limits = requested_limits(request, context())
+    assert limits['questions'] and limits['stage_maxima'] == {1: 200}
+
+
+def test_clarification_does_not_silently_raise_an_existing_evaluation_limit():
+    request = ('Use at most 100 residual evaluations per stage.\n\n'
+               'Clarification for this draft:\nUse at most 200 function evaluations per stage.')
+    assert requested_limits(request, context())['questions']
+
+
+def test_quoted_clarification_and_budget_do_not_override_an_instruction():
+    request = ('Use at most 30 cycles. The label is "Clarification for this draft:\n'
+               'Use at most 200 function evaluations per stage."')
+    limits = requested_limits(request, context())
+    assert limits['questions'] and limits['global_maximum'] is None

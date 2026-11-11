@@ -22,6 +22,23 @@ RETAIN = re.compile(
     r"(?:convergence\s+(?:threshold|criterion|criteria|screen|requirement)|shift\s*/\s*sigma\s+(?:limit|threshold|ceiling))",
     re.I,
 )
+NATIVE_CONVERGENCE = re.compile(
+    r"\b(?:native(?:\s+(?:solver|minimizer))?|GSAS[-\s]?II(?:\s+(?:solver|minimizer))?|solver|minimizer)"
+    r"(?:'s)?\s+(?:convergence|stopping)\b", re.I)
+
+
+def _retains_shift_ceiling(text):
+    for match in RETAIN.finditer(text):
+        if re.search(r"\b(?:do\s+not|don't|never|not\s+to|avoid)\s*$",
+                     text[max(0, match.start()-30):match.start()], re.I):
+            continue
+        # Keeping the source solver's stopping settings does not request an
+        # additional numerical shift/sigma screen, even if an earlier recipe
+        # happened to contain one. Explicit shift/sigma language still binds.
+        if NATIVE_CONVERGENCE.search(match.group()) and not re.search(SHIFT, match.group(), re.I):
+            continue
+        return True
+    return False
 
 
 def _ceiling(text):
@@ -55,9 +72,7 @@ def bind_convergence(request, previous, model_signature):
             stages.append(dict(stage=section['stage'], maximum=limit))
     source = 'explicit request' if global_limit is not None or stages else None
     unquoted = mask_quoted(request)
-    retaining = any(not re.search(r"\b(?:do\s+not|don't|never|not\s+to|avoid)\s*$",
-                                 unquoted[max(0, match.start()-30):match.start()], re.I)
-                    for match in RETAIN.finditer(unquoted))
+    retaining = _retains_shift_ceiling(unquoted)
     if retaining and global_limit is None and not questions:
         prior_stages = previous.get('stages', []) if isinstance(previous, dict) else []
         eligible = (isinstance(previous, dict) and previous.get('model_signature') == model_signature
