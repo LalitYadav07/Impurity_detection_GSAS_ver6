@@ -19,6 +19,11 @@ on:
         required: false
         type: boolean
         default: false
+      reuse_qualified_runtime:
+        description: Reuse the pinned qualified runtime for a verified UI-only change
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: publish-gsasii-gui-${{ github.ref }}
@@ -42,6 +47,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Verify unchanged qualified desktop runtime
+        if: inputs.reuse_qualified_runtime
+        shell: bash
+        run: |
+          git fetch --depth=1 origin f3aba94bcca30a1b7e21c36a5a65fc83dc79e217
+          python gsasii_gui/tools/check_ui_runtime.py
+
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push' || inputs.publish_image
         uses: docker/login-action@v3
@@ -54,7 +66,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: gsasii_gui/Dockerfile
+          file: ${{ inputs.reuse_qualified_runtime && 'gsasii_gui/Dockerfile.ui-update' || 'gsasii_gui/Dockerfile' }}
           platforms: linux/amd64
           provenance: false
           sbom: false
@@ -62,8 +74,8 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:gsasii-gui
             ${{ env.IMAGE_NAME }}:gsasii-gui-${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:gsasii-gui-buildcache
-          cache-to: ${{ (github.event_name == 'push' || inputs.publish_image) && format('type=registry,ref={0}:gsasii-gui-buildcache,mode=max', env.IMAGE_NAME) || '' }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:${{ inputs.reuse_qualified_runtime && 'gsasii-gui-ui-update-buildcache' || 'gsasii-gui-buildcache' }}
+          cache-to: ${{ (github.event_name == 'push' || inputs.publish_image) && format('type=registry,ref={0}:{1},mode=max', env.IMAGE_NAME, inputs.reuse_qualified_runtime && 'gsasii-gui-ui-update-buildcache' || 'gsasii-gui-buildcache') || '' }}
 
       - name: Smoke test GSAS-II Python runtime
         shell: bash

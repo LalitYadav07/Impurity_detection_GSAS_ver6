@@ -1,0 +1,14 @@
+# UI-only updates retain the exact qualified native runtime. The workflow
+# checks the runtime source files against its producing commit before use.
+FROM ghcr.io/lalityadav07/impurity_detection_gsas_ver6:gsasii-gui-f3aba94bcca30a1b7e21c36a5a65fc83dc79e217@sha256:ea610a430850f4addf385c8f55105b7d297e299b4c14e88672e127a6565a67c0
+
+USER root
+ENV GSASII_GUI_VERSION=0.1.17
+LABEL org.opencontainers.image.version="0.1.17"
+COPY gsasii_gui/nginx.conf.template /etc/nginx/gsasii.conf.template
+COPY gsasii_gui/novnc_launch.html /opt/noVNC/radar-launch.html
+COPY gsasii_gui/novnc_launch.js /opt/noVNC/radar-launch.js
+COPY gsasii_gui/supervisord.conf /etc/supervisor/conf.d/gsasii.conf
+COPY gsasii_gui/scripts/ /opt/gsasii-gui/
+RUN chmod 0755 /opt/gsasii-gui/*.sh
+USER gsasii
