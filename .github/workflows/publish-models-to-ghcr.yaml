@@ -89,6 +89,7 @@ jobs:
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_structural_accelerator_checkpoint.py \
             /validation/tests/gpx_recipe/test_structural_training_cuda.py \
+            /validation/tests/gpx_recipe/test_preparation_reference.py \
             -k "not real_cuda"'
       - name: Verify native stack, adapter identity and credential isolation
         run: |

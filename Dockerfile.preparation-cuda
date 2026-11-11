@@ -10,6 +10,9 @@ RUN python -c "import subprocess,pathlib; rows=subprocess.check_output(['python'
     && python -m pip install --no-cache-dir pytest \
     && python -c "import torch; assert str(torch.__version__)=='2.14.1+cu126' and torch.version.cuda=='12.6'"
 COPY nova/src/gpx_recipe /opt/radar-symmetry/gpx_recipe
+# The pinned base predates the installed Planner profile location. Keep the
+# same public profile resources beside the shared package as the CPU worker.
+COPY nova/src/radar_pd_nova/data/powgen_calibrations /opt/radar-symmetry/radar_pd_nova/data/powgen_calibrations
 COPY scripts/ndip_model_campaign.py /opt/radar-symmetry/ndip_model_campaign.py
 COPY scripts/ndip_preparation_cuda_acceptance.py /opt/radar-symmetry/ndip_preparation_cuda_acceptance.py
 RUN python -m gpx_recipe.symmetry.space_group_patch --apply \
