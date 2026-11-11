@@ -5828,6 +5828,14 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 + (" Sample list uses catalog metadata; selected runs are verified from source files before analysis."
                    if result.get("catalog_preview_count") else "")
             )
+            if (self._live_adapter().instrument == "SNAP"
+                    and len(result.get("product_family_options", [])) > 1
+                    and not result.get("product_family")):
+                state.powgen_sample_message = (
+                    f"Found {len(result['product_family_options'])} SNAP export variants. "
+                    "Choose a SNAP grouping / export variant below, then refresh sample IDs. "
+                    "Scan and sample counts appear after this choice; variants are not combined."
+                )
             if result.get('source_unavailable'):
                 state.powgen_sample_message='The selected reduction folder is unavailable. Choose one of the available reduction families, then refresh sample IDs.'
             return result
