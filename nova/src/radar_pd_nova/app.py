@@ -3437,12 +3437,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     with html.Div(classes="radar-phase-copy"):
                         html.Strong("{{ phase.phase }}")
                         html.Span("Space group {{ phase.space_group }}")
+                        html.Span("{{ phase.component_role_label }}", v_if='!!phase.component_role_label')
                     with html.Div(classes="radar-phase-weight"):
                         html.Strong("{{ phase.weight_display }}")
                         vuetify.VProgressLinear(model_value=("phase.weight_value",), max=100, height=7, rounded=True, color="#1f6b4b")
             html.Div("Phase fractions are not available in this result.", v_if="!phase_rows.length", classes="radar-empty-compact")
             html.P(
-                "Normalized over the fitted crystalline model; omitted phases or amorphous material can remain.",
+                "{{ phase_rows.some(p => p.component_role === 'environment_only_chemistry') ? 'Normalized over sample and declared environment models; these shares do not measure bulk sample composition or container mass.' : 'Normalized over the fitted crystalline model; omitted phases or amorphous material can remain.' }}",
                 v_if="phase_rows.length", classes="radar-section-help",
             )
 
@@ -4781,6 +4782,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         "label": f"{phase_name} (SG {space_group})" if space_group != "-" else phase_name,
                         "weight_percent": weight,
                         "weight_display": f"{weight:.2f}%",
+                        **{key:phase[key] for key in ('component_role','component_role_label') if key in phase},
                     }
                 )
             elapsed = summary.get("elapsed_seconds")

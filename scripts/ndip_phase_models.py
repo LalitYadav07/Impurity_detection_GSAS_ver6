@@ -89,3 +89,92 @@ def same_composition_warnings(records, *, labels=None):
                         'Competing structure models can also compensate for profile or model errors; '
                         'compare single-structure fits or Model exploration before interpreting these fractions.',
              'groups': groups, 'basis': 'Native site occupancies and multiplicities in the same histogram; isotope settings retained'}]
+
+
+def _element_set(values):
+    if not isinstance(values, (list, tuple)) or any(
+            not isinstance(value, str) or not re.fullmatch(r'[A-Z][a-z]?', value) for value in values):
+        return None
+    return set(values)
+
+
+def resolved_component_chemistry(config):
+    """Retain only an unambiguous declared chemistry from the executed config."""
+    choices = []
+    for dataset in config.get('datasets') or [{}]:
+        sample = _element_set(dataset.get('allowed_elements', config.get('allowed_elements')))
+        filters = {**(config.get('element_filter') or {}), **(dataset.get('element_filter') or {})}
+        environment = _element_set((filters.get('sample_env') or {}).get('elements', []))
+        if not sample or environment is None:
+            return None
+        choices.append((tuple(sorted(sample)), tuple(sorted(environment))))
+    if len(set(choices)) != 1:
+        return None
+    sample, environment = choices[0]
+    return dict(sample_elements=list(sample), environment_elements=list(environment))
+
+
+def component_chemistry_context(records, chemistry, *, labels=None):
+    """Describe declared component roles, without removing or renormalizing fits.
+
+    Element assignment is an analysis input, not proof of physical origin.
+    Overlapping declarations and mixed chemistry must remain distinguishable
+    from a phase made exclusively of declared environment elements.
+    """
+    chemistry = chemistry if isinstance(chemistry, dict) else {}
+    sample = _element_set(chemistry.get('sample_elements'))
+    environment = _element_set(chemistry.get('environment_elements', []))
+    if not sample or environment is None:
+        return {}, []
+    phases, masked_histograms = [], set()
+    for record in records:
+        if not record:
+            continue
+        if str(record[0][0]).startswith('PWDR'):
+            for key, value in record[1:]:
+                if key == 'Limits' and isinstance(value, (list, tuple)):
+                    for span in value[2:]:
+                        try:
+                            valid = (isinstance(span, (list, tuple)) and len(span)==2
+                                     and all(math.isfinite(float(x)) for x in span)
+                                     and float(span[0]) <= float(span[1]))
+                        except (TypeError, ValueError):
+                            valid = False
+                        if valid:
+                            masked_histograms.add(str(record[0][0]))
+        if record[0][0] != 'Phases':
+            continue
+        for name, phase in record[1:]:
+            composition = _composition(phase)
+            if composition is None:
+                continue
+            elements = {element for element, isotope in composition}
+            is_sample, is_environment = elements <= sample, bool(environment) and elements <= environment
+            role = ('overlapping_chemistry' if is_sample and is_environment else
+                    'environment_only_chemistry' if is_environment else
+                    'sample_chemistry' if is_sample else 'mixed_or_unassigned_chemistry')
+            active = []
+            for histogram, hap in (phase.get('Histograms') or {}).items():
+                try:
+                    scale = float(hap.get('Scale', [0])[0])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if hap.get('Use', True) and math.isfinite(scale) and scale > 0:
+                    active.append(str(histogram))
+            phases.append(dict(phase_id=str(name), phase_label=(labels or {}).get(str(name), str(name)),
+                elements=sorted(elements), component_role=role, active_histograms=active))
+    context = dict(schema='radar-component-chemistry/v1', sample_elements=sorted(sample),
+        environment_elements=sorted(environment), phase_roles=phases,
+        assignment_basis='Executed analysis chemistry and native occupied atomic sites; declared role, not measured physical origin')
+    environment_phases = [p for p in phases if p['component_role']=='environment_only_chemistry' and p['active_histograms']]
+    if not environment_phases:
+        return context, []
+    names = ', '.join(p['phase_label'] for p in environment_phases)
+    masked = any(masked_histograms.intersection(p['active_histograms']) for p in environment_phases)
+    message = ('Normalized crystalline fractions include components made only of elements assigned to the sample environment: '
+               + names + '. These shares do not measure bulk sample composition or container mass.')
+    if masked:
+        message += ' The fit excludes pattern regions; check the remaining component reflections before interpreting changes in these shares.'
+    return context, [dict(code='environment_component_fractions', message=message,
+        phase_ids=[p['phase_id'] for p in environment_phases], excluded_regions_present=masked,
+        basis=context['assignment_basis'])]

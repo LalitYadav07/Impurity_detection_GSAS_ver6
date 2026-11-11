@@ -1235,6 +1235,14 @@ def _finish_figure(
     return figure
 
 
+_COMPONENT_ROLE_LABELS = {
+    'environment_only_chemistry': 'Declared environment-only chemistry',
+    'sample_chemistry': 'Within declared sample chemistry',
+    'overlapping_chemistry': 'Sample and environment chemistry overlap',
+    'mixed_or_unassigned_chemistry': 'Mixed or unassigned chemistry',
+}
+
+
 def phase_fraction_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize phase fractions from full or rapid result summaries."""
 
@@ -1315,6 +1323,10 @@ def phase_fraction_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "weight_percent": weight if weight is not None else "-",
             }
         )
+        role = item.get('component_role') or (matches[0].get('component_role') if len(matches)==1 else None)
+        if role in _COMPONENT_ROLE_LABELS:
+            rows[-1]['component_role'] = role
+            rows[-1]['component_role_label'] = _COMPONENT_ROLE_LABELS[role]
     return rows
 
 
@@ -1635,6 +1647,9 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
                 "weight_percent": round(weight, 6),
             }
         )
+        if row.get('component_role'):
+            phases[-1]['component_role'] = row['component_role']
+            phases[-1]['component_role_label'] = row['component_role_label']
     phases.sort(key=lambda row: (-float(row["weight_percent"]), row["phase"]))
     elapsed = total_elapsed_seconds(result)
     best_rwp = _best_rwp(result)
@@ -1906,6 +1921,7 @@ def experiment_phase_fraction_figure(
         )
     for label in labels:
         values: list[float | None] = []
+        component_roles = []
         for scan in ordered:
             match = next(
                 (
@@ -1916,9 +1932,14 @@ def experiment_phase_fraction_figure(
                 None,
             )
             values.append(float(match["weight_percent"]) if match is not None else None)
+            component_roles.append(match.get('component_role') if match is not None else None)
         trace_x = list(x_values)
         trace_y = list(values)
         trace_customdata = list(customdata)
+        recorded_roles = {role for role in component_roles if role}
+        if recorded_roles:
+            trace_customdata = [row + [_COMPONENT_ROLE_LABELS.get(role,'Component role not recorded')]
+                                for row,role in zip(trace_customdata,component_roles)]
         if chronological_axis:
             separated_x: list[Any] = []
             separated_y: list[float | None] = []
@@ -1934,7 +1955,7 @@ def experiment_phase_fraction_figure(
                 if previous_sample and sample_key != previous_sample:
                     separated_x.append(None)
                     separated_y.append(None)
-                    separated_customdata.append(["", "", ""])
+                    separated_customdata.append([""] * (4 if recorded_roles else 3))
                 separated_x.append(x_value)
                 separated_y.append(y_value)
                 separated_customdata.append(hover_row)
@@ -1948,13 +1969,15 @@ def experiment_phase_fraction_figure(
                 y=trace_y,
                 customdata=trace_customdata,
                 mode="lines+markers" if chronological_axis else "markers",
-                name=label,
+                name=label + (' · environment chemistry' if recorded_roles=={'environment_only_chemistry'} else ''),
                 connectgaps=False,
                 line=dict(width=1.5),
                 marker=dict(size=9, opacity=0.86, line=dict(color="#ffffff", width=1.2)),
                 hovertemplate=(
                     "Scan %{customdata[0]}<br>%{fullData.name}: %{y:.2f} wt%"
-                    "<br>%{customdata[2]}<br>%{customdata[1]}<extra></extra>"
+                    "<br>%{customdata[2]}<br>%{customdata[1]}"
+                    + ("<br>%{customdata[3]} · fractions include all modeled components" if recorded_roles else '')
+                    + "<extra></extra>"
                 ),
             )
         )
@@ -2014,6 +2037,7 @@ def experiment_phase_heatmap_figure(
     point_y: list[str] = []
     point_weights: list[float] = []
     point_hover: list[str] = []
+    roles_by_label = {}
     for label in labels:
         for scan, x_value in zip(ordered, x_values):
             match = next(
@@ -2027,6 +2051,9 @@ def experiment_phase_heatmap_figure(
             if match is None or x_value is None:
                 continue
             value = float(match["weight_percent"])
+            role = match.get('component_role')
+            if role:
+                roles_by_label.setdefault(label,set()).add(role)
             sample_label = experiment_sample_identity(scan)["label"]
             point_x.append(x_value)
             point_y.append(label)
@@ -2035,6 +2062,7 @@ def experiment_phase_heatmap_figure(
                 f"Scan {scan.get('run_number')}<br>{label}<br>"
                 + f"{value:.2f} wt%"
                 + f"<br>{sample_label}"
+                + ('<br>'+_COMPONENT_ROLE_LABELS[role] if role in _COMPONENT_ROLE_LABELS else '')
             )
 
     marker_size = max(8, min(22, round(760 / max(1, len(ordered)))))
@@ -2090,7 +2118,8 @@ def experiment_phase_heatmap_figure(
         categoryarray=labels,
         tickmode="array",
         tickvals=labels,
-        ticktext=_phase_map_tick_labels(labels),
+        ticktext=[text + (' · environment chemistry' if roles_by_label.get(label)=={'environment_only_chemistry'} else '')
+                  for label,text in zip(labels,_phase_map_tick_labels(labels))],
     )
     return figure
 

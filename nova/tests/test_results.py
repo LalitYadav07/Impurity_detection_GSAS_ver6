@@ -1072,6 +1072,29 @@ def test_phase_fraction_normalization() -> None:
     ]
 
 
+def test_environment_fraction_labels_keep_values_and_stable_phase_identity():
+    payload={'phases':[dict(phase_id='sample',compound_name='Er oxide',weight_fraction_pct='43.545',
+                           component_role='sample_chemistry'),
+                      dict(phase_id='can',compound_name='Al',weight_fraction_pct='56.455',
+                           component_role='environment_only_chemistry')]}
+    original=deepcopy(payload)
+    scans=[]
+    for run in (21,22):
+        scan=experiment_scan_summary(payload);scan.update(run_number=run,sample_key='same',sample_label='Sample')
+        scans.append(scan)
+    complete_experiment_space_groups(scans)
+    figure=experiment_phase_fraction_figure(scans)
+    can=next(t for t in figure.data if 'environment chemistry' in t.name)
+    assert list(can.y)==[56.455,56.455]
+    assert can.customdata[0][3]=='Declared environment-only chemistry'
+    assert 'all modeled components' in can.hovertemplate
+    assert payload==original
+    assert next(p for p in scans[0]['phases'] if p['phase']=='Al')['label']=='Al'
+    heatmap=experiment_phase_heatmap_figure(scans)
+    assert any('environment chemistry' in label for label in heatmap.layout.yaxis.ticktext)
+    assert max(heatmap.data[0].marker.color)==56.455
+
+
 def test_fraction_labels_use_final_gpx_symmetry_by_id_without_changing_values():
     import copy
     payload={"phases":[

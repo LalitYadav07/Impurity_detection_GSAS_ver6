@@ -52,6 +52,22 @@ def app_harness(controller):
     return app
 
 
+def test_live_projection_retains_declared_environment_component_role(tmp_path):
+    service=GalaxyService('https://galaxy.invalid','test-key','history',output_root=tmp_path)
+    controller=PowgenWatchController(service,PowgenExperimentSettings('IPTS-1','history','config','1.5'))
+    run=WatchedRun(1,'/SNS/PG3/IPTS-1/shared/autoreduce/PG3_1.gsa','revision',bank=2,
+        scientific_summary={'status':'complete','analysis_mode':'full','rwp':5.,'phases':[
+            {'phase':'Al','space_group':'Fm-3m','weight_percent':56.455,
+             'component_role':'environment_only_chemistry'}]})
+    controller.state.completed[run.run_id]=run
+    app=app_harness(controller)
+    app._sync_powgen_rows(refresh_dependents=False,load_patterns=False)
+    phase=app.server.state.powgen_scientific_rows[0]['phases'][0]
+    assert phase['component_role']=='environment_only_chemistry'
+    assert phase['component_role_label']=='Declared environment-only chemistry'
+    assert phase['weight_percent']==56.455
+
+
 @pytest.mark.parametrize("direct_dataset", [True, False], ids=["monitor-output", "legacy-tables"])
 def test_completed_only_restore_fetches_curve_and_projects_current_cache(tmp_path, direct_dataset):
     raw = json.dumps(pattern_packet()).encode()

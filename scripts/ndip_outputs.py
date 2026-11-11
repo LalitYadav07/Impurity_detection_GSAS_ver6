@@ -912,6 +912,7 @@ def collect_outputs(
     status: str = "complete",
     errors: list[dict[str, Any]] | None = None,
     phase_catalog_csv: str | Path | None = None,
+    component_chemistry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     run_root = Path(run_dir).resolve()
     portal = Path(output_dir).resolve()
@@ -971,6 +972,7 @@ def collect_outputs(
     summary, hypotheses, phases, hypothesis_stage = _summary_sources(run_root, mode)
     lattice, final_rwp, scientific_warnings = [], None, []
     convergence = {}
+    component_context = {}
     final_gpx = None
     if mode == "full" and published_gpx_sources:
         try:
@@ -986,6 +988,7 @@ def collect_outputs(
         except Exception as exc:
             scientific_warnings.append({"code": "lattice_unavailable", "message": f"Could not inspect final lattice parameters: {exc}"})
     if final_gpx is not None:
+        composition_labels = dict(gpx_phase_labels)
         try:
             try:
                 from .ndip_convergence import native_convergence, convergence_warnings
@@ -1020,6 +1023,22 @@ def collect_outputs(
             scientific_warnings.append({'code': 'phase_composition_review_unavailable',
                 'message': f'Could not compare the fitted phase compositions: {exc}'})
         _attach_recipe_model(gpx_index, portal, final_gpx.relative_to(run_root).as_posix())
+        try:
+            try:
+                from .ndip_phase_models import component_chemistry_context
+            except ImportError:
+                from ndip_phase_models import component_chemistry_context
+            component_context, component_warnings = component_chemistry_context(
+                _read_gpx_records(final_gpx), component_chemistry, labels=composition_labels)
+            scientific_warnings.extend(component_warnings)
+            roles = {row['phase_id']:row['component_role'] for row in component_context.get('phase_roles', [])}
+            for row in [*phases, *lattice]:
+                if str(row.get('phase_id')) in roles:
+                    row['component_role'] = roles[str(row['phase_id'])]
+                    row['component_role_basis'] = 'declared analysis chemistry'
+        except Exception as exc:
+            scientific_warnings.append(dict(code='component_chemistry_unavailable',
+                message=f'Could not compare component roles with the declared chemistry: {exc}'))
     atomic_write_json(portal / "gpx_index.json", gpx_index)
     if lattice:
         lattice_path = portal / "tables" / "Final_lattice_parameters.csv"
@@ -1100,6 +1119,7 @@ def collect_outputs(
         "hypotheses": hypotheses,
         "hypothesis_stage": hypothesis_stage,
         "gpx_projects": gpx_index["projects"],
+        "component_chemistry": component_context,
         "provenance": {
             "radar_pd_git_commit": _git_commit(root),
             "container_digest": os.environ.get("RADAR_PD_CONTAINER_DIGEST", "unknown"),

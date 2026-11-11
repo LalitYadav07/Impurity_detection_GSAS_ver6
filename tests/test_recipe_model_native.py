@@ -1,5 +1,6 @@
 """Native public GPXs: cell changes transfer; added phases do not."""
 import hashlib
+import copy
 import importlib
 import json
 import os
@@ -48,7 +49,9 @@ class NativeRecipeModelTest(unittest.TestCase):
                 added=root/'with-container.gpx';shutil.copy2(moved,added)
                 project=G.G2Project(gpxfile=str(added))
                 aluminium=project.add_phase(phasename='Container Al',spacegroup='F m -3 m',cell=[4.05,4.05,4.05,90,90,90])
-                aluminium.add_atom(0.,0.,0.,'Al','Al1');project.save()
+                aluminium.add_atom(0.,0.,0.,'Al','Al1')
+                aluminium.data['Histograms']=copy.deepcopy(project.phases()[0].data['Histograms'])
+                project.save()
                 value=capture(added,expected_sha256=sha(added))
                 report=assess(dict(source_sha256=sha(added),project={'recipe_model':value}),ref)
                 self.assertEqual(report['status'],'incompatible')
@@ -59,8 +62,9 @@ class NativeRecipeModelTest(unittest.TestCase):
                 from ndip_outputs import collect_outputs
                 from radar_pd_nova.refinement_sources import source_from_record
                 analysis=root/'analysis';final=analysis/'Technical/GSAS_Projects/control_seq_final_accepted_model.gpx'
-                final.parent.mkdir(parents=True);shutil.copy2(path,final)
-                portal=root/'portal';summary=collect_outputs(analysis,portal,mode='full',run_name='public control')
+                final.parent.mkdir(parents=True);shutil.copy2(added,final)
+                portal=root/'portal';summary=collect_outputs(analysis,portal,mode='full',run_name='public control',
+                    component_chemistry=dict(sample_elements=['Si'],environment_elements=['Al']))
                 index=json.loads((portal/'gpx_index.json').read_text())
                 record=SimpleNamespace(local_output_dir=portal,output_dataset_ids={},uid='public-control',
                                        galaxy_job_id=None,name='public-control')
@@ -68,6 +72,9 @@ class NativeRecipeModelTest(unittest.TestCase):
                 published=loaded['project']['recipe_model']
                 self.assertEqual(published['source_sha256'],loaded['source_sha256'])
                 self.assertEqual(assess(loaded,published)['status'],'compatible')
+                roles={r['phase_id']:r['component_role'] for r in summary['component_chemistry']['phase_roles']}
+                self.assertEqual(roles,{'Silicon':'sample_chemistry','Container Al':'environment_only_chemistry'})
+                self.assertTrue(any(w['code']=='environment_component_fractions' for w in summary['warnings']))
 
 
 if __name__=='__main__':

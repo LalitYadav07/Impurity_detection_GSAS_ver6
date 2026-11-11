@@ -146,6 +146,8 @@ jobs:
             /validation-tests/test_guided_refinement.py \
             /validation-tests/test_refinement_phase_labels.py \
             /validation-tests/test_recipe_compatibility.py \
+            /validation-tests/test_results.py \
+            /validation-tests/test_live_observation_recovery.py \
             /validation-tests/test_model_enrollment.py \
             /validation-tests/test_model_desktop.py \
             /validation-tests/test_unet_core_audit_regressions.py \

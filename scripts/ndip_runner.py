@@ -935,6 +935,10 @@ def command_analyze(args: argparse.Namespace) -> int:
         errors.append({"stage": "analysis", "message": f"Pipeline exited with code {return_code}"})
     atomic_write_json(pipeline_run_dir/'Technical'/'Logs'/'runtime_resources.json', runtime)
     collection_started = time.monotonic()
+    try:
+        from .ndip_phase_models import resolved_component_chemistry
+    except ImportError:
+        from ndip_phase_models import resolved_component_chemistry
     collect_outputs(
         pipeline_run_dir,
         portal,
@@ -945,6 +949,7 @@ def command_analyze(args: argparse.Namespace) -> int:
         status="failed" if return_code else "complete",
         errors=errors,
         phase_catalog_csv=db_root / "catalog_deduplicated.csv",
+        component_chemistry=resolved_component_chemistry(resolved),
     )
     runtime['timing_seconds']['output_collection'] = time.monotonic()-collection_started
     runtime['timing_seconds']['adapter_total'] = time.monotonic()-adapter_started
