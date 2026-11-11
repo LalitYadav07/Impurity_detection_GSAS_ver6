@@ -1,6 +1,6 @@
 {
   "schema": "radar-pd-user-guide/v2",
-  "application_version": "0.7.19",
+  "application_version": "0.7.20",
   "pages": [
     "index.html",
     "reference-0.4.34.html",
@@ -509,7 +509,7 @@
     "experiment-planner.html": "8bb242048d79f62bb4803a1d332812840255d9ff4fc6802650762e2236d21f78",
     "guide.css": "5c42c1e1efb87a99c78d01e726a5856492245faff6eae738f116da679777ce1a",
     "guide.js": "4ab14ce0c86f67a2d8b3f8cbe29a2f49e62ca1e03bd6d1bcd9aba264c118930e",
-    "index.html": "806eb3cedf73156b63eb768fce62daabede59d5ba29ec5698cbdc1bba22591af",
+    "index.html": "450a36618c0f3d704528a91f71aa80fe0bcc9591f07748547ee823d02e4d5173",
     "inputs/ages-analysis-settings.yaml": "fbbff1d875b7b38f963c7edfe55ef019bdc01acc5e649c2918b3ae8e428656fc",
     "inputs/approved-refinement-recipe.json": "4e8e9d6365a47df527566ad20caaa4eb3a53b87e6d34bd7360ff0aeca94855fd",
     "inputs/llm-refinement-request.txt": "8bb6e275e5e675c32442279b246b1eaf38632fd6689b07133ce2c06139291283",

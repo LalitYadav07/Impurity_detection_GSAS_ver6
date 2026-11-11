@@ -95,7 +95,7 @@ TASKS = [
          shot="37-original-radar-fit", alt="Historical two-phase AGES fit with observed/calculated curves, residual and Bragg ticks.",
          steps=[
              "Select a completed scan in <b>Results</b> and open its full result. Expand the fit.",
-             "Inspect observed and calculated curves, the residual, and each phase’s Bragg ticks. Zoom both a strong-peak region and weak unexplained signal.",
+             "Inspect observed and calculated curves, the residual, and each phase’s Bragg ticks. Use <b>Expand fit</b> for more space; scroll within an expanded multiphase plot to see all Bragg rows. Zoom both a strong-peak region and weak unexplained signal.",
              "Read the reported convergence/qualification notices and resolved settings. A header marked <b>Needs scientific review</b> or <b>Convergence unknown</b> is not an accepted scientific result, even though its Galaxy job finished. Keep the selected scan, bank, fit interval and checkpoint with your interpretation."
          ],
          expected="You can identify which scan and model produced the fit, where discrepancies remain, and whether a verified refinement is available.",
