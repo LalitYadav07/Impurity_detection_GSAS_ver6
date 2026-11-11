@@ -152,7 +152,9 @@ class PreparationWorkspace:
                     or manifest.get('input_sha256')!=expected or manifest.get('settings')!=model['settings']
                     or manifest.get('grid')!=model['grid']
                     or manifest.get('observations_included') is not False or manifest.get('scientific_result') is not False):
-                raise ValueError('Parent inspection changed or needs the current native implementation')
+                raise ValueError(
+                    'This saved parent/profile inspection needs revalidation. In Libraries and recovery, '
+                    'choose Inspect captured inputs to check it with the current native implementation.')
             from gpx_recipe.preparation.operations import portable_entry_artifacts
             portable_entry_artifacts('reference',manifest)
             detail=manifest.get('detail')

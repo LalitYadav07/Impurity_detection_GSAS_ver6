@@ -329,6 +329,54 @@ def test_repeated_clicks_have_one_action_owner_before_the_first_await(app):
     assert calls==['once'] and not app.server.state.prep_busy
 
 
+@pytest.mark.parametrize('count',[0,1,2])
+def test_saved_preparation_search_finishes_with_count_and_next_action(app,monkeypatch,count):
+    application,store,_,service=app;s=application.server.state
+    rows=[dict(name=f'Saved preparation {i}',dataset_id=f'checkpoint{i}') for i in range(count)]
+    monkeypatch.setattr(store,'saved',lambda:rows)
+    monkeypatch.setattr(service,'search_history_datasets',lambda **_:[])
+    async def search():
+        application.refresh_preparation_saved()
+        assert s.prep_busy and s.prep_message=='Finding saved preparation in this History'
+        await asyncio.gather(*tuple(application._prep_tasks))
+    asyncio.run(search())
+    assert not s.prep_busy and not s.prep_error and not service.submissions
+    assert len(s.prep_saved_options)==count
+    if count:
+        assert s.prep_message.startswith(f'Found {count} saved preparation checkpoint')
+        assert 'Select a checkpoint' in s.prep_message
+    else:
+        assert s.prep_message=='No saved preparation checkpoints were found in this History.'
+
+
+def test_recovery_explains_receipt_checks_before_starting_collection(app,monkeypatch):
+    application,store,key,service=app;s=application.server.state
+    s.prep_saved='checkpoint1';driver_messages=[]
+    monkeypatch.setattr(store,'recover',lambda dataset:key)
+    monkeypatch.setattr(application,'_prep_start_driver',lambda:driver_messages.append(s.prep_message))
+    async def recover():
+        application.recover_preparation()
+        await asyncio.gather(*tuple(application._prep_tasks))
+    asyncio.run(recover())
+    assert not s.prep_busy and not s.prep_error and not service.submissions
+    assert s.prep_library==key and s.prep_tab=='libraries'
+    assert driver_messages==[s.prep_message]
+    assert 'Checking its original jobs and artifacts' in s.prep_message
+    assert 'until you resume pending work' in s.prep_message
+
+
+def test_outdated_reference_replaces_old_completion_message_with_revalidation_action(app,tmp_path):
+    application,store,key,service=app;s=application.server.state
+    finish_inspection(store,key,service,tmp_path,old_implementation=True)
+    before=len(service.submissions)
+    s.prep_reference=key;s.prep_message='Input inspection complete. Review the model scope.'
+    asyncio.run(application._prep_load_reference(key))
+    assert not s.prep_context_ready and not s.prep_message
+    assert 'Inspect captured inputs' in s.prep_error
+    assert 'current native implementation' in s.prep_error
+    assert len(service.submissions)==before
+
+
 def test_transient_queue_observation_is_repolled_without_a_new_dispatch(app,monkeypatch):
     app,store,_,_=app;calls=[];s=app.server.state;s.prep_library=''
     def tick():

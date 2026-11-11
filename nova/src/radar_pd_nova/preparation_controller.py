@@ -175,7 +175,7 @@ class PreparationMixin:
                 try:pending=not self._preparation_store().registry.get(key).coverage()['complete']
                 except ValueError:pending=False
                 if pending:s.prep_message='Parent/profile inspection is queued or running. Its status is shown in Libraries.'
-                else:s.prep_error=str(exc)
+                else:s.prep_error=str(exc);s.prep_message=''
                 s.flush()
             return
         if s.prep_reference!=key:return
@@ -622,12 +622,20 @@ class PreparationMixin:
             archives=await asyncio.to_thread(self.service.search_history_datasets,query='',limit=200,include_generated=True)
             self.server.state.prep_history_archives=[dict(title=r.get('name') or r['id'],value=r['id']) for r in archives
                 if r.get('state')=='ok' and (r.get('extension') or r.get('file_ext') or '').lower()=='zip']
+            self.server.state.prep_message=(
+                f"Found {len(rows)} saved preparation {'checkpoint' if len(rows)==1 else 'checkpoints'}. "
+                'Select a checkpoint to recover its original jobs and results.' if rows else
+                'No saved preparation checkpoints were found in this History.')
         return self._prep_action(refresh(),'Finding saved preparation in this History')
 
     def recover_preparation(self,**_):
         async def recover():
             key=await asyncio.to_thread(self._preparation_store().recover,identifier(self.server.state.prep_saved))
-            self.server.state.prep_library=key;self.server.state.prep_tab='libraries';self._prep_refresh();self._prep_start_driver()
+            self.server.state.prep_library=key;self.server.state.prep_tab='libraries';self._prep_refresh()
+            self.server.state.prep_message=(
+                'Restored the saved queue. Checking its original jobs and artifacts; '
+                'no new calculations will be submitted until you resume pending work.')
+            self._prep_start_driver()
         return self._prep_action(recover(),'Recovering the original preparation jobs and artifacts')
 
     def import_preparation(self,**_):
