@@ -24,7 +24,7 @@ TOOLS={'neutrons_radar_pd_model_campaign_prototype','neutrons_radar_pd_model_cam
 # Only wrappers reviewed with the separate, server-rendered provenance input
 # and the installed certificate producer belong here. Versions 0.3.0–0.3.3
 # omitted that contract; do not authorize them simply because they are newer.
-VERSIONS={'0.2.17','0.2.18','0.3.4','0.3.5'}
+VERSIONS={'0.2.17','0.2.18','0.3.4','0.3.5','0.3.6'}
 _lock=threading.Lock()
 _owned=None
 
