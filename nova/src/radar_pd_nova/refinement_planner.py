@@ -6,7 +6,7 @@ import math
 from gpx_recipe import planner as native
 from gpx_recipe.snapshot import digest
 
-ADAPTER_VERSION = "nova-refinement-planner/v1"
+ADAPTER_VERSION = "nova-refinement-planner/v2"
 MAX_PAYLOAD_BYTES = 350000
 MAX_REVIEW_WARNINGS = 20
 MAX_REVIEW_WARNING_CHARS = 1000
@@ -29,6 +29,24 @@ FIT_RANGE_INSTRUCTION = (
     "If the imported bounds or a supported edit are unavailable, ask a concrete question instead of "
     "inventing bounds or substituting the current fit."
 )
+
+SOLVER_CAPABILITY_INSTRUCTION = (
+    "Analytic Hessian and Hessian SVD support final-cycle shift/sigma evidence; do not confuse "
+    "analytic Hessian with analytic Jacobian. Use native_convergence_capability from the inspected "
+    "GPX to determine support. A prior draft question is not a solver-capability fact. Supported "
+    "does not guarantee convergence or complete evidence: each executed stage is checked by the "
+    "native worker. Numeric and analytic Jacobian sources cannot supply that evidence."
+)
+
+
+def solver_capability(context):
+    """Describe inspected solver support without changing shared worker code."""
+    method = str((context.get("controls") or {}).get("deriv type") or "")
+    supported = (True if method in {"analytic Hessian", "Hessian SVD"} else
+                 False if method in {"numeric", "analytic Jacobian"} else None)
+    return dict(method=method, final_cycle_shift_over_sigma_supported=supported,
+                basis="Inspected GPX Controls.deriv type",
+                evidence_required="A completed stage must still provide shifts and sigmas for every independent parameter; capability alone does not pass a convergence screen.")
 
 
 def _host_execution(value, histogram_keys):
@@ -94,6 +112,8 @@ def _histogram_ranges(histogram):
 
 def _enrich(payload, context):
     payload = deepcopy(payload)
+    payload["native_convergence_capability"] = solver_capability(context)
+    payload["convergence_instruction"] += " " + SOLVER_CAPABILITY_INSTRUCTION
     project = native.expand_context(payload["project"])
     host = _host_execution(context.get("host_execution"), [h["key"] for h in context["histograms"]])
     if host:
@@ -139,7 +159,8 @@ class _PlanningClient:
         outbound[0]["content"] += " " + HOST_INSTRUCTION
         outbound[1]["content"] = json.dumps(self.payload, allow_nan=False)
         repair_context = {key: self.payload[key] for key in (
-            "target_capabilities", "histogram_capabilities", "stage_instruction_cards", "fit_range_instruction")}
+            "target_capabilities", "histogram_capabilities", "stage_instruction_cards", "fit_range_instruction",
+            "native_convergence_capability", "convergence_instruction")}
         repair_context["host_execution"] = self.payload["project"].get("host_execution", {})
         for message in outbound[2:]:
             if message["role"] != "user":

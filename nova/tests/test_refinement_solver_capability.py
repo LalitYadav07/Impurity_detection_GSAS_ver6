@@ -1,8 +1,9 @@
 """The planner must distinguish Hessian diagnostics from Jacobian diagnostics."""
 import pytest
 
-from gpx_recipe.convergence import screen_capability, require_screen_support
-from gpx_recipe.planner import build_payload
+from gpx_recipe.convergence import require_screen_support
+from gpx_recipe import planner as native
+from radar_pd_nova.refinement_planner import solver_capability, build_payload
 
 
 @pytest.mark.parametrize('method,supported', [
@@ -29,6 +30,19 @@ def test_planner_reports_inspected_solver_capability(method, supported):
 
 
 def test_solver_capability_does_not_infer_a_successful_or_complete_stage():
-    facts = screen_capability({'controls': {'deriv type': 'analytic Hessian'}})
+    facts = solver_capability({'controls': {'deriv type': 'analytic Hessian'}})
     assert 'converged' not in facts and 'last_cycle_complete' not in facts
     assert 'capability alone does not pass' in facts['evidence_required']
+
+
+def test_capability_enrichment_keeps_the_shared_planner_unchanged():
+    context = dict(model_signature='test', controls={'deriv type': 'analytic Hessian'},
+                   phases=[], histograms=[])
+    request = 'Refine the background and require shift/sigma <= 0.1.'
+    before = native.build_payload(request, context)
+    enriched = build_payload(request, context)
+    assert 'native_convergence_capability' not in before
+    assert 'native_convergence_capability' in enriched
+    assert native.build_payload(request, context) == before
+    assert enriched['user_request'] == before['user_request']
+    assert enriched['convergence_request'] == before['convergence_request']
