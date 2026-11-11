@@ -602,10 +602,11 @@ class SymmetryMixin(KSearchMixin):
             s.sx_has_receipt=bool(row and row.get('receipt_sha256'))
             if row:
                 workspace=self._refinement_store()
-                s.sx_source_notices=acquisition_notices(workspace,s.rf_experiment,row['source'])
+                s.sx_source_notices=acquisition_notices(workspace,s.rf_experiment,row['source'],
+                                                       expected_sha256=row['source_sha256'])
                 s.sx_source_display_notices=display_acquisition_notices(s.sx_source_notices)
                 if str(row['source']).startswith('recipe:'):
-                    s.sx_source_notice_context='These notices retain the original preliminary fit and acquisition cautions. They do not describe convergence of the selected recipe checkpoint. The selected model has its own status below.'
+                    s.sx_source_notice_context='Source notices retain the original preliminary fit and acquisition cautions, plus recorded recipe rejections or rollbacks. The selected model has its own status below.'
                 s.sx_expanded_title=fit_caption(row,temperature=acquisition_temperature(
                     workspace,s.rf_experiment,row['source'],row.get('source_sha256')))
                 reason=disposition_reason(row)
@@ -615,7 +616,8 @@ class SymmetryMixin(KSearchMixin):
                 if row['kind']=='magnetic':s.sx_details.append(dict(label='Complete BNS operator audit',value='Passed' if row.get('bns_audited') else 'Not present in this archived or unfinished trial'))
                 s.sx_details.append(dict(label='Parent-basis k',value='('+', '.join(row['k'])+')'))
                 s.sx_details.append(dict(label='Starting GPX revision',value=row['source_sha256'][:16]))
-                s.sx_details.extend(acquisition_details(self._refinement_store(),s.rf_experiment,row['source']))
+                s.sx_details.extend(acquisition_details(workspace,s.rf_experiment,row['source'],
+                                                        expected_sha256=row['source_sha256']))
                 usage=row.get('resources') or {}
                 if isinstance(usage.get('wall_seconds'),(int,float)):
                     detail=f"{usage['wall_seconds']:.2f} s native wall time"

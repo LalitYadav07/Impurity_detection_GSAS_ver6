@@ -99,6 +99,53 @@ def test_source_notices_follow_the_exact_original_and_recipe_checkpoint_without_
     assert acquisition_notices(w,'IPTS-1','missing')==[]
 
 
+@pytest.mark.parametrize('status,rejected,error', [
+    ('needs_review', [], 'Oxygen Uiso rejected'),
+    ('completed', ['stage3'], None),
+    ('needs_review', [], None),
+])
+def test_recipe_review_notices_reach_saved_model_panels_without_gpx_reads(tmp_path,status,rejected,error):
+    w=workspace(tmp_path);job=w.state['jobs']['job1']
+    job['status']=status;job['result'].update(status=status,rejected_stages=rejected)
+    if status != 'completed':
+        for field in ('final_gpx','final_view','output_sha256','trend_views'):
+            job['result'].pop(field,None)
+    if error:job['result']['error']=error
+    entry=next(e for e in start_choices(w,'IPTS-1') if e.get('stage')=='s1')
+    selected=resolve_start(w,'IPTS-1',entry['id'])
+    expected=selected['scientific_warnings'][-1]
+    if rejected:
+        assert 'recipe has rejected stages' in entry['title']
+        assert 'stage3' in expected
+    elif error:
+        assert error in expected
+    else:
+        assert 'requires scientific review' in expected
+    before=copy.deepcopy(w.state)
+    job['result']['directory']=str(tmp_path/'not-recovered')
+    def forbidden(*args):raise AssertionError('Displaying a recorded caution must not recover GPXs')
+    w.recover_job_artifacts=forbidden
+    assert acquisition_notices(w,'IPTS-1',entry['id']) == [expected]
+    assert acquisition_notices(w,'IPTS-1','raw') == []
+    assert acquisition_notices(w,'other-experiment',entry['id']) == []
+    job['result']['directory']=before['jobs']['job1']['result']['directory']
+    assert w.state == before
+
+
+def test_structured_source_cautions_survive_recipe_rollback_metadata(tmp_path):
+    w=workspace(tmp_path);job=w.state['jobs']['job1']
+    warning={'code':'environment_component_fractions','message':'Fractions include declared environment components'}
+    job['source']['scientific_warnings']=[warning]
+    job['result']['rejected_stages']=['oxygen']
+    entry=next(e for e in start_choices(w,'IPTS-1') if e.get('stage')=='final')
+    before=copy.deepcopy(w.state)
+    selected=resolve_start(w,'IPTS-1',entry['id'])
+    assert selected['scientific_warnings'][0] == warning
+    assert acquisition_notices(w,'IPTS-1',entry['id']) == [
+        warning['message'], selected['scientific_warnings'][-1]]
+    assert w.state == before
+
+
 def test_equivalent_calibration_display_retains_distinct_cautions_and_original_wording():
     notices=[
         'HB-2A profile supplied by user; independent calibration acceptance is pending.',
@@ -200,6 +247,8 @@ def test_expanded_caption_clears_temperature_after_source_change_without_changin
     source['source_sha256']='b'*64
     app._symmetry_plot_changed()
     assert '0.7 K' not in state.sx_expanded_title
+    assert not state.sx_source_notices and not state.sx_source_display_notices
+    assert not any(item['label']=='Measured acquisition condition' for item in state.sx_details)
     app._symmetry_rows=[];app._symmetry_plot_changed()
     assert state.sx_expanded_title=='' and state.sx_source_display_notices==[]
 

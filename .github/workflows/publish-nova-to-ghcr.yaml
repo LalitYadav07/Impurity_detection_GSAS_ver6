@@ -143,6 +143,8 @@ jobs:
             /validation-tests/test_webmon_checkpoints.py \
             /validation-tests/test_webmon_handoff.py \
             /validation-tests/test_model_recipe_handoff.py \
+            /validation-tests/test_symmetry_sources.py \
+            /validation-tests/test_parent_moments.py \
             /validation-tests/test_guided_refinement.py \
             /validation-tests/test_refinement_phase_labels.py \
             /validation-tests/test_recipe_compatibility.py \

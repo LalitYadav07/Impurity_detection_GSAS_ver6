@@ -68,6 +68,25 @@ def _scan_title(source):
     return title
 
 
+def _with_recipe_review(source, result):
+    """Retain recorded checkpoint cautions without recovering or reading a GPX."""
+    if result.get('status') == 'completed' and not result.get('rejected_stages'):
+        return source
+    source = dict(source)
+    rejected = result.get('rejected_stages') or []
+    reason = result.get('error') or (
+        'Rejected stages were restored: ' + ', '.join(rejected)
+        if rejected else 'The recipe requires scientific review.'
+    )
+    warning = 'This retained recipe checkpoint is not a fully accepted refinement. ' + str(reason)
+    source['scientific_status'] = 'needs_review'
+    warnings = list(source.get('scientific_warnings') or [])
+    if warning not in warnings:
+        warnings.append(warning)
+    source['scientific_warnings'] = warnings
+    return source
+
+
 def start_choices(workspace, experiment):
     entries=[]
     for source in workspace.sources(experiment):
@@ -88,7 +107,8 @@ def start_choices(workspace, experiment):
         for stage,label,name in checkpoints:
             if not name or name not in result.get('files',{}) or Path(name).suffix.lower()!='.gpx':continue
             identifier='recipe:'+digest([job_id,stage,name,result['files'][name]])[:24]
-            caution=' · retained stage; recipe stopped' if result.get('status')!='completed' else ''
+            caution=(' · retained stage; recipe stopped' if result.get('status')!='completed'
+                     else ' · recipe has rejected stages' if result.get('rejected_stages') else '')
             entries.append(dict(id=identifier,title=recipe_label+' · '+_scan_title(source)+' · '+label+caution+' · '+result['files'][name][:8],
                                 recipe_label=recipe_label,
                                 job_id=job_id,stage=stage,name=name))
@@ -104,7 +124,10 @@ def _recorded_source(workspace,experiment,source_id,*,expected_sha256=None):
         checksum=(source.get('source_sha256') if source else
                   (workspace.state['jobs'][entry['job_id']].get('result') or {}).get('files',{}).get(entry['name']))
         if checksum!=expected_sha256:return None
-    return entry.get('source') or recipe_source(workspace,workspace.state['jobs'][entry['job_id']])
+    if 'source' in entry:
+        return entry['source']
+    job = workspace.state['jobs'][entry['job_id']]
+    return _with_recipe_review(recipe_source(workspace, job), job.get('result') or {})
 
 
 def acquisition_temperature(workspace,experiment,source_id,source_sha256):
@@ -154,9 +177,9 @@ def display_acquisition_notices(notices):
     return displayed
 
 
-def acquisition_notices(workspace,experiment,source_id):
+def acquisition_notices(workspace,experiment,source_id,*,expected_sha256=None):
     """Retain recorded source cautions beside original and derived model fits."""
-    source=_recorded_source(workspace,experiment,source_id)
+    source=_recorded_source(workspace,experiment,source_id,expected_sha256=expected_sha256)
     if not source:return []
     metadata=source.get('metadata') or {}
     documents=[source,metadata]
@@ -168,16 +191,19 @@ def acquisition_notices(workspace,experiment,source_id):
         for key in ('scientific_warnings','warnings','metadata_notices'):
             values=document.get(key) or []
             if isinstance(values,(list,tuple)):
-                notices.extend(value.strip() for value in values if isinstance(value,str) and value.strip())
+                for value in values:
+                    text=value.get('message') if isinstance(value,dict) else value
+                    if isinstance(text,str) and text.strip():
+                        notices.append(text.strip())
     for key in ('identity_warning','source_revision_warning'):
         value=metadata.get(key)
         if isinstance(value,str) and value.strip():notices.append(value.strip())
     return list(dict.fromkeys(notices))
 
 
-def acquisition_details(workspace,experiment,source_id):
+def acquisition_details(workspace,experiment,source_id,*,expected_sha256=None):
     """Show the recorded interval summary without loading a GPX or model file."""
-    source=_recorded_source(workspace,experiment,source_id)
+    source=_recorded_source(workspace,experiment,source_id,expected_sha256=expected_sha256)
     if not source:return []
     metadata=qualified_metadata(source.get('metadata') or {})
     return [dict(label='Measured acquisition condition',value=text)
@@ -204,7 +230,7 @@ def resolve_start(workspace, experiment, identifier):
         raise ValueError('The selected recipe GPX is not confined to its verified result bundle')
     checksum=file_sha(path)
     if checksum!=result['files'][entry['name']]:raise ValueError('The selected recipe checkpoint changed')
-    source=recipe_source(workspace,job)
+    source=_with_recipe_review(recipe_source(workspace,job),result)
     # The derived bytes need their own native inspection. Neither an original
     # Galaxy reference nor its cached project context may describe this GPX.
     for key in ['collection_id','dataset_id','collection_name','published_sha256','project','base_rwp',
@@ -216,10 +242,5 @@ def resolve_start(workspace, experiment, identifier):
                   scan_label=source['scan_label']+' · '+entry['recipe_label']+' · '+('final' if entry['stage']=='final' else entry['stage']),
                   origin_source_id=job['source']['id'],recipe_job_id=entry['job_id'],recipe_stage=entry['stage'],
                   project=dict(stage='verified_recipe_checkpoint',status='completed'))
-    if result.get('status')!='completed' or result.get('rejected_stages'):
-        source['scientific_status']='needs_review'
-        source['scientific_warnings']=list(source.get('scientific_warnings') or [])+[
-            'This retained recipe checkpoint is not a fully accepted refinement. '+str(result.get('error') or
-            'Rejected stages were restored: '+', '.join(result.get('rejected_stages') or []))]
     if dataset:source['dataset_id']=dataset
     return source

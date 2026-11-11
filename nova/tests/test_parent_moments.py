@@ -198,8 +198,8 @@ def test_selection_change_clears_parent_directions_and_keeps_the_raw_table(monke
     monkeypatch.setattr(controller.plots, 'overview', lambda *_: {})
     monkeypatch.setattr(controller.plots, 'fit', lambda *a, **kw: dict(layout={}, data=[]))
     monkeypatch.setattr(controller, 'embedding_evidence', lambda *_: ([], ''))
-    monkeypatch.setattr(controller, 'acquisition_notices', lambda *_: [])
-    monkeypatch.setattr(controller, 'acquisition_details', lambda *_: [])
+    monkeypatch.setattr(controller, 'acquisition_notices', lambda *_, **__: [])
+    monkeypatch.setattr(controller, 'acquisition_details', lambda *_, **__: [])
     monkeypatch.setattr(controller, 'acquisition_temperature', lambda *_: '')
     monkeypatch.setattr(controller, 'view_for', lambda *_: view)
     app._symmetry_plot_changed()
@@ -209,7 +209,8 @@ def test_selection_change_clears_parent_directions_and_keeps_the_raw_table(monke
     row['source']='recipe:checkpoint'
     app._symmetry_plot_changed()
     assert 'original preliminary fit' in state.sx_source_notice_context
-    assert 'do not describe convergence of the selected recipe checkpoint' in state.sx_source_notice_context
+    assert 'recorded recipe rejections or rollbacks' in state.sx_source_notice_context
+    assert 'selected model has its own status' in state.sx_source_notice_context
     view['phases'][0].pop('cell')
     app._symmetry_plot_changed()
     assert state.sx_parent_moments == [] and 'unavailable' in state.sx_parent_moment_note

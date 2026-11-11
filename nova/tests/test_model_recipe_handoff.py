@@ -89,6 +89,27 @@ def test_structural_source_keeps_acquisition_and_drops_parent_artifact_reference
     assert label.startswith('Structural model · ')
 
 
+def test_structural_recipe_handoff_retains_the_input_recipe_rollback(selected,tmp_path):
+    from radar_pd_nova.symmetry_sources import start_choices
+    workspace,row,_,_,_=selected
+    parent=copy.deepcopy(workspace.state['sources']['parent'])
+    checkpoint=tmp_path/'recipe-parent.gpx';checkpoint.write_bytes(b'reviewed parent checkpoint')
+    checksum=file_sha(checkpoint)
+    workspace.state['jobs']['input-recipe']=dict(status='completed',source=parent,
+        result=dict(status='completed',rejected_stages=['oxygen'],stages=[],
+                    final_gpx=checkpoint.name,files={checkpoint.name:checksum}))
+    entry=next(e for e in start_choices(workspace,'experiment') if e.get('stage')=='final')
+    row.update(source=entry['id'],source_sha256=checksum)
+    before=copy.deepcopy(workspace.state)
+    path,sha=handoff.capture_gpx(row,tmp_path/'captured')
+    source=handoff.structural_source(workspace,'experiment',row,path,sha)
+    assert any('Rejected stages were restored: oxygen' in s for s in source['scientific_warnings'])
+    assert source['scientific_warnings'][0]=='Profile calibration needs review'
+    assert source['model_checkpoint']['input_id']==entry['id']
+    assert source['model_checkpoint']['input_sha256']==checksum
+    assert workspace.state==before
+
+
 @pytest.mark.parametrize('change',['magnetic','equivalent','not_native','parent_hash','source_id','experiment','captured_bytes'])
 def test_unsupported_or_mismatched_source_cannot_become_recipe_input(selected,tmp_path,change):
     workspace,row,_,_,_=selected
