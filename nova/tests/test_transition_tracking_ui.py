@@ -613,6 +613,39 @@ def test_transition_refinement_uses_actual_symmetry_instead_of_catalog_annotatio
     assert row == original
 
 
+def test_transition_refinement_identifies_environment_without_altering_pattern_groups():
+    rows = scans()
+    app = RadarPdNovaApp()
+    app._refresh_transition_tracking(rows)
+    baseline = copy.deepcopy(app._transition_report)
+    for row in rows:
+        row["observables"]["phases"][0].update(
+            phase="Er2GeBe2O7", component_role="sample_chemistry", weight_percent=68.5)
+        row["observables"]["phases"].append(dict(
+            row["observables"]["phases"][0], phase_id="can", phase="Al",
+            component_role="environment_only_chemistry", weight_percent=31.5))
+    original = copy.deepcopy(rows)
+    app._refresh_transition_tracking(rows)
+    assert app._transition_report == baseline
+    displayed = app.server.state.transition_model_rows
+    assert displayed[1]["phase"] == "Al · environment chemistry"
+    assert displayed[0]["fraction"] == "68.5%" and displayed[1]["fraction"] == "31.5%"
+    assert "do not measure bulk sample composition or container mass" in app.server.state.transition_model_notice
+    assert rows == original
+    # Legacy summaries carry no declaration. Formula alone must not label Al
+    # as a container, and a mismatched GPX must not retain a previous notice.
+    legacy = copy.deepcopy(rows[-1])
+    for phase in legacy["observables"]["phases"]:
+        phase.pop("component_role")
+    app._transition_refinement(legacy)
+    assert "environment chemistry" not in app.server.state.transition_model_rows[1]["phase"]
+    assert "container mass" not in app.server.state.transition_model_notice
+    rows[-1]["pattern"]["source_gpx_sha256"] = "other-project"
+    app._transition_refinement(rows[-1])
+    assert not app.server.state.transition_model_rows
+    assert "withheld" in app.server.state.transition_model_notice
+
+
 def test_switching_experiment_clears_previous_patterns_before_background_work_finishes():
     app = application()
     assert app.server.state.transition_timeline
@@ -835,7 +868,12 @@ def test_refinement_context_qualifies_fixed_stale_and_invalid_values():
     assert len(entries) == 8 and entries[-1]["phase"] == "Candidate 7"
     assert "[fixed]" in entries[0]["cell"] and "unverified" in entries[0]["fraction"]
     row["observables"]["phases"][0].update(
-        covariance_fresh=False, weight_percent=float("nan")
+        covariance_fresh=False, covariance_status="unavailable", a_esd=0.01)
+    app._transition_refinement(row)
+    fixed = app.server.state.transition_model_rows[0]["cell"]
+    assert "[fixed]" in fixed and "[stale]" not in fixed and "±" not in fixed
+    row["observables"]["phases"][0].update(
+        covariance_fresh=False, weight_percent=float("nan"), metric_states={"a": "refined"}
     )
     app._transition_refinement(row)
     assert "[stale]" in app.server.state.transition_model_rows[0]["cell"]

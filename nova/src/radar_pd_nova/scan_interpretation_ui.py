@@ -40,8 +40,10 @@ def scan_label(scan):
 def phase_labels(*scans):
     """Readable labels never merge distinct candidate identities."""
     names = {}
+    roles = {}
     for scan in scans:
-        phases = [phase for phase in (scan.get("observables") or {}).get("phases", [])
+        phases = [phase for phase in ((scan.get("observables") or {}).get("phases")
+                  or scan.get("phases") or scan.get("lattice_parameters") or [])
                   if isinstance(phase, dict)]
         normalized = phase_fraction_rows({"phases": phases, "lattice_parameters": phases})
         for phase, label in zip(phases, normalized):
@@ -49,6 +51,17 @@ def phase_labels(*scans):
             group = label["space_group"]
             names[key] = (f"{label['phase']} (SG {group})" if group != "-"
                           else str(phase.get("phase") or key))
+            roles.setdefault(key, set()).add(label.get("component_role"))
+    for key, declared in roles.items():
+        # The role comes from executed chemistry and occupied native sites,
+        # never from a formula guess. Do not extend one scan's declaration to
+        # an unlabelled or differently classified scan of the same candidate.
+        if declared == {"environment_only_chemistry"}:
+            names[key] += " · environment chemistry"
+        elif declared == {"overlapping_chemistry"}:
+            names[key] += " · sample/environment chemistry"
+        elif declared == {"mixed_or_unassigned_chemistry"}:
+            names[key] += " · mixed or unassigned chemistry"
     duplicates = {name for name in names.values() if list(names.values()).count(name) > 1}
     return {
         key: f"{name} · {key}" if name in duplicates else name

@@ -1906,12 +1906,14 @@ class TransitionTrackingMixin:
                 f"{k}={p[k]:.6g}"
                 + (
                     f" ± {p[k + '_esd']:.2g}"
-                    if fresh and number(p.get(k + "_esd")) is not None
+                    if fresh and states.get(k) != "fixed" and number(p.get(k + "_esd")) is not None
                     else ""
                 )
                 + " Å"
                 + (
-                    " [stale]"
+                    " [fixed]"
+                    if states.get(k) == "fixed"
+                    else " [stale]"
                     if not fresh
                     else f" [{states.get(k, 'unverified')}]"
                     if states.get(k) not in {"refined", "constraint-derived"}
@@ -1957,6 +1959,11 @@ class TransitionTrackingMixin:
                 if phases
                 else "Refinement pending or unavailable; observed-pattern tracking is independent of fit completion."
             )
+            if any(p.get("component_role") == "environment_only_chemistry" for p in phases):
+                state.transition_model_notice += (
+                    " Fractions include declared environment components and do not measure bulk sample composition or container mass."
+                    " Chemistry labels describe the setup; they do not establish physical origin."
+                )
         conditions = _conditions(
             scan, InterpretationSettings.model_validate(state.scan_interpretation)
         )

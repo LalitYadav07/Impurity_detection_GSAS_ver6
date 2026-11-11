@@ -126,6 +126,29 @@ def test_candidate_labels_use_actual_project_symmetry_without_changing_scientifi
     assert row == original
 
 
+def test_declared_component_labels_are_not_guessed_or_extended_to_other_scans():
+    from radar_pd_nova.scan_interpretation_ui import phase_labels
+    phases = [
+        {"phase_id": "sample", "phase": "Er2GeBe2O7", "component_role": "sample_chemistry"},
+        {"phase_id": "can", "phase": "Al", "component_role": "environment_only_chemistry"},
+        {"phase_id": "shared", "phase": "C", "component_role": "overlapping_chemistry"},
+        {"phase_id": "mixed", "phase": "Al2O3", "component_role": "mixed_or_unassigned_chemistry"},
+        {"phase_id": "unclassified", "phase": "Al"},
+    ]
+    row = {"phases": phases}
+    original = copy.deepcopy(row)
+    labels = phase_labels(row)
+    assert labels["sample"] == "Er2GeBe2O7"
+    assert labels["can"] == "Al · environment chemistry"
+    assert labels["shared"] == "C · sample/environment chemistry"
+    assert labels["mixed"] == "Al2O3 · mixed or unassigned chemistry"
+    assert labels["unclassified"] == "Al"
+    older = {"phases": [{"phase_id": "can", "phase": "Al"}]}
+    assert phase_labels(row, older)["can"] == "Al · can"
+    assert phase_labels(older, row)["can"] == "Al · can"
+    assert row == original
+
+
 def test_follow_latest_preserves_operator_choice_of_older_scan():
     application = app()
     state = application.server.state
