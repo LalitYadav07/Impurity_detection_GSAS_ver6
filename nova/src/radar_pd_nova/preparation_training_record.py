@@ -76,5 +76,14 @@ def describe(library,entry):
         dict(label='Trainer time',value='Not recorded' if seconds is None else _duration(seconds)),
         dict(label='Portable inference',value=portable)]
     note='Values reported by the saved model. Trainer time excludes Galaxy queue, image startup and data transfer.'
+    supervision=model.get('mode_family_supervision')
+    if isinstance(supervision,dict) and 'unresolved_native_strain_rows' in supervision:
+        unresolved=supervision['unresolved_native_strain_rows'];total=supervision.get('native_points')
+        if (type(total)is not int or total<1 or type(unresolved)is not int or not 0<=unresolved<=total
+                or supervision.get('strain_labels_from_out_of_basis_projection') is not False):
+            raise ValueError('Recorded unresolved strain targets are invalid')
+        rows.append(dict(label='Native strain labels',value=f'{unresolved} of {total} native curves unresolved'))
+        if unresolved:
+            note+=' Unresolved strain projections supplied no strain targets. Their native curves and valid displacement targets were retained; a missing strain label is not zero strain or evidence of absence.'
     if status=='partial':note+=' The retained history does not establish completed training.'
     return dict(summary=f'{device} · {count} completed epochs',rows=rows,status=status,note=note)

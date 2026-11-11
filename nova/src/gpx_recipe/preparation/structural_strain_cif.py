@@ -14,7 +14,7 @@ import re
 import numpy as np
 
 from ..symmetry.contracts import validate_candidate,fields
-from .structural_strain import StrainProjection,cell_metric
+from .structural_strain import StrainProjection,UnresolvedStrainProjection,cell_metric
 from .structural_mode_families import family_label,STRAIN_NORMALIZATION,MAX_BATCH_ROWS
 from .tof_kernel_arrays import read_bounded,checksum
 
@@ -104,6 +104,9 @@ class StrainFamilies:
     indices:tuple
 
     def project(self,child_metrics,*,parent_metrics=None):
+        return self._project(child_metrics,parent_metrics=parent_metrics,targets=False)
+
+    def _project(self,child_metrics,*,parent_metrics=None,targets):
         """Use the same explicit current parent context as the native curve.
 
         For one family, sym(B ΔS B^-1) is the Cartesian infinitesimal strain
@@ -119,8 +122,17 @@ class StrainFamilies:
             raise ValueError('A bounded complete batch of child/current-parent metrics required')
         values=np.empty((len(child),len(self.families)),np.float64)
         native=np.empty((len(child),self.projection.dimensions),np.float64)
+        known=np.ones(values.shape,bool);unresolved=[]
         for i,(c,p) in enumerate(zip(child,parent)):
-            native[i]=self.projection.project(c,parent_metric=p)['amplitudes']
+            try:
+                native[i]=self.projection.project(c,parent_metric=p)['amplitudes']
+            except UnresolvedStrainProjection as error:
+                if not targets:raise
+                # The entire projection is unresolved. A least-squares
+                # component is not an independently established family label.
+                native[i]=0.;values[i]=0.;known[i]=False
+                unresolved.append(dict(row=i,reason=str(error),residual=error.residual))
+                continue
             b=np.linalg.cholesky(p).T
             for j,columns in enumerate(self.indices):
                 e=self.projection.matrix[:,columns]@native[i,list(columns)]
@@ -129,13 +141,29 @@ class StrainFamilies:
                 scale=float(np.max(abs(tensor)))
                 values[i,j]=scale*np.sqrt(np.sum((tensor/(scale or 1.))**2))
         if not np.isfinite(values).all():raise ValueError('Nonfinite physical strain-family target')
-        return dict(amplitudes=values,native_amplitudes=native,known=np.ones(values.shape,bool),
+        return dict(amplitudes=values,native_amplitudes=native,known=known,
             families=[v['id'] for v in self.families],units='dimensionless',normalization=STRAIN_NORMALIZATION,
             experimental_mode_presence_qualified=False,experimental_mode_absence_qualified=False,
-            candidate_pruning_authorized=False)
+            candidate_pruning_authorized=False,unresolved=unresolved)
 
     def project_native(self,parameters,parent_a,*,baseline_a,cell_mapping,mode_dimensions):
         """Project the exact reciprocal-metric coordinates used by GSAS-II."""
+        child,parent=self._native_metrics(parameters,parent_a,baseline_a=baseline_a,
+            cell_mapping=cell_mapping,mode_dimensions=mode_dimensions)
+        return self.project(child,parent_metrics=parent)
+
+    def project_native_targets(self,parameters,parent_a,*,baseline_a,cell_mapping,mode_dimensions):
+        """Keep valid native curves whose strain-family labels are unknown.
+
+        Only an out-of-basis projection becomes unknown. Corrupt inputs and
+        numerical failures still reject the job, and the strict projection
+        API retains its original behavior.
+        """
+        child,parent=self._native_metrics(parameters,parent_a,baseline_a=baseline_a,
+            cell_mapping=cell_mapping,mode_dimensions=mode_dimensions)
+        return self._project(child,parent_metrics=parent,targets=True)
+
+    def _native_metrics(self,parameters,parent_a,*,baseline_a,cell_mapping,mode_dimensions):
         from ..structural_live.optimization.physical_prior_geometry import native_reciprocal_matrix
         from ..structural_live.optimization.chemical_geometry import direct_metric_from_reciprocal
         points=np.asarray(parameters);parents=np.asarray(parent_a);a0=np.asarray(baseline_a)
@@ -151,7 +179,7 @@ class StrainFamilies:
         child_a=a0+points[:,mode_dimensions:]@mapping.T
         def direct(rows):
             return np.asarray([direct_metric_from_reciprocal(native_reciprocal_matrix(a)) for a in rows])
-        return self.project(direct(child_a),parent_metrics=direct(parents))
+        return direct(child_a),direct(parents)
 
 
 def from_metadata(value,*,parent_sha256=None,candidate=None):

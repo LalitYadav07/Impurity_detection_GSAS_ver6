@@ -117,6 +117,7 @@ def build(block_factory,cohort,*,_maximum_bytes=MAX_BYTES):
             or any(not checksum(cohort.get(k)) for k in ['parent_sha256','instrument_sha256'])):
         raise ValueError('Family targets need complete native identities, labels, references and folds')
     used=n*4;blocks=[];families={};projection_ids=[];opaque=0;typed=False
+    unresolved_strain_rows=0;unresolved_strain_blocks=0;maximum_strain_residual=0.
     def reserve(size):
         nonlocal used
         used+=size
@@ -148,14 +149,20 @@ def build(block_factory,cohort,*,_maximum_bytes=MAX_BYTES):
         values=np.empty((count,nf),np.float64);known=np.empty((count,nf),bool)
         parameters=a['parameters'][:,:model.mode_dimensions]
         if parameters.dtype.kind!='f':raise ValueError('Native family coordinates must retain their floating point values')
+        block_unresolved=0
         for start in range(0,count,MAX_BATCH_ROWS):
             result=model.project(parameters[start:start+MAX_BATCH_ROWS])
             values[start:start+MAX_BATCH_ROWS,:nd]=result['amplitudes'];known[start:start+MAX_BATCH_ROWS,:nd]=result['known']
             if strain is not None:
-                result=strain.project_native(a['parameters'][start:start+MAX_BATCH_ROWS],
+                result=strain.project_native_targets(a['parameters'][start:start+MAX_BATCH_ROWS],
                     a['parent_a'][start:start+MAX_BATCH_ROWS],baseline_a=strain_context['baseline_a'],
                     cell_mapping=strain_context['cell_mapping'],mode_dimensions=model.mode_dimensions)
                 values[start:start+MAX_BATCH_ROWS,nd:]=result['amplitudes'];known[start:start+MAX_BATCH_ROWS,nd:]=result['known']
+                block_unresolved+=len(result['unresolved'])
+                maximum_strain_residual=max(maximum_strain_residual,
+                    max((row['residual'] for row in result['unresolved']),default=0.))
+        unresolved_strain_rows+=block_unresolved
+        unresolved_strain_blocks+=bool(block_unresolved)
         ids=[]
         for entry in entries:
             if entry['id'] not in families:reserve(len(json.dumps(entry).encode())+256)
@@ -221,6 +228,10 @@ def build(block_factory,cohort,*,_maximum_bytes=MAX_BYTES):
         intervals=len(lower),ambiguous_intervals=int(ambiguous),exact_zero_intervals=int(zeros),
         unknown_class_family_targets=int(unknown),opaque_native_axes=opaque,
         mapped_blocks=sum(v is not None for v in projection_ids),total_blocks=len(blocks),
+        unresolved_native_strain_rows=unresolved_strain_rows,
+        unresolved_native_strain_blocks=unresolved_strain_blocks,
+        maximum_unresolved_strain_residual=maximum_strain_residual,
+        strain_labels_from_out_of_basis_projection=False,
         storage_bytes=sum(a.nbytes for a in arrays.values()),available=bool(len(lower)),
         absence_from_missing_family=False,experimental_mode_absence_qualified=False,candidate_pruning_authorized=False)
     # Bind the original class/fold provenance too; no calibration labels or

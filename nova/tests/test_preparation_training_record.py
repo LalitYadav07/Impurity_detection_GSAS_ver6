@@ -52,6 +52,27 @@ def test_old_cpu_metadata_does_not_invent_a_recorded_gpu_or_cpu_device(tmp_path)
     assert rows['Recorded training device']==rows['Portable inference']=='Not recorded'
 
 
+def test_completed_training_shows_unresolved_strain_supervision(tmp_path):
+    library,entry,seen,_=fixture(tmp_path,metadata(mode_family_supervision=dict(
+        native_points=9224,unresolved_native_strain_rows=528,strain_labels_from_out_of_basis_projection=False)))
+    result=describe(library,entry);rows={r['label']:r['value'] for r in result['rows']}
+    assert result['status']=='complete'
+    assert rows['Native strain labels']=='528 of 9224 native curves unresolved'
+    assert 'not zero strain or evidence of absence' in result['note']
+    assert seen==['entry/entry.json','entry/model.json']
+
+
+@pytest.mark.parametrize('change',[dict(unresolved_native_strain_rows=-1),
+    dict(unresolved_native_strain_rows=11),dict(unresolved_native_strain_rows=True),
+    dict(strain_labels_from_out_of_basis_projection=True)])
+def test_invalid_unresolved_strain_count_is_rejected(tmp_path,change):
+    supervision=dict(native_points=10,unresolved_native_strain_rows=2,
+                     strain_labels_from_out_of_basis_projection=False)
+    supervision.update(change)
+    library,entry,_,_=fixture(tmp_path,metadata(mode_family_supervision=supervision))
+    with pytest.raises(ValueError,match='unresolved strain targets'):describe(library,entry)
+
+
 def test_partial_history_cannot_be_presented_as_completed_training(tmp_path):
     value=metadata();value.update(history=[dict(epoch=1)],selected_epoch=1)
     library,entry,_,_=fixture(tmp_path,value);record=describe(library,entry)

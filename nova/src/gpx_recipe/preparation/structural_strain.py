@@ -15,6 +15,19 @@ SCHEMA='radar-isodistort-parent-lattice-strain/v1'
 NORMALIZATION='isodistort-normalized-unitless-parent-lattice-strain/v1'
 
 
+class UnresolvedStrainProjection(ValueError):
+    """A valid metric cannot be labeled in the supplied ISO strain basis.
+
+    This is distinct from malformed metrics, input maps and failed numerical
+    reconstruction. Training may retain the native curve with unknown strain
+    labels; it must never reinterpret this condition as a zero amplitude.
+    """
+
+    def __init__(self,residual):
+        self.residual=float(residual)
+        super().__init__('Child metric contains strain outside the declared complete mode basis')
+
+
 def _metric(value):
     """Only average antisymmetry within the scale of matrix-product roundoff."""
     a=np.asarray(value,float)
@@ -96,7 +109,7 @@ class StrainProjection:
         amplitudes=self._inverse@e;reconstructed=self.matrix@amplitudes
         error=float(np.linalg.norm(reconstructed-e))
         if error>1e-10*max(1.,float(np.linalg.norm(e))):
-            raise ValueError('Child metric contains strain outside the declared complete mode basis')
+            raise UnresolvedStrainProjection(error)
         check=self.forward(amplitudes,parent_metric=parent)
         relative=float(np.linalg.norm(check-child)/np.linalg.norm(child))
         if not np.isfinite(relative) or relative>1e-10:

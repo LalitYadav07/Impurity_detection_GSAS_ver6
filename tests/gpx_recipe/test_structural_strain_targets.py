@@ -8,6 +8,7 @@ import pytest
 
 from gpx_recipe.preparation import structural_mode_projection as projection
 from gpx_recipe.preparation.structural_strain_cif import from_metadata
+from gpx_recipe.preparation.structural_strain import UnresolvedStrainProjection
 from gpx_recipe.preparation.structural_mode_families import TYPED_NORMALIZATION
 from gpx_recipe.preparation.structural_paired_blocks import read,pack_block
 from gpx_recipe.preparation.structural_cohort import assemble_pairs
@@ -62,6 +63,57 @@ def test_native_cell_coordinates_add_strain_without_changing_displacement_units(
     assert by[strain][0]==pytest.approx(abs(x-y)/np.sqrt(2),rel=1e-9)
     assert families[strain]['units']=='dimensionless' and families[strain]['id']!=families[dsp]['id']
     assert not table.metadata['candidate_pruning_authorized']
+
+
+def test_valid_native_metric_outside_iso_basis_is_unknown_not_zero_or_fatal(tmp_path):
+    value=strain_fixture(tmp_path);p=value.projection
+    valid=p.forward([.004,.003,.002])
+    stretch=np.eye(3);stretch[0,2]=stretch[2,0]=.001
+    outside=p.basis@stretch@p.parent@stretch@p.basis.T
+    def reciprocal(metric):
+        m=np.linalg.inv(metric)
+        return np.array([m[0,0],m[1,1],m[2,2],2*m[0,1],2*m[0,2],2*m[1,2]])
+    baseline=reciprocal(p.basis@p.parent@p.basis.T)
+    points=np.array([reciprocal(v)-baseline for v in [valid,outside]])
+    parents=np.repeat(reciprocal(p.parent)[None,:],2,axis=0)
+    kw=dict(baseline_a=baseline,cell_mapping=np.eye(6),mode_dimensions=0)
+    with pytest.raises(UnresolvedStrainProjection):value.project_native(points,parents,**kw)
+    result=value.project_native_targets(points,parents,**kw)
+    assert result['known'][0].all() and not result['known'][1].any()
+    assert len(result['unresolved'])==1 and result['unresolved'][0]['row']==1
+    assert result['unresolved'][0]['residual']>0
+    assert not result['experimental_mode_absence_qualified']
+    # Zero placeholders are never exposed as known training labels.
+    np.testing.assert_array_equal(result['amplitudes'][1],0)
+    broken=points.copy();broken[1,0]=np.nan
+    with pytest.raises(ValueError,match='Complete finite native cell coordinates'):
+        value.project_native_targets(broken,parents,**kw)
+
+
+def test_out_of_basis_strain_keeps_curves_and_displacement_targets(tmp_path):
+    path=mapped(tmp_path/'source');block=attach_strain(path,tmp_path)
+    original_hash=file_sha(path/'pairs.npz')
+    metadata=json.loads((path/projection.METADATA).read_text())
+    strain=metadata['strain']['map']
+    # A declared ISO map with thermal axes only cannot label this native
+    # child's anisotropic cell direction. Its native patterns are still valid.
+    strain['matrix']=[row[1:] for row in strain['matrix']]
+    strain['normalizations']=strain['normalizations'][1:]
+    strain['native_labels']=strain['native_labels'][1:]
+    (path/projection.METADATA).write_text(json.dumps(metadata))
+    manifest=copy.deepcopy(block.manifest);manifest['mode_projection']=projection.read(path).stamp
+    (path/'pairs.json').write_text(json.dumps(manifest))
+    cohort,table=target_cohort(path);table.verify(cohort)
+    assert table.metadata['unresolved_native_strain_rows']==int(np.count_nonzero(block.arrays['parameters'][:,1]))
+    assert table.metadata['unresolved_native_strain_blocks']==1
+    assert not table.metadata['strain_labels_from_out_of_basis_projection']
+    assert file_sha(path/'pairs.npz')==original_hash
+    original_row=2
+    row=next(i for i,refs in enumerate(cohort['references']) if (0,original_row) in map(tuple,refs))
+    result=table.batch(np.array([row]))
+    entries=[table.metadata['families'][i] for i in result['family']]
+    assert entries and all('quantity' not in item for item in entries)
+    assert result['lower'][0]==pytest.approx(.2)
 
 
 def test_existing_packet_repacking_preserves_all_strain_coordinates_and_rows(tmp_path):
