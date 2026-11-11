@@ -3443,13 +3443,15 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             with html.Div(v_if="phase_rows.length", classes="radar-phase-list"):
                 with html.Div(v_for="phase in phase_rows", key="phase.phase + phase.space_group", classes="radar-phase-row"):
                     with html.Div(classes="radar-phase-copy"):
-                        html.Strong("{{ phase.phase }}")
+                        html.Strong("{{ phase.phase_display }}", title=("phase.phase",))
                         html.Span("Space group {{ phase.space_group }}")
                         html.Span("{{ phase.component_role_label }}", v_if='!!phase.component_role_label')
                     with html.Div(classes="radar-phase-weight"):
                         html.Strong("{{ phase.weight_display }}")
                         vuetify.VProgressLinear(model_value=("phase.weight_value",), max=100, height=7, rounded=True, color="#1f6b4b")
             html.Div("Phase fractions are not available in this result.", v_if="!phase_rows.length", classes="radar-empty-compact")
+            html.P("Long formula coefficients are rounded for display. Hover over a label for the original formula; exported values are unchanged.",
+                   v_if="phase_rows.some(p => p.phase_display !== p.phase)", classes="radar-section-help")
             html.P(
                 "{{ phase_rows.some(p => p.component_role === 'environment_only_chemistry') ? 'Normalized over sample and declared environment models; these shares do not measure bulk sample composition or container mass.' : 'Normalized over the fitted crystalline model; omitted phases or amorphous material can remain.' }}",
                 v_if="phase_rows.length", classes="radar-section-help",

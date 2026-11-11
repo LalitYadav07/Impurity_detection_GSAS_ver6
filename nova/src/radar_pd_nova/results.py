@@ -9,6 +9,7 @@ import mimetypes
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -121,6 +122,24 @@ def _canonical_phase_name(value: Any) -> str:
     if tokens and "".join(tokens) == compact:
         return re.sub(r"([A-Z][a-z]?)1(?:\.0+)?(?=[A-Z]|$)", r"\1", compact)
     return text
+
+
+def _display_phase_name(value: str) -> str:
+    """Shorten long formula coefficients only in the presentation label."""
+    tokens = re.findall(_FORMULA_TOKEN, value)
+    if not tokens or "".join(tokens) != value:
+        return value
+
+    def shorten(match: re.Match) -> str:
+        element, coefficient = match.groups()
+        if len(coefficient.partition('.')[2]) < 7:
+            return match.group()
+        rounded = format(Decimal(format(Decimal(coefficient), '.4g')), 'f')
+        if '.' in rounded:
+            rounded = rounded.rstrip('0').rstrip('.')
+        return element + ('' if rounded == '1' else rounded)
+
+    return re.sub(r'([A-Z][a-z]?)(\d*\.\d+)', shorten, value)
 
 
 def _canonical_space_group(value: Any) -> str:
@@ -1673,7 +1692,7 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
     elapsed = total_elapsed_seconds(result)
     best_rwp = _best_rwp(result)
     convergence = baseline_convergence_summary(result) if _has_baseline(result) else {}
-    scientific_warnings = [str(w.get("message") or w) if isinstance(w, dict) else str(w)
+    scientific_warnings = [_message_text(w)
         for w in result.get("warnings", []) if not (convergence and isinstance(w, dict)
             and w.get("code") in {"native_convergence_review", "native_convergence_unavailable"})]
     scientific_status = str(result.get("scientific_status") or "not_assessed")
@@ -2349,7 +2368,24 @@ def experiment_fit_quality_figure(
 
 def _message_text(value: Any) -> str:
     if isinstance(value, dict):
-        return str(value.get("message") or value.get("error") or json.dumps(value, default=str))
+        message = str(value.get("message") or value.get("error") or json.dumps(value, default=str))
+        prefix = 'GPX acquisition metadata requires review: '
+        if value.get('code') == 'acquisition_handoff_review' and message.startswith(prefix):
+            explanations = {
+                'product_interval_needs_review':
+                    "The scan's acquisition interval is unverified, so its measured temperature was not assigned to the GPX. "
+                    "Check the reduced file's start and stop times before using temperature trends.",
+                'multiple_histograms_need_mapping':
+                    'The GPX contains multiple histograms. Their acquisition metadata needs a per-bank mapping before temperatures can be assigned.',
+                'temperature_units_need_review':
+                    'The recorded temperature has unverified units or an invalid value and was not assigned to the GPX.',
+                'sample_parameters_missing':
+                    'The GPX has no sample-parameter record in which to save the measured temperature.',
+            }
+            statuses = message[len(prefix):].split(', ')
+            return ' '.join(explanations.get(status, 'Acquisition metadata still needs review: ' + status + '.')
+                            for status in statuses)
+        return message
     return str(value)
 
 
@@ -2393,6 +2429,7 @@ def _phase_rows_for_view(result: dict[str, Any]) -> tuple[list[dict[str, Any]], 
     total = 0.0
     has_weight = False
     for row in rows:
+        row['phase_display'] = _display_phase_name(row['phase'])
         number = _as_float(row.get("weight_percent"))
         row["weight_value"] = number if number is not None else 0.0
         row["weight_display"] = f"{number:.2f}%" if number is not None else "-"
