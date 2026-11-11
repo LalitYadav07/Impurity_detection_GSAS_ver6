@@ -81,7 +81,9 @@ jobs:
           python -m pip install --quiet pytest &&
           cd /tmp &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
-            /validation/tests/gpx_recipe/test_tof_profile_native.py'
+            /validation/tests/gpx_recipe/test_tof_profile_native.py \
+            /validation/tests/gpx_recipe/test_periodic_site_native.py \
+            /validation/tests/gpx_recipe/test_periodic_profile_native.py'
 
       - name: Check scientific contracts in the built image
         shell: bash

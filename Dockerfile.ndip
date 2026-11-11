@@ -40,7 +40,9 @@ RUN mkdir -p /opt/radar-native/gpx_recipe/live \
     && python tests/gpx_recipe/nuclear_powder_control.py \
         > /opt/radar-pd/nuclear-powder-validation.log \
     && python -m gpx_recipe.symmetry.kernel_patch --apply \
-        > /opt/radar-pd/kernel-patch-provenance.json
+        > /opt/radar-pd/kernel-patch-provenance.json \
+    && python -m gpx_recipe.symmetry.space_group_patch --apply \
+        > /opt/radar-pd/periodic-site-patch-provenance.json
 
 VOLUME ["/work", "/opt/radar-pd/data"]
 CMD ["python", "/opt/radar-pd/scripts/ndip_runner.py", "--help"]

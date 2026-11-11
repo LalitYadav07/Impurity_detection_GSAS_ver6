@@ -346,7 +346,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
         for name in selected_histograms:
             available_histograms[name].data['Background'][0][1] = True
 
-    from gsas_magnetic_preflight import preflight_magnetic_sites,NativeRepresentationError
+    from gsas_magnetic_preflight import preflight_magnetic_sites,NativeRepresentationError,transform_magnetic_phase
     wanted_direction=np.eye(3)['xyz'.index(seed['axis'])] if seed['parent_direction'] is None else transform_native_moment(seed['parent_direction'],nuclear.data['General']['Cell'][1:7],candidate['transformation_matrix'])
     from .magnetic_identity import require_collinear_line
     _cell=G2lat.TransformCell(nuclear.data['General']['Cell'][1:7],candidate['transformation_matrix'])
@@ -398,7 +398,7 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
     ctx.save_json('magnetic-reflection-range.json',dict(declared_d_min=protocol['policy'].get('magnetic_d_min','legacy 1.0 A'),actual_d_min=cutoff,full_fitted_range=protocol['policy'].get('magnetic_d_min')==0))
     new_phase['MagXform'] = (trans, uvec, vvec)
     from .displacements import expand_magnetic_phase
-    new_phase, atom_codes = expand_magnetic_phase(old_phase,new_phase,trans,uvec,vvec,G2lat.TransformPhase)
+    new_phase, atom_codes = expand_magnetic_phase(old_phase,new_phase,trans,uvec,vvec,transform_magnetic_phase)
     parent_seed_moment_direction = initial_moment_direction if initial_moment_direction is not None else fixed_moment_direction
     candidate_seed_moment_direction = None
     candidate_fixed_moment_direction = None

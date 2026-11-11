@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import re
+import types
 from fractions import Fraction
 from collections import deque
 
@@ -77,6 +78,75 @@ def integer_supercell_translations(basis_rows, *, maximum_index=128):
         raise ValueError('Integer supercell quotient did not match its determinant')
     return dict(index=index,parent_translations=[list(v) for v in seen.values()],
                 child_offsets=[[str(Fraction(v,index)) for v in key] for key in seen])
+
+
+def transform_magnetic_phase(parent, child, basis, origin, shift, magnetic=True, Force=True):
+    """Run the native transform with a complete integer-supercell expansion.
+
+    Native ExpandCell estimates a translation box from the largest matrix
+    entries, which misses cells such as a-b,a+b,c. Native GetUnique also misses
+    equivalent positions straddling zero and one. Supply complete translations
+    and periodic duplicate matching in a private copy of the native function's
+    globals. Installed GSAS-II functions are never modified. Coordinates and
+    site metadata follow native TransformPhase; duplicate matching retains its
+    positional tolerance. Fractional bases keep the native path and remain
+    subject to the same subsequent atom-density validation.
+    """
+    from GSASII import GSASIIlattice as lattice
+
+    native=lattice.TransformPhase
+    transform=np.asarray(basis,dtype=float)
+    if not magnetic:
+        raise ValueError('This adapter constructs magnetic phases only')
+    if not np.all(np.isfinite(transform)) or transform.shape!=(3,3):
+        raise ValueError('A finite three-dimensional cell basis is required')
+    if not np.array_equal(transform,np.rint(transform)):
+        return native(parent,child,basis,origin,shift,magnetic,Force=Force)
+    translations=integer_supercell_translations(transform.tolist())['parent_translations']
+    if (not {'ExpandCell','GetUnique'}.issubset(native.__code__.co_names)
+            or native.__globals__.get('ExpandCell') is not lattice.ExpandCell
+            or native.__globals__.get('GetUnique') is not lattice.GetUnique):
+        raise NativeRepresentationError('Native cell-expansion interface changed; review the transform adapter')
+
+    def expand(atoms,codes,cx,actual_basis):
+        if not np.array_equal(np.asarray(actual_basis,dtype=float),transform) or len(atoms)!=len(codes):
+            raise NativeRepresentationError('Native cell expansion differs from the reviewed input')
+        expanded=[];mapped=[]
+        for vector in translations:
+            for atom,code in zip(atoms,codes):
+                row=copy.deepcopy(atom)
+                row[cx:cx+3]=(np.asarray(atom[cx:cx+3],dtype=float)+vector).tolist()
+                expanded.append(row)
+                suffix='+'+','.join(str(v) for v in vector) if any(vector) else ''
+                mapped.append(str(code)+suffix)
+        return expanded,mapped
+
+    def periodic_unique(phase,codes):
+        from GSASII import GSASIIspc as spacegroup
+        cx,ct=phase['General']['AtomPtrs'][:2]
+        atoms=phase['Atoms'];kept=[];mapped=[]
+        if len(atoms)!=len(codes):
+            raise NativeRepresentationError('Native symmetry reduction lost its atom mapping')
+        for atom,code in zip(atoms,codes):
+            equivalents=[np.asarray(row[0])%1. for row in
+                spacegroup.GenAtom(atom[cx:cx+3],phase['General']['SGData'],All=True,Move=True)]
+            duplicate=False
+            for old in kept:
+                if old[ct-1]!=atom[ct-1]:continue
+                original=np.asarray(old[cx:cx+3])%1.
+                for point in equivalents:
+                    distance=np.abs((original-point+.5)%1.-.5)
+                    # Same coordinate tolerance as native GetUnique, with
+                    # periodic distance instead of subtracting wrapped values.
+                    if np.all(distance<=2e-4+1e-5*np.abs(point)):
+                        duplicate=True;break
+                if duplicate:break
+            if not duplicate:kept.append(atom);mapped.append(code)
+        return kept,mapped
+
+    namespace=dict(native.__globals__,ExpandCell=expand,GetUnique=periodic_unique)
+    complete=types.FunctionType(native.__code__,namespace,native.__name__,native.__defaults__,native.__closure__)
+    return complete(parent,child,basis,origin,shift,magnetic,Force=Force)
 
 
 def direct_unit_metric(cell):
@@ -244,8 +314,8 @@ approved protocol, not an inference performed by this function.
     child['General']['SGData'] = G2lat.makeBilbaoPhase(
         [candidate['magnetic_space_group'], candidate.get('bns_lattice', '')], origin, transform, True)['SGData']
     child['General']['Cell'][1:] = list(G2lat.TransformCell(general['Cell'][1:7], transform))
-    child, codes = G2lat.TransformPhase(parent, child, transform, origin, np.zeros(3), True)
-    child,codes=complete_magnetic_orbits(child,codes)
+    from gpx_recipe.symmetry.displacements import expand_magnetic_phase
+    child,codes=expand_magnetic_phase(parent,child,transform,origin,np.zeros(3),transform_magnetic_phase)
     ccx, cct, _, _ = child['General']['AtomPtrs']
     rows = []
     represented = {site:0 for site in sites}

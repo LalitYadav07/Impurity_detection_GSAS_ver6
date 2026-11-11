@@ -241,6 +241,8 @@ jobs:
             /validation/tests/gpx_recipe/test_native_tof_forward.py::test_batched_native_curves_retain_original_values_and_observations &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/preparation.xml \
             /validation/tests/gpx_recipe/test_preparation_theory_native.py \
+            /validation/tests/gpx_recipe/test_periodic_site_native.py \
+            /validation/tests/gpx_recipe/test_periodic_profile_native.py \
             /validation/tests/gpx_recipe/test_preparation_reference.py \
             /validation/tests/gpx_recipe/test_native_background_native.py \
             /validation/tests/gpx_recipe/test_native_background_benchmark_native.py \

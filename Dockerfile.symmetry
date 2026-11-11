@@ -27,4 +27,6 @@ RUN mkdir -p /opt/radar-native/gpx_recipe/live \
         > /opt/radar-symmetry/nuclear-powder-validation.log \
     && python -m gpx_recipe.symmetry.kernel_patch --apply \
         > /opt/radar-symmetry/kernel-patch-provenance.json \
+    && python -m gpx_recipe.symmetry.space_group_patch --apply \
+        > /opt/radar-symmetry/periodic-site-patch-provenance.json \
     && python -c "from gpx_recipe.symmetry.worker import runtime_identity,require_runtime; r=runtime_identity(); require_runtime(r,r['magnetic_function_sha256'])"
