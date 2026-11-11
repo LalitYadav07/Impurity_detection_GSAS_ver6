@@ -169,6 +169,7 @@ jobs:
             /validation-tests/test_refinement_detail_owner.py \
             /validation-tests/test_refinement_download_names.py \
             /validation-tests/test_refinement_review_status.py \
+            /validation-tests/test_refinement_empty_state.py \
             /validation-tests/test_refinement_retained_trends.py \
             /validation-tests/test_refinement_trend_arrivals.py \
             /validation-tests/test_refinement_trend_cache.py \
