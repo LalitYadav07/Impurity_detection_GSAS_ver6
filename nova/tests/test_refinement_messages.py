@@ -81,6 +81,18 @@ def test_numeric_solver_diagnostics_are_unavailable_not_reported_as_failure():
     assert '2e-11' not in message and 'reported convergence' not in message
 
 
+def test_native_stopping_and_exact_residual_budget_remain_distinct():
+    evidence=dict(schema=SCHEMA,method='numeric',native_converged=None,last_cycle_complete=False,
+        solver_termination=dict(state='observed',final=dict(state='observed',solver_success=True,
+            termination='relative_parameter_tolerance',function_evaluations=4)),
+        evaluation_budget=dict(schema='radar-native-evaluation-budget/v1',maximum=400,evaluations=6))
+    message=convergence_notice(dict(convergence=evidence))
+    assert 'relative parameter tolerance' in message and '4 function evaluations' in message
+    assert 'budget used: 6 of 400' in message and 'reported convergence' not in message
+    evidence['evaluation_budget']['evaluations']=401
+    assert 'budget used' not in convergence_notice(dict(convergence=evidence))
+
+
 def test_objective_notice_distinguishes_native_tolerance_from_material_increase():
     evidence=dict(schema=SCHEMA,native_converged=True,last_cycle_complete=True,
                   last_cycle_max_shift_over_sigma=.02,relative_objective_change=-1e-7,

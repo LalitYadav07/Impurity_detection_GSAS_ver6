@@ -98,6 +98,18 @@ def convergence_notice(view):
         parts = ['The native solver did not report convergence.']
     else:
         parts = ['The native convergence status is unavailable.']
+    termination=evidence.get('solver_termination') or {}
+    final=termination.get('final') or {}
+    if termination.get('state')=='observed' and final.get('state')=='observed':
+        state='stopped on '+str(final.get('termination','unknown')).replace('_',' ')
+        if final.get('solver_success') is False:state='reported '+str(final.get('termination','failure')).replace('_',' ')
+        count=final.get('function_evaluations')
+        parts.append('The numerical solver '+state+(f' after {count} function evaluations.' if type(count) is int else '.'))
+    budget=evidence.get('evaluation_budget') or {}
+    maximum,used=budget.get('maximum'),budget.get('evaluations')
+    if (budget.get('schema')=='radar-native-evaluation-budget/v1' and
+            type(maximum) is int and type(used) is int and 0<=used<=maximum<=100000):
+        parts.append(f'Residual-evaluation budget used: {used} of {maximum}, including initial and derivative-probe calls.')
     if (evidence.get('method') in {'numeric', 'analytic Jacobian'}
             and evidence.get('native_converged') is None
             and evidence.get('last_cycle_complete') is not True):

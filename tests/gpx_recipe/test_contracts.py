@@ -38,6 +38,7 @@ def test_full_active_sets_show_fixed_transition(context, plan):
 @pytest.mark.parametrize('method', ['numeric', 'analytic Jacobian'])
 def test_unavailable_required_convergence_is_rejected_before_execution(context, plan, method):
     context['controls'] = {'deriv type': method}
+    for stage in plan['stages']:stage['max_function_evaluations']=500
     assert validate_plan(plan, context)
     plan['stages'][0]['convergence'] = {'max_shift_over_sigma': .5}
     with pytest.raises(ValueError, match='does not save the final-cycle'):
@@ -49,6 +50,7 @@ def test_unavailable_required_convergence_is_rejected_before_execution(context, 
 
 def test_numeric_profile_refinement_cannot_bypass_its_implicit_convergence_screen(context, plan):
     context['controls'] = {'deriv type': 'numeric'}
+    for stage in plan['stages']:stage['max_function_evaluations']=500
     plan['stages'][0]['free'] = [{'kind': 'instrument_profile', 'histogram': 'h0', 'parameter': 'X'}]
     with pytest.raises(ValueError, match='final-cycle shift/sigma'):
         validate_plan(plan, context)

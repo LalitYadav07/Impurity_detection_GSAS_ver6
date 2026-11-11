@@ -40,7 +40,7 @@ def validate_plan(plan, context):
     uiso_groups = copy.deepcopy(context.get('uiso_equivalence_groups',[]))
     for stage in plan["stages"]:
         from .advanced import STAGE_FIELDS, validate_stage
-        exact_keys(stage, {"id", "title", "cycles", "free", "background", "constraints", "convergence", "depends_on"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
+        exact_keys(stage, {"id", "title", "cycles", "max_function_evaluations", "free", "background", "constraints", "convergence", "depends_on"} | STAGE_FIELDS, {"id", "title", "cycles", "free", "constraints"})
         if not isinstance(stage["id"], str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,40}", stage["id"]) or stage["id"].casefold() in stage_ids:
             raise ValueError("Stage IDs must be unique safe identifiers")
         if stage['id'].casefold() in {'baseline','final'}:
@@ -53,6 +53,16 @@ def validate_plan(plan, context):
             raise ValueError("Stage title required")
         if type(stage["cycles"]) is not int or not 1 <= stage["cycles"] <= 30:
             raise ValueError("Stage cycles must be an integer from 1 to 30")
+        from .native_budget import NUMERICAL_METHODS
+        method = (context.get('controls') or {}).get('deriv type')
+        if method in NUMERICAL_METHODS and 'max_function_evaluations' not in stage:
+            raise ValueError('This numerical recipe needs a reviewed max_function_evaluations; its stored cycle count cannot limit this minimizer.')
+        if 'max_function_evaluations' in stage:
+            limit = stage['max_function_evaluations']
+            if type(limit) is not int or not 1 <= limit <= 100000:
+                raise ValueError('Maximum function evaluations must be an integer from 1 to 100000')
+            if method and method not in NUMERICAL_METHODS:
+                raise ValueError('A function-evaluation budget is supported only by the native numerical/Jacobian minimizers')
         if stage.get('convergence') is not None:
             from .convergence import finite, require_screen_support
             exact_keys(stage['convergence'],{'max_shift_over_sigma'},{'max_shift_over_sigma'})
@@ -221,6 +231,6 @@ def stage_table(plan, context=None):
                      "newly_free": sorted(current - previous), "newly_fixed": sorted(previous - current),
                      "fixed_policy": "Every other ordinary refinement parameter is fixed; original constraints/restraints remain.",
                      "cycles": stage["cycles"], "depends_on": list(stage.get("depends_on", [])), "background": stage.get("background"), "new_constraints": stage["constraints"],
-                     "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture", "convergence") if stage.get(k)}})
+                     "edits": {k: stage[k] for k in ("fit_ranges", "exclusions", "bounds", "phase_normalization", "texture", "convergence", "max_function_evaluations") if stage.get(k)}})
         previous = current
     return rows

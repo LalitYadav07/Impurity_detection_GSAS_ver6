@@ -158,7 +158,10 @@ jobs:
               /validation/test_stage_recovery.py \
               /validation/test_effects.py \
               /validation/test_imported_mode_reset.py \
-              /validation/test_imported_mode_recipe_native.py'
+              /validation/test_imported_mode_recipe_native.py \
+              /validation/test_native_budget_recipe_native.py \
+              /validation/test_native_budget.py \
+              /validation/test_solver_plan_limits.py'
 
       - name: Verify complete CIF symmetry evidence in the built worker
         shell: bash

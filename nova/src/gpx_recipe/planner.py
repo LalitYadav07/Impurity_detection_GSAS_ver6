@@ -15,6 +15,7 @@ from .usage import summarize_calls
 from .setup_context import setup_context
 from .occupancy_review import reviewed_labels
 from .convergence_intent import bind_convergence, check_convergence
+from .solver_plan_limits import requested_limits, check_limits
 
 ROOT = Path(__file__).resolve().parent
 
@@ -131,6 +132,14 @@ def build_payload(request, context, previous=None):
                "response_contract": "Use the response_schema's top-level/stage/target fields. Background and stage_extensions fields are optional. Use only their documented syntax; do not add a stage_extensions wrapper to the plan. constraints must always be a list. Use empty arrays for no questions/unsupported/assumptions. depends_on lists earlier stage IDs whose successful result is required; use [] for independent stages. Do not infer dependencies from execution order alone. Set failure_policy to continue_independent when the user requests restoring a rejected stage and continuing independent later stages, or when preserving that explicit policy from the previous plan. Otherwise use stop. Neither policy permits continuing after technical, provenance or active-set errors. Exact context model_signature required. cycles integer 1–30. No extra keys. Every atom flag must be in that atom's allowed_flags. If the user requests a forbidden flag (including X when position_dof=0), explain it in unsupported or questions; never emit that invalid target even if the user insists. Use stages=[] when this prevents the requested refinement."}
     payload.update(previous_plan=previous, user_request=request, explicit_stage_count=explicit_stage_count(request),stage_instruction_cards=literal_stage_cards(request,context))
     payload['convergence_request'] = bind_convergence(request, previous, context['model_signature'])
+    payload['native_solver_limits'] = requested_limits(request, context)
+    payload['native_solver_instruction'] = (
+        'For numeric/analytic Jacobian sources, every new stage needs a finite max_function_evaluations '
+        '(1–100000). Choose a reviewable budget, normally 1000 unless the request bounds it differently; '
+        'it counts native residual calls, not elapsed time or Hessian cycles. Set the required legacy '
+        'cycles field to 1 for such stages; it is not used as their limit. Preserve user ceilings. '
+        'Do not translate a requested cycle limit to an evaluation count; ask for that decision. '
+        'For Hessian stages use cycles and null max_function_evaluations.')
     payload['convergence_instruction'] = (
         'convergence.max_shift_over_sigma is a final-cycle dimensionless shift/standard-uncertainty ceiling. '
         'It is not Controls["min dM/M"], a relative-objective tolerance, nor an observed shift. '
@@ -171,7 +180,7 @@ def make_plan(request, context, *, previous=None, client=None, max_calls=2):
     payload = build_payload(request, context, previous)
     conflicts=[{'stage':card['stage'],**scope} for card in payload['stage_instruction_cards']
                for scope in card.get('existing_uiso_relation_scopes',[]) if scope['status']=='partial_release_conflict']
-    questions=list(payload['convergence_request']['questions'])+["Stage "+str(c['stage'])+" releases only "+str(c['released_count'])+" of "+str(len(c['members']))+
+    questions=list(payload['convergence_request']['questions'])+payload['native_solver_limits']['questions']+["Stage "+str(c['stage'])+" releases only "+str(c['released_count'])+" of "+str(len(c['members']))+
                    " atoms in a preserved Uiso equality group ("+', '.join(t['phase']+':'+t['atom'] for t in c['members'])+
                    "). Authorize release of the full group, or revise the requested free/fixed choices. The original equality will be preserved." for c in conflicts]
     for card in payload['stage_instruction_cards']:
@@ -224,6 +233,7 @@ def make_plan(request, context, *, previous=None, client=None, max_calls=2):
                 raise ValueError("The plan contradicts the user's explicit per-stage free/only clauses or cycle limits. Refinement flags are not persistent settings; the next stage fixes every unlisted target. Correct the targets, cycle limits, titles and assumptions together. Differences: "+json.dumps(binding_corrections))
             validate_plan(plan, context)
             check_convergence(plan, payload['convergence_request'])
+            check_limits(plan, payload['native_solver_limits'])
             count=payload["explicit_stage_count"]
             if count is not None and not plan["questions"] and not plan["unsupported"] and len(plan["stages"])!=count:
                 raise ValueError(f"The user explicitly specified {count} stage(s), but the plan has {len(plan['stages'])}. All parameters listed together in a stage must refine together; do not insert or split stages.")

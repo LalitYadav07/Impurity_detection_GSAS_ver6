@@ -34,7 +34,7 @@ def test_background_recipe_preserves_imported_structure_and_constraint_equations
     plan=dict(schema='radar-gpx-recipe/v1',model_signature=context['model_signature'],
         request='Background and histogram scale only. Hold all imported modes and other parameters.',
         assumptions=[],questions=[],unsupported=[],stages=[
-            dict(id='background',title='Background and scale',cycles=4,constraints=[],
+            dict(id='background',title='Background and scale',cycles=1,max_function_evaluations=1000,constraints=[],
                  free=[dict(kind='background',histogram='h0'),dict(kind='histogram_scale',histogram='h0')])])
     preview=work('preview',source,tmp_path/'preview',plan=plan)
     assert preview['status']=='preview_passed',preview

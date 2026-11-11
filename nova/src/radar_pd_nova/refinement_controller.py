@@ -390,6 +390,7 @@ def recipe_cards(plan, context, *, physical_banks=None):
         if parts[0] in phases:return f"{phases[parts[0]]} / {':'.join(parts[1:-1])}: {flags.get(parts[-1],parts[-1])}"
         return ' / '.join(phases.get(x,histograms.get(x,{'background':'background','phase_scale':'phase scale','histogram_scale':'histogram scale','cell':'cell'}.get(x,x))) for x in parts if x)
     cards=[]
+    from gpx_recipe.native_budget import iteration_caption
     titles={stage['id'].casefold():stage['title'] for stage in plan['stages']}
     for number,(stage,row) in enumerate(zip(plan['stages'],stage_table(plan,context)),1):
         changes=[]
@@ -406,6 +407,7 @@ def recipe_cards(plan, context, *, physical_banks=None):
                        f"|shift/sigma| ≤ {stage['convergence']['max_shift_over_sigma']:g}."
                        if stage.get('convergence') else '')
         cards.append(dict(id=stage['id'],number=number,title=stage['title'],cycles=stage['cycles'],free=[label(t) for t in stage['free']],
+            iteration_caption=iteration_caption(stage,context),
             held=[held(t) for t in row['newly_fixed']],edits=changes,convergence=convergence))
     return cards
 

@@ -16,6 +16,8 @@ from .effects import parameter_changes, require_fixed_values_unchanged,require_n
 from .effects import native_storage_audit, require_native_storage
 from .convergence import convergence_evidence
 from .occupancy_review import check_active_parameters
+from .native_budget import NUMERICAL_METHODS, EvaluationBudgetExceeded, residual_budget
+from .native_termination import observe_leastsq
 
 
 class StageRejected(ValueError):
@@ -375,10 +377,34 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                     # this particular refinement call to replace it explicitly.
                     project.data.setdefault("Covariance", {}).setdefault("data", {})["freshCOV"] = False
                     project.save()
-                    project.do_refinements([{}])
+                    native_main=importlib.import_module((G2.__package__+"." if G2.__package__ else "")+"GSASIIstrMain")
+                    method=project.data.get('Controls',{}).get('data',{}).get('deriv type')
+                    maximum=stage.get('max_function_evaluations')
+                    if maximum is not None and method not in NUMERICAL_METHODS:
+                        raise ValueError('The configured minimizer cannot enforce the reviewed evaluation budget')
+                    project.data['Covariance']['data'].get('Rvals',{}).pop('radar_native_solver_termination',None)
+                    project.data['Covariance']['data'].get('Rvals',{}).pop('radar_native_evaluation_budget',None)
+                    with residual_budget(native_main,maximum) as budget, observe_leastsq(native_main) as termination:
+                        row['native_evaluation_budget']=budget
+                        row['native_solver_termination']=termination
+                        try:
+                            project.do_refinements([{}])
+                        except EvaluationBudgetExceeded as exc:
+                            raise StageRejected(str(exc)) from exc
+                    if budget['exhausted']:
+                        raise StageRejected('Native numerical refinement exhausted its reviewed evaluation budget')
+                    if maximum is not None and budget['evaluations'] == 0:
+                        raise RuntimeError('Native numerical refinement did not pass through its reviewed evaluation budget')
+                    final=termination.get('final') or {}
+                    if final.get('solver_success') is False:
+                        raise StageRejected('Native numerical solver stopped without convergence: '+str(final.get('termination','unknown')))
                     row["status"] = "refined_needs_review"
                     cov_native=project.data.get("Covariance",{}).get("data",{})
                     if not cov_native.get("freshCOV"):raise StageRejected("Stage did not produce fresh refinement covariance")
+                    if termination.get('state')=='observed':
+                        cov_native.setdefault('Rvals',{})['radar_native_solver_termination']=copy.deepcopy(termination)
+                        if maximum is not None:
+                            cov_native['Rvals']['radar_native_evaluation_budget']=copy.deepcopy(budget)
                     native_maps=importlib.import_module((G2.__package__+"." if G2.__package__ else "")+"GSASIImapvars")
                     # Capture while the actual last solver's map is still active;
                     # the read-only extractor reconstructs its own maps afterward.

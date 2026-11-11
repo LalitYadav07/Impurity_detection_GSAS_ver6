@@ -52,6 +52,14 @@ def test_unknown_native_method_does_not_mislabel_missing_delta_sentinel():
     assert assess_convergence(convergence_evidence(source),.1)['status']=='unavailable'
 
 
+def test_cycle_limit_is_only_reported_for_a_hessian_solver():
+    source=state()
+    assert convergence_evidence(source)['maximum_cycles']==6
+    for method in ('numeric','analytic Jacobian'):
+        source['controls']['deriv type']=method
+        assert convergence_evidence(source)['maximum_cycles'] is None
+
+
 def test_objective_screen_uses_recorded_native_tolerance_without_hiding_increase():
     source=state();source['controls']['min dM/M']=.001
     source['fit_statistics']['DelChi2']=-9.481126812924467e-8

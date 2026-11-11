@@ -19,6 +19,7 @@ def response_schema(model_signature=None):
     background=obj({"histogram":string,"function":enum(*BACKGROUNDS),"coefficients":integer,"fixed_points":enum("preserve","remove")})
     constraint={"anyOf":[obj({"kind":enum("occupancy_sum"),"terms":array(obj({"phase":string,"atom":string,"coefficient":number})),"total":number,"reason":string}),obj({"kind":enum("uiso_equal"),"atoms":array(obj({"phase":string,"atom":string})),"reason":string})]}
     stage=obj({"id":{"type":"string","description":"Unique safe stage identifier; case-insensitive. Do not use reserved names baseline or final."},"title":string,"cycles":integer,"free":array(target),"constraints":array(constraint),
+               "max_function_evaluations":nullable({"type":"integer","description":"Native numerical/Jacobian residual-call limit, 1–100000. Required for numeric stages; use null for Hessian stages. The cycles field is not enforced by MINPACK."}),
                "depends_on":{"type":"array","items":string,"description":"Earlier stage IDs that must have succeeded. Use [] for an independent stage. Sequential order alone is not a dependency."},
                "convergence":nullable(obj({"max_shift_over_sigma":number})),
                "background":nullable(background),"phase_normalization":array(string),
@@ -45,6 +46,8 @@ def normalize_optional_nulls(plan):
     if not isinstance(plan,dict) or not isinstance(plan.get("stages"),list):return plan
     for stage in plan["stages"]:
         if not isinstance(stage,dict):continue
+        if stage.get('max_function_evaluations', 1) is None:
+            del stage['max_function_evaluations']
         for field,keys in (("bounds",("value",)),("texture",("direction","order","value"))):
             if not isinstance(stage.get(field),list):continue
             for item in stage[field]:

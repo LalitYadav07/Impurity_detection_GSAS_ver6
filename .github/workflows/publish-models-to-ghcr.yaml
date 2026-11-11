@@ -159,6 +159,9 @@ jobs:
             /validation/tests/gpx_recipe/test_imported_mode_reset.py \
             /validation/tests/gpx_recipe/test_effects.py \
             /validation/tests/gpx_recipe/test_imported_mode_recipe_native.py \
+            /validation/tests/gpx_recipe/test_native_budget_recipe_native.py \
+            /validation/tests/gpx_recipe/test_native_budget.py \
+            /validation/tests/gpx_recipe/test_solver_plan_limits.py \
             /validation/tests/gpx_recipe/test_native_protocol.py \
             /validation/tests/gpx_recipe/test_symmetry_moment_models.py \
             /validation/tests/gpx_recipe/test_symmetry_campaign.py \

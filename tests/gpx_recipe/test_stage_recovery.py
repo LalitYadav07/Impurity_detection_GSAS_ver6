@@ -1,5 +1,6 @@
 """Rollback must discard failed-stage mutations before an independent stage."""
 import copy,hashlib,json
+from contextlib import contextmanager
 from types import SimpleNamespace
 import pytest
 from gpx_recipe import execution as E
@@ -152,3 +153,44 @@ def test_nonconvergence_without_abort_retains_its_review_evidence(setup,tmp_path
         approved={'approved_plan_sha256':'plan','model_signature':'model'})
     assert all(s['status']=='completed' for s in result['stages'])
     assert all(s['convergence']['native_converged'] is False for s in result['stages'])
+
+
+def numerical_setup(setup):
+    source,ctx,seen,plan=setup
+    data=json.loads(source.read_text())
+    data['Controls']={'data':{'deriv type':'numeric'}}
+    source.write_text(json.dumps(data))
+    ctx['source']['sha256']=hashlib.sha256(source.read_bytes()).hexdigest()
+    for stage in plan['stages']:stage['max_function_evaluations']=500
+    return source,ctx,seen,plan
+
+
+def test_unobserved_evaluation_budget_is_a_technical_failure(setup,tmp_path,monkeypatch):
+    source,ctx,seen,plan=numerical_setup(setup)
+    @contextmanager
+    def unobserved(main,maximum):
+        yield {'maximum':maximum,'evaluations':0,'exhausted':False}
+    monkeypatch.setattr(E,'residual_budget',unobserved)
+    with pytest.raises(RuntimeError,match='did not pass through'):
+        E.run_plan(source,tmp_path/'out.gpx',plan,
+            approved={'approved_plan_sha256':'plan','model_signature':'model'})
+    assert seen==[('first',0)]
+    assert not (tmp_path/'out_first.gpx').exists()
+
+
+def test_unsuccessful_minpack_termination_is_not_published(setup,tmp_path,monkeypatch):
+    source,ctx,seen,plan=numerical_setup(setup)
+    plan['failure_policy']='stop'
+    @contextmanager
+    def budget(main,maximum):
+        yield {'maximum':maximum,'evaluations':3,'exhausted':False}
+    @contextmanager
+    def failed_termination(main):
+        yield {'state':'observed','final':{'solver_success':False,'termination':'function_evaluation_limit'}}
+    monkeypatch.setattr(E,'residual_budget',budget)
+    monkeypatch.setattr(E,'observe_leastsq',failed_termination)
+    with pytest.raises(E.StageRejected,match='function_evaluation_limit'):
+        E.run_plan(source,tmp_path/'out.gpx',plan,
+            approved={'approved_plan_sha256':'plan','model_signature':'model'})
+    assert seen==[('first',0)]
+    assert not (tmp_path/'out_first.gpx').exists()

@@ -144,7 +144,7 @@ def refinement_dashboard(app):
                 html.P('{{ rf_cards.length }} stages · expand each stage to review its complete free set before approval.',v_if='rf_cards.length',classes='rf-notice mt-3')
                 with html.Div(v_for='stage in rf_cards',key='stage.id',classes='rf-stage'):
                     html.H4('{{ stage.number }}. {{ stage.title }}')
-                    html.P('{{ stage.cycles }} cycles · refine:',classes='rf-notice')
+                    html.P('{{ stage.iteration_caption }} · refine:',classes='rf-notice')
                     html.P('{{ stage.convergence }}',v_if='!!stage.convergence',classes='rf-notice')
                     with html.Details(open=("stage.number === 1",)):
                         html.Summary('Complete free set ({{ stage.free.length }} targets)')

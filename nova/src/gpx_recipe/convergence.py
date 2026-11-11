@@ -38,9 +38,11 @@ def convergence_evidence(state):
     tolerance = (state.get('controls') or {}).get('min dM/M')
     tolerance = float(tolerance) if 'Hessian' in method and finite(tolerance) and tolerance > 0 else None
     return dict(schema=SCHEMA, method=method,
+        solver_termination=fit.get('radar_native_solver_termination'),
+        evaluation_budget=fit.get('radar_native_evaluation_budget'),
         native_converged=fit.get('converged') if type(fit.get('converged')) is bool else None,
         aborted=fit.get('Aborted') is True, native_message=str(fit.get('msg') or '')[:2000],
-        maximum_cycles=(state.get('controls') or {}).get('max cyc'),
+        maximum_cycles=(state.get('controls') or {}).get('max cyc') if 'Hessian' in method else None,
         relative_objective_change=change, relative_objective_tolerance=tolerance,
         independent_parameters=len(names),
         last_cycle_complete=bool(names) and not missing,
