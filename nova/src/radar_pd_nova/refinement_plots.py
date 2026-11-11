@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 from .results import experiment_axis_options, _experiment_axis, _display_metric_record
 from .refinement_messages import refinement_review_status
 from gpx_recipe.fit_domain import DOMAIN_SCHEMAS, NATIVE_FIT_CONVENTION, histogram_domain_schema, canonical_observations, fit_domain_digest
+from gpx_recipe.phase_labels import phase_label
 
 COLORS=['#147d64','#b56016','#8064a2','#1d82a3','#c35069','#6c7d28','#5064a2']
 
@@ -130,11 +131,7 @@ def fit_figure(baseline,polished,*,histogram=None,axis='d',display='compare',res
         else:
             positions=np.asarray(ticks['native'],dtype=float)
         label=ticks['phase']
-        group=phases.get(label,{}).get('space_group')
-        if isinstance(group,str) and group.strip():
-            # A constructed child can retain the parent's old display name.
-            # Use the actual saved symmetry, without changing native names.
-            label=re.sub(r'\s*\(SG\s+\d+\)\s*$','',label)+' · '+group.strip()
+        label=phase_label(phases.get(label,dict(name=label)))
         color=COLORS[index%len(COLORS)]
         figure.add_trace(go.Scattergl(x=positions,y=[index]*len(positions),mode='markers',marker=dict(symbol='line-ns',size=11,color=color,line=dict(color=color,width=2)),name=label,legendgroup='phase-'+str(index),hovertemplate=label+'<br>%{x:.6g}<extra></extra>'),row=3,col=1)
     figure.update_layout(template='plotly_white',height=620,margin=dict(l=75,r=22,t=32,b=55),

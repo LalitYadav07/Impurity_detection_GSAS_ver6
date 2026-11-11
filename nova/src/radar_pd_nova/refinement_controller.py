@@ -164,6 +164,18 @@ ATOMIC_REFINEMENT_EXAMPLE = (
 )
 
 
+def atomic_refinement_example(context):
+    from gpx_recipe.native_budget import NUMERICAL_METHODS, DEFAULT_NUMERICAL_EVALUATIONS
+    method = str((context.get('controls') or {}).get('deriv type') or '')
+    if method in NUMERICAL_METHODS:
+        limit = f'Use at most {DEFAULT_NUMERICAL_EVALUATIONS} residual evaluations per stage. '
+    elif 'Hessian' in method:
+        limit = 'Use at most six cycles per stage. '
+    else:
+        limit = 'Use a bounded stopping limit supported by the inspected minimizer and show it for each stage. '
+    return ATOMIC_REFINEMENT_EXAMPLE.replace('Use at most six cycles per stage. ', limit)
+
+
 def refinement_rwp_summary(notice):
     def number(value):return f'{value:.3f}%' if value is not None else '—'
     original=number(notice.get('original_rwp'))
@@ -375,7 +387,8 @@ def refinement_experiment_options(workspace):
 
 
 def recipe_cards(plan, context, *, physical_banks=None):
-    phases={p['key']:p['name'] for p in context['phases']}
+    from gpx_recipe.phase_labels import phase_label
+    phases={p['key']:phase_label(p) for p in context['phases']}
     banks=physical_banks or {}
     histograms={h['key']:(f"Physical bank {banks[h['name']]}" if h['name'] in banks else h['name']) for h in context['histograms']}
     flags={'X':'positions','U':'Uiso','F':'occupancy'}
@@ -676,7 +689,10 @@ class RefinementMixin(GuidedRefinementMixin):
 
     def load_atomic_refinement_example(self,**_):
         self._refinement_hold_enrollment()
-        self.server.state.rf_request=ATOMIC_REFINEMENT_EXAMPLE
+        state=self.server.state
+        workspace=self._refinement_workspace
+        source=(workspace.state['sources'].get(state.rf_source) if workspace else None) or {}
+        state.rf_request=atomic_refinement_example(source.get('context') or {})
         self.server.state.rf_message='Example loaded. Replace both bracketed atom lists with exact names from Inspect starting model before generating.'
         self._refinement_sync_approval();self.server.state.flush()
 
@@ -750,7 +766,8 @@ class RefinementMixin(GuidedRefinementMixin):
                 s.rf_source_qualification+=' '+catalog.get('message','Captured catalog disagreement requires review.')
         exposure_notice=refinement_exposure_notice(source)
         if exposure_notice:s.rf_source_details.append(dict(label='Electrical exposure',value=exposure_notice))
-        s.rf_context_atoms=[dict(phase=p['name'],atom=a['label'],element=a['element'],adp=a['adp_type'],position_dof=a.get('position_dof'),occupancy=a.get('occupancy')) for p in source.get('context',{}).get('phases',[]) for a in p['atoms']]
+        from gpx_recipe.phase_labels import phase_label
+        s.rf_context_atoms=[dict(phase=phase_label(p),atom=a['label'],element=a['element'],adp=a['adp_type'],position_dof=a.get('position_dof'),occupancy=a.get('occupancy')) for p in source.get('context',{}).get('phases',[]) for a in p['atoms']]
         self._guided_source_changed()
 
     def inspect_refinement_project(self,**_):

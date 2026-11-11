@@ -4,11 +4,20 @@ import threading
 
 
 NUMERICAL_METHODS = frozenset({'numeric', 'analytic Jacobian'})
+DEFAULT_NUMERICAL_EVALUATIONS = 1000
 _LOCK = threading.Lock()
 
 
 class EvaluationBudgetExceeded(RuntimeError):
     pass
+
+
+def stage_limits(context, *, hessian_cycles):
+    """Use one visible numerical budget across deterministic recipe builders."""
+    method = str((context.get('controls') or {}).get('deriv type') or '')
+    if method in NUMERICAL_METHODS:
+        return dict(cycles=1, max_function_evaluations=DEFAULT_NUMERICAL_EVALUATIONS)
+    return dict(cycles=hessian_cycles)
 
 
 @contextmanager

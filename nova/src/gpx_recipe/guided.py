@@ -10,8 +10,11 @@ import math
 import re
 
 from .contracts import validate_plan
+from .native_budget import NUMERICAL_METHODS, DEFAULT_NUMERICAL_EVALUATIONS, stage_limits
+from .phase_labels import phase_label
 
-SCHEMA = 'radar-guided-refinement/v2'
+SCHEMA = 'radar-guided-refinement/v3'
+PREVIOUS_SCHEMA = 'radar-guided-refinement/v2'
 LEGACY_SCHEMA = 'radar-guided-refinement/v1'
 RECIPES = {
     'mixture': 'Fixed-composition phase mixture',
@@ -30,7 +33,7 @@ def start(context):
 
 
 def check_binding(context, state):
-    if (state.get('schema') not in {SCHEMA, LEGACY_SCHEMA} or state.get('model_signature') != context['model_signature']
+    if (state.get('schema') not in {SCHEMA, PREVIOUS_SCHEMA, LEGACY_SCHEMA} or state.get('model_signature') != context['model_signature']
             or state.get('source_sha256') != context['source']['sha256']):
         raise ValueError('The starting model changed. Restart guided setup for this GPX revision.')
 
@@ -61,7 +64,7 @@ def available_recipes(context):
     return available
 
 
-def _next(context, answers, *, legacy=False):
+def _next(context, answers, *, legacy=False, review_solver=False):
     phases = context['phases']
     if 'recipe' not in answers:
         return _question('recipe', 'What should this refinement estimate?', 'choice',
@@ -71,7 +74,13 @@ def _next(context, answers, *, legacy=False):
                          'choice', [dict(title='Checked for this scan', value='reviewed')])
     if 'cell_phases' not in answers:
         return _question('cell_phases', 'Which phase unit cells may change? Leave empty to hold every cell.', 'multiple',
-                         _options([p for p in phases if p['histograms']], lambda p: p['name'], 'key'), minimum=0)
+                         _options([p for p in phases if p['histograms']], phase_label, 'key'), minimum=0)
+    if review_solver and 'solver_review' not in answers:
+        return _question('solver_review',
+            f'This GPX uses the numerical minimizer. Each stage will allow at most {DEFAULT_NUMERICAL_EVALUATIONS:,} residual evaluations. '
+            'Its native stopping status, covariance, active parameters and physical bounds will be checked. '
+            'Final-cycle shift/sigma is unavailable; these checks do not certify the model or calibration.',
+            'choice', [dict(title='Use these numerical stopping checks', value='accepted')])
     if answers['recipe'] == 'mixture':
         return None
     eligible = [p for p in phases if p['histograms'] and answers['recipe'] in available_recipes(dict(phases=[p]))]
@@ -79,7 +88,7 @@ def _next(context, answers, *, legacy=False):
         raise ValueError('No Li/Na sites exist in this model. Supply the appropriate phase CIF first.')
     if 'phase' not in answers:
         return _question('phase', 'Which exact phase contains the mobile-ion sites?', 'choice',
-                         _options(eligible, lambda p: p['name'], 'key'))
+                         _options(eligible, phase_label, 'key'))
     phase = next(p for p in phases if p['key'] == answers['phase'])
     atoms = [a for a in phase['atoms'] if species(a) in {'Li', 'Na'} and a['adp_type'] == 'I']
     if not atoms:
@@ -136,7 +145,8 @@ def next_question(context, state):
         raise ValueError('Invalid guided answers.')
     checked = {}
     while True:
-        question = _next(context, checked, legacy=state['schema'] == LEGACY_SCHEMA)
+        question = _next(context, checked, legacy=state['schema'] == LEGACY_SCHEMA,
+                         review_solver=_needs_solver_review(context, state))
         if question is None or question['id'] not in supplied:
             if set(supplied) != set(checked):
                 raise ValueError('Answers contain unsupported or out-of-order decisions. Restart setup.')
@@ -148,7 +158,8 @@ def decision_summary(context, state):
     """Readable provenance, including when a portable recipe is reused."""
     checked = {}; rows = []
     for _ in range(len(state.get('answers', {}))):
-        question = _next(context, checked, legacy=state['schema'] == LEGACY_SCHEMA)
+        question = _next(context, checked, legacy=state['schema'] == LEGACY_SCHEMA,
+                         review_solver=_needs_solver_review(context, state))
         if question is None or question['id'] not in state['answers']:
             break
         value = state['answers'][question['id']]
@@ -213,31 +224,40 @@ def occupancy_spec(context, answers):
     return dict(phase=phase, atoms=selected, bounds=bounds, constraint=constraint)
 
 
+def _needs_solver_review(context, state):
+    return (state['schema'] == SCHEMA and
+            (context.get('controls') or {}).get('deriv type') in NUMERICAL_METHODS)
+
+
 def build_plan(context, state):
     if next_question(context, state) is not None:
         raise ValueError('Complete the guided questions before compiling a recipe.')
     slots = state['answers']; spec = occupancy_spec(context, slots)
+    numerical = (context.get('controls') or {}).get('deriv type') in NUMERICAL_METHODS
+    if numerical and state['schema'] != SCHEMA:
+        raise ValueError('Restart Guided setup to review numerical stopping checks. This saved guide used a Hessian-only convergence requirement; it will not be weakened silently.')
+    limits = stage_limits(context, hessian_cycles=12)
     base = [dict(kind='background', histogram=h['key']) for h in context['histograms']]
     base += [dict(kind='phase_scale', phase=p['key'], histogram=h['key']) for p in context['phases']
              for h in context['histograms'] if h['name'] in p['histograms']]
-    stages = [dict(id='scales', title='Background and linked phase scales', cycles=12, free=deepcopy(base), constraints=[])]
+    stages = [dict(id='scales', title='Background and linked phase scales', **limits, free=deepcopy(base), constraints=[])]
     structural = base + [dict(kind='cell', phase=p) for p in slots['cell_phases']]
     if spec:
         structural += [dict(kind='atom', phase=spec['phase']['key'], atom=a, flags='X') for a in slots['positions']]
     if structural != base:
         has_positions = bool(spec and slots['positions'])
         title = 'Selected cells and oxygen positions' if slots['cell_phases'] and has_positions else 'Selected oxygen positions' if has_positions else 'Selected unit cells'
-        stages.append(dict(id='structure', title=title, cycles=12, free=deepcopy(structural), constraints=[]))
+        stages.append(dict(id='structure', title=title, **limits, free=deepcopy(structural), constraints=[]))
     assumptions = [
         'Guided rules. Numerical completion still requires scientific review.',
         'User checked phase identities, bank assignments, fit range and profile for this scan.',
         'Histogram scales, instrument/profile terms, sample widths, texture and all ADPs remain at their starting values.',
         'Phase scales are intensity coefficients; do not report them directly as phase mass fractions.',
-        'Each stage retains the full preceding free set. Twelve cycles is a cap; convergence is checked by the native engine.',
+        'Each stage retains the full preceding free set.',
     ]
     if spec:
         free = structural + [dict(kind='atom', phase=spec['phase']['key'], atom=a['label'], flags='F') for a in spec['atoms']]
-        stages.append(dict(id='occupancy', title=RECIPES[slots['recipe']], cycles=12, free=free,
+        stages.append(dict(id='occupancy', title=RECIPES[slots['recipe']], **limits, free=free,
                            constraints=[spec['constraint']] if spec['constraint'] else [], bounds=spec['bounds']))
         assumptions += [slots['reference'], 'The selected occupancy estimates and uncertainties are conditional on the held reference model; no SOC is inferred.',
                         'A bound hit, rank loss or failed convergence stops acceptance; bounds are not a clipped physical solution.']
@@ -247,12 +267,15 @@ def build_plan(context, state):
             assumptions.append('Vacancies are allowed on the selected site; other occupants are fixed. No full-site equality is added.')
     else:
         assumptions.append('All occupancies and atomic coordinates remain fixed; the model composition must already be appropriate.')
-    for stage in stages:
-        stage['convergence']=dict(max_shift_over_sigma=.5)
-    assumptions.append('Every stage requires reported native convergence, no abort, complete final-cycle shifts and maximum |shift/sigma| ≤ 0.5. This numerical screen does not establish model adequacy.')
+    if numerical:
+        assumptions.append(f'Every stage allows at most {DEFAULT_NUMERICAL_EVALUATIONS:,} native residual evaluations and requires successful numerical termination, finite covariance, the reviewed active parameters and physical bounds. Final-cycle Hessian shift/sigma is unavailable; results retain that limitation for scientific review.')
+    else:
+        for stage in stages:
+            stage['convergence']=dict(max_shift_over_sigma=.5)
+        assumptions.append('Every stage allows at most twelve Hessian cycles and requires reported native convergence, no abort, complete final-cycle shifts and maximum |shift/sigma| ≤ 0.5. This numerical screen does not establish model adequacy.')
     legacy = state['schema'] == LEGACY_SCHEMA
     plan = dict(schema='radar-gpx-recipe/v1', model_signature=context['model_signature'],
-        request=('Guided v1: ' if legacy else 'Guided v2: ') + RECIPES[slots['recipe']],
+        request=f"Guided {state['schema'].rsplit('/',1)[-1]}: " + RECIPES[slots['recipe']],
         assumptions=assumptions, questions=[], unsupported=[], stages=stages)
     if legacy or (spec and slots['reference_scope'] == 'single'):
         plan['source_sha256'] = context['source']['sha256']

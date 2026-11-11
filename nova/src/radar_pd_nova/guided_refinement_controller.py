@@ -9,6 +9,7 @@ import uuid
 from gpx_recipe import guided
 from gpx_recipe.execution import write_json
 from gpx_recipe.model_edits import SCHEMA as EDIT_SCHEMA
+from gpx_recipe.phase_labels import phase_label
 
 
 class GuidedRefinementMixin:
@@ -38,7 +39,7 @@ class GuidedRefinementMixin:
             s.rf_guide_answer=None;s.rf_guide_text='';s.rf_edit_phase=None
             s.rf_edit_name='';s.rf_edit_cif_path=None;s.rf_edit_cif_text='';s.rf_edit_banks=[];s.rf_edit_scale=1.;s.rf_edit_reason=''
         s.rf_edit_source_sha=(context.get('source') or {}).get('sha256','')
-        s.rf_edit_phase_options=[dict(title=p['name'],value=p['key']) for p in context.get('phases',[])]
+        s.rf_edit_phase_options=[dict(title=phase_label(p),value=p['key']) for p in context.get('phases',[])]
         banks=source.get('metadata',{}).get('physical_banks',{})
         s.rf_edit_bank_options=[dict(title=f"Bank {banks[h['name']]}" if h['name'] in banks else h['name'],value=h['key']) for h in context.get('histograms',[])]
         if context and self._guided_state is None and self._refinement_workspace:

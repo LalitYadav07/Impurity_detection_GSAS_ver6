@@ -20,6 +20,7 @@ def context():
 
 def complete(context, recipe='redistribution', **overrides):
     values=dict(recipe=recipe, model_review='reviewed', cell_phases=['p0'], phase='p0',
+                solver_review='accepted',
                 sites=['Na1', 'Na2'] if recipe=='redistribution' else 'Na1', total_ions=3., positions=[],
                 reference='Independent reference model at the same temperature; vacancies allowed, Na content known.', conditional='accepted', reference_scope='single')
     values.update(overrides); state=guided.start(context)
@@ -44,6 +45,52 @@ def test_mixture_has_no_occupancy_or_atom_releases(context):
     assert not any(x['kind']=='atom' for s in plan['stages'] for x in s['free'])
     assert all(s['convergence']=={'max_shift_over_sigma':.5} for s in plan['stages'])
     assert plan['stages'][1]['title']=='Selected unit cells'
+
+
+@pytest.mark.parametrize('method',['numeric','analytic Jacobian'])
+def test_numerical_guide_reviews_supported_stopping_before_building(context,method):
+    context['controls']={'deriv type':method}
+    state=complete(context,'mixture')
+    assert any(row['question']=='solver_review' for row in state['history'])
+    plan=guided.build_plan(context,state)
+    assert all(s['max_function_evaluations']==1000 and s['cycles']==1 for s in plan['stages'])
+    assert all('convergence' not in s for s in plan['stages'])
+    assert any('Final-cycle Hessian' in value for value in plan['assumptions'])
+    assert any('1,000' in row['question'] for row in guided.decision_summary(context,state))
+
+
+def test_numerical_stopping_review_cannot_be_skipped(context):
+    context['controls']={'deriv type':'numeric'}
+    state=guided.start(context)
+    for key,value in [('recipe','mixture'),('model_review','reviewed'),('cell_phases',[])]:
+        state=guided.answer(context,state,key,value)
+    assert guided.next_question(context,state)['id']=='solver_review'
+    with pytest.raises(ValueError,match='Complete the guided questions'):
+        guided.build_plan(context,state)
+
+
+@pytest.mark.parametrize('schema',[guided.LEGACY_SCHEMA,guided.PREVIOUS_SCHEMA])
+def test_old_numerical_guides_do_not_silently_drop_their_convergence_requirement(context,schema):
+    state=complete(context,'mixture');state['schema']=schema
+    context['controls']={'deriv type':'numeric'}
+    with pytest.raises(ValueError,match='Restart Guided setup'):
+        guided.build_plan(context,state)
+
+
+def test_previous_hessian_guide_is_still_reproducible(context):
+    state=complete(context,'mixture');state['schema']=guided.PREVIOUS_SCHEMA
+    plan=guided.build_plan(context,state)
+    assert plan['request'].startswith('Guided v2:')
+    assert all(s['cycles']==12 and s['convergence']=={'max_shift_over_sigma':.5} for s in plan['stages'])
+
+
+@pytest.mark.parametrize('method,expected',[('numeric','1000 residual evaluations'),('analytic Jacobian','1000 residual evaluations'),('analytic Hessian','six cycles'),('','supported by the inspected minimizer')])
+def test_atomic_example_uses_the_inspected_solver(method,expected):
+    from radar_pd_nova.refinement_controller import atomic_refinement_example
+    prompt=atomic_refinement_example({'controls':{'deriv type':method}})
+    assert expected in prompt
+    if method in ('numeric','analytic Jacobian'):
+        assert 'six cycles' not in prompt
 
 
 def test_reference_length_matches_the_compiled_plan_contract(context):
