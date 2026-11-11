@@ -63,6 +63,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         state.post_analysis_inspector_title = ""
         state.post_analysis_inspector_view = ""
         state.post_analysis_inspector_kind = "post"
+        state.post_analysis_inspector_min_height = 0
         state.post_analysis_inspector_figure = {"data": [], "layout": {}}
         state.post_analysis_point_open = False
         state.post_analysis_point_details = []
@@ -460,7 +461,8 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
                 with html.Div(
                     classes=(
                         "'radar-inspector-frame' + (post_analysis_inspector_kind === 'post' ? '' : ' radar-inspector-fit')",
-                    )
+                    ),
+                    style=("'--radar-fit-min-height:' + post_analysis_inspector_min_height + 'px'",),
                 ):
                     figure = plotly.Figure(
                         display_mode_bar=True,
@@ -707,6 +709,7 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
         state.post_analysis_active_points = 0
         state.post_analysis_status = "Waiting for completed scans"
         state.post_analysis_inspector_open = False
+        state.post_analysis_inspector_min_height = 0
         state.post_analysis_inspector_figure = {"data": [], "layout": {}}
         state.post_analysis_point_open = False
         self._set_post_settings(restored if restored is not None else PostAnalysisSettings())
@@ -1315,6 +1318,9 @@ class PostAnalysisMixin(TransitionTrackingMixin, ScanInterpretationMixin):
             setting = next(v for v in self._post_settings().views if v.id == view_id)
             figure = view_figure(view, setting)
             title = view["title"]
+        state.post_analysis_inspector_min_height = (
+            int(figure.layout.height or 720) if kind in {"fit", "gallery"} else 0
+        )
         figure.update_layout(height=None, autosize=True)
         state.post_analysis_inspector_title = title
         state.post_analysis_inspector_kind = kind

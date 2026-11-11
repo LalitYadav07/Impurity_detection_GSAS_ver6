@@ -1100,11 +1100,15 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
             phase_order = list(phase_labels)
         else:
             phase_order = list(phase_labels)
+    # Give every Bragg row room for its label and the longest tick marker.
+    # A fixed 13% panel crowds multi-phase battery patterns even when expanded.
+    tick_height = max(78, 28 * len(phase_order))
+    figure_height = max(720, 570 + 28 * len(phase_order))
     figure = make_subplots(
         rows=3,
         cols=1,
         shared_xaxes=True,
-        row_heights=[0.67, 0.20, 0.13],
+        row_heights=[410, 125, tick_height],
         vertical_spacing=0.035,
     )
     figure.add_trace(go.Scatter(x=x, y=observed, mode="markers", name="Observed", marker={"size": 3, "color": "#27313d", "opacity": 0.55}), row=1, col=1)
@@ -1177,7 +1181,10 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
     axis_title = str(payload.get("x_label") or payload.get("xlabel") or "Diffraction coordinate")
     figure.update_yaxes(title_text="Intensity", row=1, col=1)
     figure.update_yaxes(title_text="Difference", row=2, col=1)
-    figure.update_yaxes(title_text="Phases", tickmode="array", tickvals=list(range(len(axis_labels))), ticktext=axis_labels, row=3, col=1)
+    figure.update_yaxes(title_text="Phases", tickmode="array", tickvals=list(range(len(axis_labels))),
+                        ticktext=axis_labels, tickfont={"size": 11},
+                        range=[-0.5, max(0.5, len(axis_labels) - 0.5)],
+                        showgrid=False, row=3, col=1)
     figure.update_xaxes(title_text=axis_title, row=3, col=1)
     if fit_limits is not None:
         display_limits = list(fit_limits)
@@ -1201,7 +1208,7 @@ def gsas_figure(payload: dict[str, Any]) -> go.Figure:
         title += f" / N (fit) {int(fitted.sum()):,}"
     longest_label = max((len(label) for label in axis_labels), default=0)
     left_margin = min(250, max(110, 45 + longest_label * 7))
-    return _finish_figure(figure, title, height=720, left_margin=left_margin)
+    return _finish_figure(figure, title, height=figure_height, left_margin=left_margin)
 
 
 def figure_for_payload(payload: dict[str, Any]) -> go.Figure:

@@ -1369,6 +1369,27 @@ def test_gsas_plot_hides_internal_custom_catalog_ids() -> None:
     assert figure.layout.margin.l >= 180
 
 
+@pytest.mark.parametrize("phase_count", [1, 6, 12])
+def test_bragg_rows_remain_legible_without_changing_the_fitted_pattern(phase_count):
+    names = [f"phase_{i}" for i in range(phase_count)]
+    payload = {
+        "plot_kind": "gsas_fit_with_ticks_v1",
+        "arrays": {"x": [10., 20., 30.], "yobs": [1., 2., 1.],
+                   "ycalc": [1., 1.8, 1.], "resid": [0., .2, 0.]},
+        "phase_order": names,
+        "phase_labels": {name: f"Phase {i} (SG 225)" for i, name in enumerate(names)},
+        "phase_ticks": {name: [12. + i] for i, name in enumerate(names)},
+    }
+    figure = figure_for_payload(payload)
+    available_height = figure.layout.height - figure.layout.margin.t - figure.layout.margin.b
+    tick_domain = figure.layout.yaxis3.domain
+    assert available_height * (tick_domain[1] - tick_domain[0]) / phase_count >= 21
+    assert list(figure.data[0].y) == payload["arrays"]["yobs"]
+    assert list(figure.data[1].y) == payload["arrays"]["ycalc"]
+    assert list(figure.layout.yaxis3.tickvals) == list(range(phase_count))
+    assert len(figure.data) == phase_count + 3
+
+
 def _write_gsas_payload(path: Path, *, rwp: float, phase: str = "TbSSL") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

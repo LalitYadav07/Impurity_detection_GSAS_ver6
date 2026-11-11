@@ -9644,7 +9644,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         .radar-inspector-toolbar, .radar-inspector-card > .radar-section-help { flex: 0 0 auto; }
         .radar-inspector-frame { width: 100%; flex: 1 1 0; min-height: 0; overflow: auto; }
         .radar-inspector-frame > div { min-width: 0; width: 100%; height: 100%; }
-        .radar-inspector-fit > div { min-width: 650px; }
+        .radar-inspector-fit > div { min-width: 650px; min-height: var(--radar-fit-min-height, 720px); }
         .radar-observation-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); column-gap: 20px; }
         .radar-observation-details > div { padding: 8px 0; border-bottom: 1px solid #dce5df; }
         .radar-observation-details dt { font-weight: 700; }
