@@ -633,7 +633,7 @@ class PreparationMixin:
             await asyncio.to_thread(store.registry.get(key).retry,entry)
             await asyncio.to_thread(store.start,key,maximum_jobs=finite_number(self.server.state.prep_parallel_jobs,integer=True))
             if self.server.state.prep_library==key:
-                self.server.state.prep_message='The selected entry is ready to retry. Preparation is continuing; completed results are retained.'
+                self.server.state.prep_message='Retry requested. Completed results are retained; current job progress is shown below.'
             self._prep_start_driver()
         return self._prep_action(retry(),'Retrying the selected failed entry')
 

@@ -73,8 +73,18 @@ def stage_models(library, root):
     library.refresh(); definitions = {}
     rows = [r for r in library.document['entries']
             if r['model']['kind'] in {'structural-training', 'structural-ranking-model'}]
-    if not rows or len(rows) > 8 or any(row['state'] != 'prepared' for row in rows):
-        raise PreparedLibraryUnavailable('Select a completed structural model library with at most eight bank contexts.')
+    if not rows:
+        raise PreparedLibraryUnavailable(
+            'This library has no structural ranking model. Choose or train one in Experiment preparation.')
+    if len(rows) > 8:
+        raise PreparedLibraryUnavailable(
+            'This library has more than eight bank contexts. Select a library with at most eight.')
+    ready = sum(row['state'] == 'prepared' for row in rows)
+    if ready != len(rows):
+        raise PreparedLibraryUnavailable(
+            f'The selected library has {ready} / {len(rows)} ranking models ready. '
+            'Finish or recover its training in Experiment preparation, then retry discovery. '
+            'Completed calculations remain available; no model fit was submitted.')
     for row in rows:
         assets = [a['path'] for a in row['files'] if Path(a['path']).name == 'model.json']
         if len(assets) != 1: raise PreparedLibraryUnavailable('The selected library has no unique captured model metadata.')

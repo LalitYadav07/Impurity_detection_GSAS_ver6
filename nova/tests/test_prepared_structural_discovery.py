@@ -78,6 +78,30 @@ def test_reference_notice_describes_only_the_model_reference_actually_used(kind,
         assert 'calculated parent pattern' in message
 
 
+@pytest.mark.parametrize('states', [
+    ['preparing'], ['pending'], ['failed'], ['unsupported'], ['cancelled'],
+    ['prepared', 'preparing'],
+])
+def test_incomplete_ranking_scope_stops_before_assets_are_staged(states, tmp_path):
+    def unexpected_asset_read(*args, **kwargs):
+        pytest.fail('An incomplete ranking scope must not stage assets or start native work')
+
+    library = SimpleNamespace(
+        refresh=lambda: None,
+        document={'entries': [
+            {'model': {'kind': 'structural-training'}, 'state': state}
+            for state in states
+        ]},
+        verify_assets=unexpected_asset_read,
+    )
+    destination = tmp_path / 'not-created'
+    with pytest.raises(bridge.PreparedLibraryUnavailable) as caught:
+        bridge.stage_models(library, destination)
+    assert f'{states.count("prepared")} / {len(states)} ranking models ready' in str(caught.value)
+    assert 'Experiment preparation' in str(caught.value)
+    assert not destination.exists()
+
+
 def test_discovery_retains_the_reference_kind_with_the_bound_model_metadata(setup,monkeypatch):
     app,draft,library,_,_=setup
     original=bridge.stage_models
