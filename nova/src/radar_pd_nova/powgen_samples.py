@@ -286,7 +286,9 @@ def select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=(
         return ok
     if limit is not None:
         selected = []
+        reviewed = 0
         for run in reversed(runs):
+            reviewed += 1
             if eligible(run):
                 selected.append(run)
                 if len(selected) >= max(1, limit):
@@ -295,12 +297,16 @@ def select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=(
         if selection_stats is not None:
             selection_stats["excluded_count"] = len(excluded)
             selection_stats["identity_review"] = identity_review
+            selection_stats["reviewed_scan_count"] = reviewed
+            selection_stats["run_review_complete"] = reviewed == len(runs)
         return result
     with ThreadPoolExecutor(max_workers=4) as pool:
         accepted = list(pool.map(eligible, runs))
     if selection_stats is not None:
         selection_stats["excluded_count"] = len(excluded)
         selection_stats["identity_review"] = identity_review
+        selection_stats["reviewed_scan_count"] = len(runs)
+        selection_stats["run_review_complete"] = True
     return [r for r, ok in zip(runs, accepted) if ok]
 
 

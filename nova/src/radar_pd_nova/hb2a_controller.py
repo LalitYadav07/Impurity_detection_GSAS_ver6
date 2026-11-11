@@ -127,18 +127,25 @@ def discover_hb2a_samples(ipts, sample_index, subfolder=hb2a.FOLDER, *, normaliz
     return result
 
 
-def _selected(runs, settings, index):
-    result = []
+def _selected(runs, settings, index, *, selection_stats=None):
+    result = []; excluded = 0; other_samples = 0; reviewed = 0
     for run in runs:
+        reviewed += 1
         if run.run_id in settings.excluded_acquisitions:
+            excluded += 1
             continue
         metadata = index.identity(run)
         if settings.selected_sample_ids is not None and metadata.get('sample_id') not in settings.selected_sample_ids:
+            other_samples += 1
             continue
         role = title_role(metadata.get('run_title',''))
         if (role == 'background' and not settings.include_background_runs) or (role == 'ramp' and not settings.include_ramp_runs):
+            excluded += 1
             continue
         result.append(run)
+    if selection_stats is not None:
+        selection_stats.update(excluded_count=excluded, sample_filtered_count=other_samples,
+            reviewed_scan_count=reviewed, run_review_complete=True)
     return result
 
 
@@ -158,9 +165,12 @@ def preflight_hb2a_experiment(ipts, *, selected_sample_ids=None, selected_banks=
     index = sample_index or Hb2aSampleIndex(ipts)
     root = hb2a.proposal_root(ipts) / subfolder
     all_runs = hb2a.discover_listing(settings.definition(), hb2a.directory_listing(root, normalization=normalization))
-    runs = _selected(all_runs,settings,index)
+    selection_stats = {}
+    runs = _selected(all_runs,settings,index,selection_stats=selection_stats)
+    matching_count = len(runs)
     if initial_backfill_limit is not None:
         runs = runs[-max(1,initial_backfill_limit):]
+    selection_stats['backfill_omitted_count'] = matching_count - len(runs)
     errors, setups, profiles, matched_paths, registry_mappings = [], [], [], [], []
     for run in runs:
         try:
@@ -186,7 +196,7 @@ def preflight_hb2a_experiment(ipts, *, selected_sample_ids=None, selected_banks=
         errors.append(f'No individual {normalization}-normalization reduced patterns match this sample selection')
     latest = setups[-1].metadata if setups else {}
     return {'ready':not errors,'source_directory':str(root),'scan_count':len(runs),'total_scan_count':len(all_runs),
-        'analysis_count':len(profiles),'excluded_count':len(all_runs)-len(runs),'available_banks':[1] if runs else [],
+        'analysis_count':len(profiles),**selection_stats,'available_banks':[1] if runs else [],
         'first_run':runs[0].run_id if runs else '', 'latest_run':runs[-1].run_id if runs else '',
         'latest_file':Path(runs[-1].source_path).name if runs else '', 'latest_start_time':latest.get('start_time',''),
         'sample_display':latest.get('sample_name',''),

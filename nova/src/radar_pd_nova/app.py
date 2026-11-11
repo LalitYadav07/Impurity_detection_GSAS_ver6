@@ -35,7 +35,7 @@ from .live_setup import LiveSetupMixin, _StagingCancelled
 from .live_restore import LiveRestoreMixin
 from .live_settings_review import LiveSettingsReviewMixin
 from .live_assistant_controller import LiveAssistantMixin
-from .live_run_selection import run_exclusions_control
+from .live_run_selection import run_exclusions_control, run_review_summary
 from .library_setup import (
     LIBRARY_FIELDS,
     LibraryDraft,
@@ -6070,7 +6070,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.powgen_preflight_details = [
                 {"label": "Read-only source", "value": state.powgen_source_directory},
                 {"label": "Samples to process", "value": ", ".join(self._powgen_processing_ids() or ()) or "All samples"},
-                {"label": "Run review", "value": f"{result.get('excluded_count', 0)} excluded by role or individual selection; unclassified titles remain included"},
+                {"label": "Run review", "value": run_review_summary(result)},
                 {"label": "Bank analyses", "value": f"{result.get('analysis_count', 0)}; selected source banks {list(preflight_arguments['selected_banks']) if preflight_arguments['selected_banks'] is not None else result.get('available_banks', [])}; each bank is analyzed separately"},
                 {
                     "label": "Available reductions",

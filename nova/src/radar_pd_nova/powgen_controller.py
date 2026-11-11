@@ -242,6 +242,9 @@ def preflight_powgen_experiment(
         review = selection_stats.get("identity_review") or {}
         return {"ready": False, "source_directory": definition.source_directory,
                 "scan_count": 0, "total_scan_count": total,
+                "excluded_count": excluded_count,
+                "reviewed_scan_count": selection_stats["reviewed_scan_count"],
+                "run_review_complete": selection_stats["run_review_complete"],
                 "metadata_resolution": [{"run_number": n, "status": "needs_review", "sample_id": "",
                     "actions": [{"message": reason}]} for n, reason in review.items()],
                 "metadata_notices": (["Candidate runs were excluded because their source identities need review."] if review else []),
@@ -307,6 +310,8 @@ def preflight_powgen_experiment(
         "ready": not errors, "source_directory": definition.source_directory,
         "scan_count": len(runs), "analysis_count": analysis_count, "total_scan_count": total,
         "excluded_count": excluded_count,
+        "reviewed_scan_count": selection_stats["reviewed_scan_count"],
+        "run_review_complete": selection_stats["run_review_complete"],
         "bank_excluded_count": bank_excluded_count,
         "review_runs": [{"run_number": r.run_number, **run_role(r)} for r in runs],
         "first_run": runs[0].run_id if runs else "", "latest_run": latest.run_id if latest else "",

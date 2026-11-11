@@ -148,6 +148,7 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
     notices.insert(0,'Supplied NOMAD profile is not automatically scientifically validated; outputs require scientific review')
     return {'ready':not errors,'source_directory':definition.source_directory,'scan_count':len(runs),
         'total_scan_count':total,'excluded_count':excluded,'analysis_count':len(mapping),
+        'reviewed_scan_count':stats['reviewed_scan_count'],'run_review_complete':stats['run_review_complete'],
         'available_banks':sorted(available), 'bank_details':[{'bank':b.bank,'angle':b.angle,
             'approx_d_min':b.minimum_tof/b.difc,'approx_d_max':b.maximum_tof/b.difc,
             'quality_errors':sorted(bank_quality.get(b.bank,()))} for b in (setups[-1].banks if setups else [])],

@@ -3,6 +3,26 @@
 from trame.widgets import html, vuetify3 as vuetify
 
 
+def run_review_summary(result):
+    """Describe the checked selection without implying a complete IPTS audit."""
+    excluded = result.get('excluded_count', 0)
+    reviewed = result.get('reviewed_scan_count')
+    first = f'{excluded} excluded by run role or individual selection'
+    if reviewed is not None:
+        first += f" among {reviewed} candidate {'scan' if reviewed == 1 else 'scans'} checked for selection"
+    parts = [first + '.']
+    if result.get('run_review_complete') is False:
+        parts.append('Older candidates were not all checked after reaching the initial scan limit.')
+    samples = result.get('sample_filtered_count', 0)
+    if samples:
+        parts.append(f"{samples} {'scan belongs' if samples == 1 else 'scans belong'} to other samples.")
+    omitted = result.get('backfill_omitted_count', 0)
+    if omitted:
+        parts.append(f"{omitted} additional matching {'scan is' if omitted == 1 else 'scans are'} outside this initial batch.")
+    parts.append('Unclassified titles remain included.')
+    return ' '.join(parts)
+
+
 def run_exclusions_control(*, label, disabled, closable_chips=False, hint=None):
     options = "powgen_run_options.filter(r => powgen_processing_scope === 'all' || powgen_processing_sample_ids.includes(r.sample_id))"
     kwargs = dict(hint=hint, persistent_hint=True) if hint else {}
