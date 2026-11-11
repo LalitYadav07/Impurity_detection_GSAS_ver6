@@ -1305,7 +1305,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         self._refinement_checkpoint_task = None
         self._refinement_checkpoint_dirty = False
         self._refinement_selection_token = ""
-        self._refinement_view_cache.clear()
+        self._refinement_view_cache = {}
+        self._refinement_trend_cache = {}
+        self._refinement_trend_cache_bytes = 0
         self._refinement_sha_cache.clear()
         for name, value in self._refinement_state_defaults().items():
             setattr(state, name, deepcopy(value))

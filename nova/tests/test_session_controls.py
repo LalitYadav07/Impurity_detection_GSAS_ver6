@@ -64,6 +64,8 @@ def test_clear_workspace_releases_run_memory_and_disarms_future_work():
     app.utility_actions["old"] = object()
     app._powgen_sample_indexes["PG3:2767"] = object()
     app._refinement_view_cache["old"] = {"large": [1, 2, 3]}
+    app._refinement_trend_cache["old"] = ({"parameters": [1, 2, 3]}, 128)
+    app._refinement_trend_cache_bytes = 128
     app._post_analysis_scans = [{"run_id": "PG3_1"}]
     state.run_rows = [{"uid": "old"}]
     state.selected_run_uid = "old"
@@ -79,6 +81,7 @@ def test_clear_workspace_releases_run_memory_and_disarms_future_work():
 
     assert not app.records and not app.utility_actions
     assert not app._powgen_sample_indexes and not app._refinement_view_cache
+    assert not app._refinement_trend_cache and app._refinement_trend_cache_bytes == 0
     assert not app._post_analysis_scans
     assert workspace.paused == ["PG3:2767"] and workspace.checkpoints == 1
     assert workspace.state["jobs"]["waiting"]["status"] == "paused"

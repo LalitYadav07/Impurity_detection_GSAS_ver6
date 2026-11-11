@@ -35,6 +35,9 @@ def build(records):
             self.reads.append(name)
             if name not in views:raise FileNotFoundError(name)
             return deepcopy(views[name])
+        def _read_refinement_trend_view(self,job,name):
+            from gpx_recipe.worker import trend_view
+            return trend_view(self._read_refinement_view(job,name))
     app=App();app.reads=[]
     app.server=SimpleNamespace(state=State(**app._refinement_state_defaults()))
     app._refinement_workspace=SimpleNamespace(state={'jobs':jobs,'recipes':recipes})

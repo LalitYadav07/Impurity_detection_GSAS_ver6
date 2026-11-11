@@ -29,6 +29,18 @@ from .recipe_presentation import explicit_edit_lines
 
 
 REFINEMENT_PROGRESS_SECONDS = 1.0
+# Bound both entry count and serialized metadata size. Raw pattern arrays
+# remain in the separate, smaller full-view cache used for individual fits.
+REFINEMENT_TREND_CACHE_ENTRIES = 512
+REFINEMENT_TREND_CACHE_BYTES = 32 * 1024 * 1024
+
+
+def _refinement_view_reference(job,name):
+    root=Path(job['result']['directory']).resolve();path=(root/name).resolve()
+    expected=job['result']['files'].get(name)
+    if not expected or not path.is_relative_to(root):raise ValueError('This view is not in the verified refinement receipt')
+    stat=path.stat()
+    return path,expected,(str(path),stat.st_mtime_ns,stat.st_size,expected)
 
 
 def refinement_transport_label(runtime_kind):
@@ -401,6 +413,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _init_refinement(self):
         self._refinement_workspace=None;self._refinement_tasks=set();self._refinement_refresh_task=None;self._refinement_queue_task=None
         self._refinement_sha_cache={};self._refinement_view_cache={};self._refinement_selection_token=''
+        self._refinement_trend_cache={};self._refinement_trend_cache_bytes=0
         self._refinement_refresh_again=False;self._refinement_internal=False
         self._refinement_checkpoint_task=None;self._refinement_checkpoint_dirty=False
         self._refinement_approving=False
@@ -1180,16 +1193,38 @@ class RefinementMixin(GuidedRefinementMixin):
                                   'radar-refinement-trend-select')
 
     def _read_refinement_view(self,job,name):
-        root=Path(job['result']['directory']).resolve();path=(root/name).resolve()
-        expected=job['result']['files'].get(name)
-        if not expected or not path.is_relative_to(root):raise ValueError('This view is not in the verified refinement receipt')
+        path,expected,stamp=_refinement_view_reference(job,name)
         from .refinement_sources import file_sha
-        stamp=(str(path),path.stat().st_mtime_ns,path.stat().st_size,expected)
-        if stamp not in self._refinement_view_cache:
+        # A reset replaces this dictionary while an old background read may
+        # still finish. Keep that late result out of the new workspace cache.
+        cache=self._refinement_view_cache
+        if stamp not in cache:
             if file_sha(path)!=expected:raise ValueError('The saved refinement view changed; recover its original output')
-            self._refinement_view_cache[stamp]=json.loads(path.read_text())
-            if len(self._refinement_view_cache)>30:self._refinement_view_cache.pop(next(iter(self._refinement_view_cache)))
-        return self._refinement_view_cache[stamp]
+            cache[stamp]=json.loads(path.read_text())
+            if len(cache)>30:cache.pop(next(iter(cache)))
+        return cache[stamp]
+
+    def _read_refinement_trend_view(self,job,name):
+        """Reuse verified compact records without retaining full curve arrays."""
+        from gpx_recipe.worker import trend_view
+        _,_,stamp=_refinement_view_reference(job,name)
+        cache=getattr(self,'_refinement_trend_cache',None)
+        if cache is None:
+            cache=self._refinement_trend_cache={};self._refinement_trend_cache_bytes=0
+        if stamp in cache:
+            item=cache.pop(stamp);cache[stamp]=item
+            return item[0]
+        compact=copy.deepcopy(trend_view(self._read_refinement_view(job,name)))
+        if _refinement_view_reference(job,name)[2]!=stamp:
+            raise ValueError('The saved refinement view changed during trend preparation')
+        if cache is not self._refinement_trend_cache:return compact
+        size=len(json.dumps(compact,separators=(',',':'),allow_nan=False).encode('utf-8'))
+        if size<=REFINEMENT_TREND_CACHE_BYTES:
+            cache[stamp]=(compact,size);self._refinement_trend_cache_bytes+=size
+            while len(cache)>REFINEMENT_TREND_CACHE_ENTRIES or self._refinement_trend_cache_bytes>REFINEMENT_TREND_CACHE_BYTES:
+                _,old_size=cache.pop(next(iter(cache)))
+                self._refinement_trend_cache_bytes-=old_size
+        return compact
 
     async def _select_refinement_job(self,uid,*,requested_stage=None,show_fit=False):
         s=self.server.state;w=self._refinement_workspace
@@ -1384,14 +1419,14 @@ class RefinementMixin(GuidedRefinementMixin):
                             if result.get('final_gpx'):unavailable+=1
                             else:no_final+=1
                             continue
-                        final=compact.get('final') or self._read_refinement_view(job,result['final_view'])
+                        final=compact.get('final') or self._read_refinement_trend_view(job,result['final_view'])
                     else:
                         stage=next((r for r in result.get('stages',[]) if r['id']==selection['stage_id']),None)
                         if not stage:
                             missing_stage+=1
                             continue
-                        final=self._read_refinement_view(job,stage['view'])
-                    baseline=compact.get('baseline') or self._read_refinement_view(job,result['baseline_view'])
+                        final=self._read_refinement_trend_view(job,stage['view'])
+                    baseline=compact.get('baseline') or self._read_refinement_trend_view(job,result['baseline_view'])
                     view=result.get('final_view') if selected_stage=='final' else stage['view']
                     point=dict(job_id=job['id'],recipe_id=rid,stage=selection['stage_id'] or 'final',
                         trend_stage=selected_stage,source_sha256=job['source'].get('source_sha256'),
