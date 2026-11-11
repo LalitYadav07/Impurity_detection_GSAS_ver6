@@ -1,0 +1,115 @@
+<tool id="neutrons_radar_pd_model_campaign_prototype" name="RADAR-PD Utility: Model Campaign" version="0.3.4" profile="22.05">
+    <description>run reviewed planning, preparation, training and model jobs with allocated resources</description>
+    <requirements><container type="docker">@IMMUTABLE_MODELS_IMAGE@</container></requirements>
+    <command detect_errors="exit_code"><![CDATA[
+        touch '$result_bundle' '$console_output' '$preparation_certificate' &&
+        trap "chmod a+r '$result_bundle' '$console_output' '$preparation_certificate' >/dev/null 2>&1 || true" EXIT &&
+        #if $model_request_b64 and $model_request
+            echo 'Supply exactly one reviewed request source' >&2; exit 1
+        #elif $model_request_b64
+            python '$request_decoder' '$inline_request' decoded-model-request.json &&
+            python /opt/radar-symmetry/ndip_model_campaign.py '$action' '$source_gpx' '$model_assets' decoded-model-request.json worker '$result_bundle' \
+            #if $model_asset_parts
+                #for $part in $model_asset_parts
+                    --asset-part '$part' \
+                #end for
+            #end if
+                --preparation-evidence '$preparation_provenance' --preparation-certificate '$preparation_certificate' > '$console_output' 2>&1 &&
+            python -m gpx_recipe.preparation.certificates '$preparation_certificate'
+        #elif $model_request
+            python /opt/radar-symmetry/ndip_model_campaign.py '$action' '$source_gpx' '$model_assets' '$model_request' worker '$result_bundle' \
+            #if $model_asset_parts
+                #for $part in $model_asset_parts
+                    --asset-part '$part' \
+                #end for
+            #end if
+                --preparation-evidence '$preparation_provenance' --preparation-certificate '$preparation_certificate' > '$console_output' 2>&1 &&
+            python -m gpx_recipe.preparation.certificates '$preparation_certificate'
+        #else
+            echo 'Supply one reviewed request source' >&2; exit 1
+        #end if
+    ]]></command>
+    <configfiles>
+@PREPARATION_PROVENANCE@
+        <configfile name="inline_request">$model_request_b64</configfile>
+        <configfile name="request_decoder"><![CDATA[import base64, json, pathlib, sys
+source, target = map(pathlib.Path, sys.argv[1:])
+if source.stat().st_size > 6 * 1024 * 1024:
+    raise ValueError('Encoded model request exceeds its size bound')
+raw = source.read_bytes().strip()
+decoded = base64.b64decode(raw, validate=True)
+if len(decoded) > 4 * 1024 * 1024:
+    raise ValueError('Decoded model request exceeds its 4 MiB size bound')
+if not isinstance(json.loads(decoded), dict):
+    raise ValueError('A model request must be one JSON object')
+if target.is_symlink():
+    raise ValueError('The decoded request path must not be a symlink')
+if target.exists():
+    if target.read_bytes() != decoded:
+        raise ValueError('A different request already occupies the decoded path')
+else:
+    with target.open('xb') as stream:
+        stream.write(decoded)
+]]></configfile>
+    </configfiles>
+    <inputs>
+        <param name="action" type="select" label="Reviewed model operation">
+            <option value="native">Inspect, simulate, prepare or train</option>
+            <option value="admission">Validate a prepared structural library for this scan</option>
+            <option value="chunk">Run a finite chunk of approved starts</option>
+        </param>
+        <param name="source_gpx" type="data" format="binary,txt" label="Captured source dataset (GPX, CIF or prepared inputs)"/>
+        <param name="model_assets" type="data" format="zip" label="Captured scientific inputs"/>
+        <param name="model_asset_parts" type="data" format="zip" multiple="true" optional="true" label="Additional structural training input parts (NOVA supplies these automatically)"/>
+        <param name="preparation_evidence" type="data" format="json" multiple="true" optional="true" label="Native preparation origin receipts (NOVA supplies these automatically)"/>
+        <param name="model_request" type="data" format="json" optional="true" label="Reviewed model request dataset (legacy transport)"/>
+        <param name="model_request_b64" type="text" value="" optional="true" label="NOVA encoded model request">
+            <validator type="regex" message="Use the NOVA-generated base64 request">^[A-Za-z0-9+/=]*$</validator>
+        </param>
+        <param name="dispatch_key" type="text" label="NOVA dispatch identity">
+            <validator type="regex" message="Use the NOVA-generated dispatch key">^[a-f0-9]{24}$</validator>
+        </param>
+    </inputs>
+    <outputs>
+        <data name="result_bundle" format="zip" label="RADAR-PD model ${dispatch_key} results"/>
+        <data name="console_output" format="txt" label="RADAR-PD model ${dispatch_key} console"/>
+        <data name="preparation_certificate" format="json" hidden="true" label="RADAR-PD native preparation receipt ${dispatch_key}"/>
+        <collection name="verified_projects" type="list" label="Qualified model GPXs ${dispatch_key}">
+            <discover_datasets pattern="verified_(?P&lt;designation&gt;[a-f0-9]+)\.gpx" ext="binary" directory="worker/verified_projects" visible="true"/>
+        </collection>
+        <collection name="reviewable_projects" type="list" label="Structural point-fit GPXs (review required) ${dispatch_key}">
+            <discover_datasets pattern="reviewable_(?P&lt;designation&gt;[a-f0-9]+)\.gpx" ext="binary" directory="worker/reviewable_projects" visible="true"/>
+        </collection>
+    </outputs>
+    <help><![CDATA[
+NOVA captures typed, reviewed inputs for simulation, reusable preparation, training or a finite model search.
+Planner and preparation calculations use the same managed native worker; each operation validates its own input contract.
+Prepared structural-library admission checks the current parent, instrument, grid and stored modes without running refinements. It returns a validation receipt, not a new GPX.
+Simulated patterns are not treated as measured experiment data.
+The fast fixed-geometry magnetic optimizer prepares one subgroup in an isolated
+process and screens its complete reviewed start portfolio against one checked
+surrogate. Distinct calculated profiles are independently verified with GSAS-II.
+Equivalent screened starts retain their own moment solutions and reference a
+native-verified representative; they are not separate verified GPX files.
+Other refinement modes retain independent fresh-process starts. Workers respect
+GALAXY_SLOTS, memory and container CPU quotas; absent allocation information
+permits one worker.
+Unstarted trials remain pending at the chunk deadline. Every result retains its
+disposition, source and protocol hashes. Only independently audited, qualified
+projects appear in the output collection. A low Rwp does not establish a structure.
+No model API credential, Galaxy key, Python script or network request is accepted
+as an input. Discovery and planning run separately in NOVA.
+NOVA can send the closed request as a sanitized base64 parameter, decoded into
+a bounded JSON data file. The same native validation applies; no per-chunk
+request upload is required. Existing uploaded JSON requests remain supported.
+Independent starts share only the CPU and memory allocated to their Galaxy job.
+NOVA separately limits concurrent batches across scans; visible host cores do
+not authorize additional native workers.
+
+Native preparation receipts bind exact array bytes to their creating job.
+NOVA passes selected receipts separately from scientific requests; the fixed
+Galaxy template supplies actual creating-job metadata. Missing or incompatible
+receipts require native requalification and never relax scientific checks.
+Large structural-training inputs may arrive as checked additional ZIP parts.
+    ]]></help>
+</tool>

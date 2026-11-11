@@ -1,18 +1,22 @@
-<tool id="neutrons_radar_pd_live_snapshot_prototype" name="RADAR-PD Utility: Live Snapshot Analysis" version="0.1.1" profile="22.05">
+<tool id="neutrons_radar_pd_live_snapshot_prototype" name="RADAR-PD Utility: Live Snapshot Analysis" version="0.1.7" profile="22.05">
     <description>analyze one immutable provisional scan against a reviewed nuclear reference</description>
     <requirements><container type="docker">@IMMUTABLE_MODELS_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[
         touch '$result_bundle' '$response_cache_output' '$console_output' &&
         trap "chmod a+r '$result_bundle' '$response_cache_output' '$console_output' >/dev/null 2>&1 || true" EXIT &&
-        python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output'
+        python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output' --preparation-evidence '$preparation_provenance' #slurp
         #if $response_cache
-            --cache '$response_cache'
+            --cache '$response_cache' #slurp
         #end if
         > '$console_output' 2>&1
     ]]></command>
+    <configfiles>
+@PREPARATION_PROVENANCE@
+    </configfiles>
     <inputs>
         <param name="packet" type="data" format="zip" label="Reviewed source, observations and magnetic settings"/>
         <param name="response_cache" type="data" format="zip" optional="true" label="Compatible native response cache"/>
+        <param name="preparation_evidence" type="data" format="json" multiple="true" optional="true" label="Native preparation origin receipts (NOVA supplies these automatically)"/>
         <param name="dispatch_key" type="text" label="NOVA dispatch identity">
             <validator type="regex" message="Use the NOVA-generated dispatch key">^[a-f0-9]{24}$</validator>
         </param>
@@ -35,5 +39,8 @@ The result reports conditional uncertainty and sampling diagnostics. It does
 not establish a phase, calibrated stopping decision or a converged conventional
 Rietveld refinement. Published GPXs represent the verified displayed parameter
 values; the original source is preserved. No model API credential is required.
+
+Prepared model inputs use the same creating-job evidence contract as Model
+Campaign. A receipt alone does not qualify another geometry, bank or data set.
     ]]></help>
 </tool>

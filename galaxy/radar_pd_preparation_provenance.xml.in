@@ -1,0 +1,13 @@
+        <configfile name="preparation_provenance"><![CDATA[#import json
+#set records = []
+#if $preparation_evidence
+    #for certificate in $preparation_evidence
+        #set dataset = $certificate.unsanitized
+        #set job = getattr($dataset, 'creating_job', None)
+        #set markers = [line for line in str(getattr($job, 'stdout', '')).splitlines() if line.startswith('[RADAR PREPARATION CERTIFICATE] ')]
+        #set record = dict(certificate_path=str($certificate), tool_id=str(getattr($job, 'tool_id', '')), tool_version=str(getattr($job, 'tool_version', '')), job_state=str(getattr($job, 'state', '')), dataset_state=str(getattr($dataset, 'state', '')), dataset_deleted=bool(getattr($dataset, 'deleted', True)), dataset_purged=bool(getattr($dataset, 'purged', True)), job_stdout='\n'.join($markers))
+        #set ignored = $records.append($record)
+    #end for
+#end if
+$json.dumps(dict(schema='radar-galaxy-preparation-evidence/v1', records=$records), sort_keys=True)
+]]></configfile>

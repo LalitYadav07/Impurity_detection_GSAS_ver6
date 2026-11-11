@@ -15,6 +15,11 @@ on:
       - scripts/ndip_model_campaign.py
       - scripts/ndip_runtime.py
       - scripts/ndip_symmetry.py
+      - scripts/render_radar_pd_preparation_tools.py
+      - galaxy/radar_pd_model_campaign.xml.in
+      - galaxy/radar_pd_live_snapshot.xml.in
+      - galaxy/radar_pd_preparation_provenance.xml.in
+      - tests/test_preparation_tool_contract.py
       - .github/workflows/publish-models-to-ghcr.yaml
   workflow_dispatch:
     inputs:
@@ -150,7 +155,7 @@ jobs:
       - name: Verify resource, protocol and runtime gates
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
-          python -m pip install --quiet pytest &&
+          python -m pip install --quiet pytest "Cheetah3>=3.2.6,<4" &&
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" RADAR_REQUIRE_STRUCTURAL_NATIVE=1 &&
           python -c "import GSASII.GSASIIscriptable, torch" &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
@@ -197,6 +202,7 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_background_context.py \
             /validation/tests/gpx_recipe/test_quadratic_qualification.py \
             /validation/tests/gpx_recipe/test_preparation_authority.py \
+            /validation/tests/test_preparation_tool_contract.py \
             /validation/tests/gpx_recipe/test_live_preparation_authority.py \
             /validation/tests/gpx_recipe/test_preparation_batch.py \
             /validation/tests/gpx_recipe/test_preparation_batch_cancellation.py \

@@ -260,6 +260,8 @@ jobs:
           PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
             /validation-tests/test_workspace_navigation.py \
             /validation-tests/test_session_controls.py \
+            /validation-tests/test_session_preparation_clear.py \
+            /validation-tests/test_live_restore_clear.py \
             /validation-tests/test_session_navigation.py \
             /validation-tests/test_planning_runtime.py \
             /validation-tests/test_planning_bundle.py \

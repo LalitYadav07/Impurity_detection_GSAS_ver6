@@ -2324,3 +2324,31 @@ These component checks preceded joint-head training and publication. The
 current joint-training path and full-data qualification status are described
 in Current development status above. Component losses do not establish
 experimental mode presence or absence. Deployment pins remain unchanged.
+
+### Coordinated preparation-origin tool definitions
+
+The application source now carries the preparation-capable Model Campaign
+0.3.4 and Live Snapshot 0.1.7 templates in `galaxy/`, with one shared
+`radar_pd_preparation_provenance.xml.in` fragment. Render both against the same
+successful immutable Model image with
+`scripts/render_radar_pd_preparation_tools.py IMAGE OUTPUT_DIRECTORY`. This
+only writes local XML files; it does not install a tool or change Galaxy.
+
+The Model definition retains native, structural-admission and finite-chunk
+operations, accepts additional training ZIP parts, publishes the hidden native
+preparation certificate, and announces its digest through creating-job stdout.
+Both definitions obtain provenance from Galaxy's actual selected datasets and
+creating jobs, separately from uploaded scientific request data. This restores
+the receipt handoff omitted by the later 0.3.0–0.3.3 Model definitions. Those
+versions remain outside the trusted producer allowlist. The original reviewed
+0.2.17 and 0.2.18 producers remain recognized, subject to the same complete
+scientific-package and artifact checks.
+
+Template tests execute the real Cheetah command branches, including both
+request transports, multipart inputs, optional Live response caches and the
+certificate announcement. They also check that the rendered Model version is
+recognized by the native origin verifier. Native tests use the new producer
+version while retaining all incompatible-context and modified-asset controls.
+None of these local checks establishes an NDIP deployment or an actual site
+CPU/GPU allocation. Deployment still requires successful image gates, aligned
+immutable pins, and a fresh same-History preparation/reuse test on NDIP.

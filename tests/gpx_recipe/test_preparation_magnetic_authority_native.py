@@ -176,7 +176,7 @@ def test_cold_authenticated_magnetic_reuse_keeps_current_physics_and_all_fit_che
     assert not list(restored.root.rglob('*.gpx'))
     envelope=tmp_path/'server.json'
     write_json(envelope,dict(schema=authority.SCHEMA,records=[dict(certificate_path=str(certificate),
-        tool_id='neutrons_radar_pd_model_campaign_prototype',tool_version='0.2.17',job_state='ok',dataset_state='ok',
+        tool_id='neutrons_radar_pd_model_campaign_prototype',tool_version='0.3.4',job_state='ok',dataset_state='ok',
         dataset_deleted=False,dataset_purged=False,job_stdout=certificates.MARKER+file_sha(certificate)+'\n')]))
     script=tmp_path/'consumer.py';script.write_text(CONSUMER);results={}
     cases=[('certified','same',str(envelope)),('uncertified','same','none'),('fresh','fresh','none'),
