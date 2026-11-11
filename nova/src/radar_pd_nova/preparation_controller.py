@@ -25,6 +25,7 @@ from .preparation_discovery import PreparationDiscovery,k_vector,require_structu
 from .preparation_workspace import PreparationWorkspace
 from .preparation_registry import PreparationRegistry
 from .preparation_limits import PREPARATION_JOBS
+from .preparation_coordinates import convert_limits,native_range_label
 from .uploads import inspect_cif_upload
 
 
@@ -55,10 +56,12 @@ class PreparationMixin:
         self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
         self._prep_input_revision=0
         self._prep_profile_handoff=None
+        self._prep_range_axis='native'
         s=self.server.state
         values=dict(prep_busy=False,prep_operation='',prep_error='',prep_message='',prep_tab='new',
             prep_name='Experiment preparation',prep_parent_path='',prep_profile_path='',prep_bank_label='',
             prep_profile_bank='1',prep_grid_kind='PNT',prep_lower='3000',prep_upper='180000',prep_bins='2500',
+            prep_range_coordinate='native',prep_range_message='',
             prep_bank_rows=[],prep_reference='',prep_reference_options=[],prep_context_ready=False,prep_parent_title='',
             prep_kind='magnetic',prep_k_options=[],prep_selected_k=[],prep_custom_k='',prep_site_options=[],prep_sites=[],
             prep_site_rows=[],prep_maximum_moment='6',prep_mode_radius='.05',prep_cell_radius=format(DEFAULT_CELL_RADIUS,'g'),
@@ -81,6 +84,7 @@ class PreparationMixin:
         s.change('prep_library')(self._preparation_library_changed)
         s.change('prep_page','prep_entry_filter','prep_stage_filter','prep_entry_search')(self._preparation_table_changed)
         s.change('prep_profile_path')(self._preparation_profile_changed)
+        s.change('prep_range_coordinate')(self._preparation_range_coordinate_changed)
 
     def _preparation_root(self):
         base=Path(os.environ.get('RADAR_PD_PREPARATION_ROOT') or
@@ -229,9 +233,28 @@ class PreparationMixin:
             return
         self._prep_profile_handoff=None
         if found:
+            self._prep_range_axis='native';s.prep_range_coordinate='native';s.prep_range_message=''
             s.prep_grid_kind=kind
             s.prep_lower='10' if s.prep_grid_kind=='PNC' else '3000'
             s.prep_upper='160' if s.prep_grid_kind=='PNC' else '180000'
+
+    def _preparation_range_coordinate_changed(self,**_):
+        s=self.server.state;previous=self._prep_range_axis
+        selected=s.prep_range_coordinate
+        if selected==previous:return
+        self._prep_range_axis=selected
+        try:
+            path=checked_upload(self._prep_profile_upload,s.prep_profile_path)
+            values=convert_limits(path,kind=s.prep_grid_kind,
+                bank=finite_number(s.prep_profile_bank,integer=True),source=previous,target=selected,
+                lower=finite_number(s.prep_lower),upper=finite_number(s.prep_upper),expected_sha256=file_sha(path))
+            s.prep_lower,s.prep_upper=[format(value,'.17g') for value in values]
+            s.prep_range_message='Limits converted with the selected profile block. The calculation grid remains in native instrument coordinates.'
+        except (ValueError,OSError) as exc:
+            # Never relabel existing TOF values as Angstroms (or vice versa).
+            s.prep_lower='';s.prep_upper=''
+            s.prep_range_message='Enter both limits in the selected coordinate. '+str(exc)
+        s.flush()
 
     def add_preparation_bank(self,**_):
         s=self.server.state
@@ -239,16 +262,21 @@ class PreparationMixin:
             if len(self._prep_banks)>=64:raise ValueError('One inspection supports up to 64 bank contexts')
             path=checked_upload(self._prep_profile_upload,s.prep_profile_path)
             if path.suffix.lower() not in {'.instprm','.prm','.ins','.inst'}:raise ValueError('Choose a supported GSAS-II instrument profile')
-            grid=validate_grid(kind=s.prep_grid_kind,lower=finite_number(s.prep_lower),upper=finite_number(s.prep_upper),
-                bins=finite_number(s.prep_bins,integer=True),bank=finite_number(s.prep_profile_bank,integer=True))
+            checksum=file_sha(path);bank=finite_number(s.prep_profile_bank,integer=True)
+            lower,upper=convert_limits(path,kind=s.prep_grid_kind,bank=bank,
+                source=s.prep_range_coordinate,target='native',lower=finite_number(s.prep_lower),
+                upper=finite_number(s.prep_upper),expected_sha256=checksum)
+            grid=validate_grid(kind=s.prep_grid_kind,lower=lower,upper=upper,
+                bins=finite_number(s.prep_bins,integer=True),bank=bank)
             label=s.prep_bank_label.strip() or path.stem+' · bank '+str(grid['bank'])
             if len(label)>100 or label in self._prep_banks:raise ValueError('Give each bank a unique name, up to 100 characters')
             destination=self._preparation_store().root/'uploads'/(uuid.uuid4().hex+path.suffix.lower())
-            destination.parent.mkdir(parents=True,exist_ok=True);capture_file(path,destination,maximum=1024*1024)
+            destination.parent.mkdir(parents=True,exist_ok=True);capture_file(path,destination,maximum=1024*1024,expected_sha256=checksum)
             self._prep_banks[label]=dict(instrument=destination,grid=grid)
             self._prep_bank_names[label]=path.name
             s.prep_bank_rows=[dict(label=k,profile=self._prep_bank_names.get(k,v['instrument'].name),bank=v['grid']['bank'],kind=v['grid']['kind'],
-                range=f"{v['grid']['lower']:g}–{v['grid']['upper']:g}") for k,v in self._prep_banks.items()]
+                range=native_range_label(v['grid'])) for k,v in self._prep_banks.items()]
+            s.prep_range_message='Captured native calculation range: '+native_range_label(grid)+'. No measured data were resampled.'
             s.prep_bank_label='';s.prep_error='';self._preparation_inputs_changed()
         except ValueError as exc:s.prep_error=str(exc)
         s.flush()
@@ -664,6 +692,6 @@ class PreparationMixin:
         self._prep_banks={};self._prep_bank_names={};self._prep_queue_errors={}
         self._prep_context=None;self._prep_catalogs=[];self._prep_discovered_identity=None
         self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
-        self._prep_profile_handoff=None;self._prep_input_revision+=1
+        self._prep_profile_handoff=None;self._prep_range_axis='native';self._prep_input_revision+=1
         for key,value in self._prep_reset_values.items():
             setattr(self.server.state,key,copy.deepcopy(value))

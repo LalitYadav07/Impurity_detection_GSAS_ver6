@@ -51,6 +51,20 @@ def test_reviewed_tof_range_and_native_bank_grid_stay_equal_after_reactive_flush
     assert [float(state.prep_lower),float(state.prep_upper)]==[bank['lower'],bank['upper']]
 
 
+def test_planner_handoff_replaces_old_range_units_without_reconverting_its_native_limits(tmp_path):
+    app,state,_,_=handoff(tmp_path)
+    state.prep_range_coordinate='q_inv_angstrom';state.flush()
+    assert state.prep_range_coordinate=='q_inv_angstrom'
+    app.use_planning_inputs_for_preparation();state.flush()
+    assert state.plan_handoff_can_apply,state.plan_handoff_error
+    expected=app._planning_handoff_mapping(app._planning_pending_handoff)
+    app.confirm_planning_handoff();state.flush()
+    assert state.prep_range_coordinate==app._prep_range_axis=='native'
+    assert [float(state.prep_lower),float(state.prep_upper)]==expected['tof_range_microseconds']
+    grid=next(iter(app._prep_banks.values()))['grid']
+    assert [grid['lower'],grid['upper']]==expected['tof_range_microseconds']
+
+
 def test_new_upload_with_identical_bytes_still_uses_ordinary_profile_defaults(tmp_path):
     app,state,_,_=handoff(tmp_path)
     old=app._prep_profile_upload.current_path

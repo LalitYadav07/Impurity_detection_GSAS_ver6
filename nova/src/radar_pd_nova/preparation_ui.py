@@ -51,11 +51,15 @@ def inputs_panel(app):
                 with v.VCol(cols=12,md=4):v.VSelect(label='Profile type',v_model=('prep_grid_kind',),items=("[{title:'Time of flight',value:'PNT'},{title:'Constant wavelength',value:'PNC'}]",),variant='outlined',density='compact',disabled=('prep_busy',))
             with html.Details(classes='mb-3'):
                 html.Summary('Expected calculation range and grid',style='cursor:pointer')
-                html.P('This defines a reference calculation, not measured counts. Changing the actual range or instrument later can require new rendering. TOF values are microseconds; constant-wavelength values are degrees 2θ.',classes='text-body-2')
+                html.P('This defines a reference calculation, not measured counts. Enter native, d-spacing or Q limits; conversion uses the selected profile block. The generated grid remains in TOF or 2θ. Changing the actual range or instrument later can require new rendering.',classes='text-body-2')
+                v.VSelect(label='Range coordinate',v_model=('prep_range_coordinate',),
+                    items=("[{title:prep_grid_kind === 'PNT' ? 'Time of flight (µs)' : '2θ (°)',value:'native'},{title:'d-spacing (Å)',value:'d_angstrom'},{title:'Q (Å⁻¹)',value:'q_inv_angstrom'}]",),
+                    variant='outlined',density='compact',disabled=('prep_busy',))
                 with v.VRow():
                     with v.VCol(cols=12,md=4):v.VTextField(label='Lower limit',v_model=('prep_lower',),type='text',inputmode='decimal',variant='outlined',density='compact',disabled=('prep_busy',))
                     with v.VCol(cols=12,md=4):v.VTextField(label='Upper limit',v_model=('prep_upper',),type='text',inputmode='decimal',variant='outlined',density='compact',disabled=('prep_busy',))
                     with v.VCol(cols=12,md=4):v.VTextField(label='Reference bins',v_model=('prep_bins',),type='text',inputmode='numeric',variant='outlined',density='compact',disabled=('prep_busy',))
+                html.P('{{ prep_range_message }}',v_if='!!prep_range_message',classes='text-body-2',raw_attrs=['aria-live="polite"'])
             v.VBtn('Add bank context',click=app.add_preparation_bank,disabled=('prep_busy || !prep_profile_path',),variant='outlined',prepend_icon='mdi-plus')
         with html.Div(v_for='bank in prep_bank_rows',key='bank.label',classes='d-flex align-center my-2',style='gap:12px;flex-wrap:wrap'):
             html.Span('{{ bank.label }} · {{ bank.profile }} · profile bank {{ bank.bank }} · {{ bank.kind }} · {{ bank.range }}',classes='text-body-2')

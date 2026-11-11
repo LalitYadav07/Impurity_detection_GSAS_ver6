@@ -27,7 +27,7 @@ from .uploads import inspect_cif_upload,store_browser_upload
 
 SCHEMA='radar-planner-input-handoff/v1'
 PREPARATION_FIELDS=('prep_name','prep_parent_path','prep_profile_path','prep_profile_bank',
-    'prep_grid_kind','prep_lower','prep_upper','prep_bins','prep_bank_label','prep_reference','prep_kind',
+    'prep_grid_kind','prep_range_coordinate','prep_lower','prep_upper','prep_bins','prep_bank_label','prep_reference','prep_kind',
     'prep_selected_k','prep_sites','prep_site_rows','prep_custom_k','prep_opd_policy','prep_construct_limit')
 SINGLE_FIELDS=('radiation','instrument_mode','main_cif_source','main_cif_path','instrument_source',
     'instrument_path','fit_start','fit_end','bank','input_source','data_path','history_data_id','ipts','run_number')
@@ -344,6 +344,7 @@ class PlanningHandoffMixin:
         self._planning_install_upload(uploads['source'],'prep_parent_path',parent_widget)
         self._planning_install_upload(uploads['profile'],'prep_profile_path',profile_widget)
         s.prep_name=(str(s.plan_name).strip()+' · preparation')[:160]
+        self._prep_range_axis='native';s.prep_range_coordinate='native';s.prep_range_message=''
         s.prep_profile_bank=str(mapping['profile_bank']);s.prep_grid_kind='PNT'
         s.prep_lower=format(mapping['tof_range_microseconds'][0],'.17g');s.prep_upper=format(mapping['tof_range_microseconds'][1],'.17g')
         s.prep_bins=str(mapping['bins']);label='POWGEN source bank '+str(mapping['source_bank'])
@@ -351,7 +352,7 @@ class PlanningHandoffMixin:
             bins=mapping['bins'],bank=mapping['profile_bank'])
         self._prep_banks={label:dict(instrument=destination,grid=grid)}
         self._prep_bank_names={label:pending['profile_name']}
-        s.prep_bank_rows=[dict(label=label,profile=pending['profile_name'],bank=grid['bank'],kind='PNT',range=f"{grid['lower']:g}–{grid['upper']:g}")]
+        s.prep_bank_rows=[dict(label=label,profile=pending['profile_name'],bank=grid['bank'],kind='PNT',range=f"{grid['lower']:g}–{grid['upper']:g} µs")]
         s.prep_bank_label='';s.prep_error='';self._preparation_inputs_changed()
         context=pending['transition_context']
         s.prep_kind='magnetic' if context['plan_transition'] in {'magnetic','mcif'} else 'structural'
