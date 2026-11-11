@@ -982,6 +982,21 @@ def collect_outputs(
         except Exception as exc:
             scientific_warnings.append({"code": "native_convergence_unavailable",
                 "message": f"Could not inspect native convergence for the retained candidate: {exc}"})
+        try:
+            try:
+                from .ndip_phase_models import same_composition_warnings
+            except ImportError:
+                from ndip_phase_models import same_composition_warnings
+            composition_labels = {
+                str(row['phase_id']): str(row.get('compound_name') or row['phase_id'])
+                + (f" ({row['space_group']})" if row.get('space_group') else '')
+                for row in phases if row.get('phase_id')
+            }
+            composition_labels.update(gpx_phase_labels)
+            scientific_warnings.extend(same_composition_warnings(_read_gpx_records(final_gpx), labels=composition_labels))
+        except Exception as exc:
+            scientific_warnings.append({'code': 'phase_composition_review_unavailable',
+                'message': f'Could not compare the fitted phase compositions: {exc}'})
     if lattice:
         lattice_path = portal / "tables" / "Final_lattice_parameters.csv"
         lattice_path.parent.mkdir(parents=True, exist_ok=True)
