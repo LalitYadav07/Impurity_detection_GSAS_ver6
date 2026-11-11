@@ -103,11 +103,19 @@ class RefinementWorkspace:
             if len(groups)==1:source.update(next(iter(groups.values())))
             return source
 
-    def observe(self,sources,*,active_live_ids=None,enroll_future=True):
+    def observe(self,sources,*,active_live_ids=None,enroll_future=True,manual=False):
         with self.lock:
             changed=False
             for value in sources:
                 source=self.canonical_source(value);old=self.state['sources'].get(source['id'])
+                # Opening an otherwise unobserved checkpoint for inspection
+                # does not make it a new acquisition for an armed recipe.
+                # A later real catalog observation may explicitly promote it.
+                if manual and (old is None or old.get('manual_recipe_input')
+                               or old.get('source_sha256')!=source.get('source_sha256')):
+                    source['manual_recipe_input']=True
+                else:
+                    source.pop('manual_recipe_input',None)
                 # A summary-only recovery lacks the reviewed Live condition
                 # channels and experiment/sample mapping. It must not erase
                 # that provenance for the same exact published checkpoint.
@@ -150,7 +158,7 @@ class RefinementWorkspace:
                         source['live_watch']=watched;changed=True
             if changed:
                 for recipe in self.state['recipes'].values():
-                    if enroll_future and recipe.get('armed'):
+                    if not manual and enroll_future and recipe.get('armed'):
                         self._enroll_future(recipe)
                 self.save()
         return changed
@@ -166,10 +174,10 @@ class RefinementWorkspace:
         def identity(source):
             run=source.get('run_number')
             return (source['experiment'],str(run),str(source.get('bank') or '')) if run is not None else None
-        monitored={identity(source) for source in values if source.get('live_watch') and identity(source) is not None}
+        monitored={identity(source) for source in values if source.get('live_watch') and not source.get('manual_recipe_input') and identity(source) is not None}
         superseded={source['model_parent_id'] for source in values if source.get('model_parent_id')}
         return [source for source in values if source['id'] not in superseded and
-                (source.get('model_parent_id') or source.get('live_watch') or identity(source) not in monitored)]
+                (source.get('manual_recipe_input') or source.get('model_parent_id') or source.get('live_watch') or identity(source) not in monitored)]
 
     def selection(self,scope,*,existing=True,future=False):
         with self.lock:
@@ -427,7 +435,7 @@ class RefinementWorkspace:
     def _enroll_future(self,recipe):
         scope=RefinementScope(**recipe['scope'])
         for source in self._available_sources():
-            if scope.matches(source) and source.get('observed_utc','')>recipe['approved_utc']:
+            if not source.get('manual_recipe_input') and scope.matches(source) and source.get('observed_utc','')>recipe['approved_utc']:
                 self._enqueue(recipe,source)
 
     def start(self,recipe_id,selection_token):

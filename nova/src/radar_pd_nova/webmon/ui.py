@@ -792,13 +792,15 @@ class WebmonMixin(StructuralLiveMixin):
 
     def _webmon_handoff_source(self,source,prompt):
         from ..refinement_controller import refinement_experiment_options
-        s=self.server.state;w=self._refinement_store();w.observe([source])
+        from ..refinement_sources import published_selection_key
+        s=self.server.state;w=self._refinement_store()
+        w.observe([source],enroll_future=False,manual=True)
         self._refinement_internal=True
         try:
             s.rf_experiments=[dict(title=v,value=k) for k,v in refinement_experiment_options(w).items()]
-            s.rf_experiment=source['experiment'];s.rf_source=source['id'];s.rf_scope='scans';s.rf_scans=[source['scan_key']]
+            s.rf_experiment=source['experiment'];s.rf_source=source['id'];s.rf_scope='scans';s.rf_scans=[published_selection_key(source)]
             s.rf_samples=[];s.rf_banks=[];s.rf_existing=True;s.rf_future=False;s.rf_mode='recipe';s.rf_selected_job=''
-            s.rf_request=prompt;s.experiment_result_view='refinement';s.flush()
+            s.rf_setup_mode='expert';s.rf_request=prompt;s.experiment_result_view='refinement';s.flush()
         finally:self._refinement_internal=False
         self._refinement_sync();self.inspect_refinement_project()
 

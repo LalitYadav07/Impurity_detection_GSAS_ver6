@@ -70,7 +70,7 @@ def refinement_dashboard(app):
             with html.Div(v_for='metric in rf_metrics',key='metric.label',classes='rf-stat'):
                 html.Strong('{{ metric.value }}');html.Span('{{ metric.label }}')
             html.Span('{{ rf_transport }}',classes='rf-muted')
-            v.VChip('Future matching scans enrolled',v_if='rf_future_armed',color='#157347',size='small',variant='tonal',prepend_icon='mdi-access-point')
+            v.VChip('Saved recipe follows new scans',v_if='rf_future_armed',color='#157347',size='small',variant='tonal',prepend_icon='mdi-access-point')
         with html.Details(v_if="rf_mode !== 'models' && rf_transport === 'Galaxy scientific jobs'",classes='rf-card mb-3'):
             html.Summary('Polishing compute budget')
             select('Concurrent polishing jobs','rf_parallel_jobs','[1,2,4]',disabled=('rf_queue_running',),classes='mt-3')
@@ -124,7 +124,7 @@ def refinement_dashboard(app):
                     v.VBtn('Use saved recipe',click=app.reuse_refinement_recipe,disabled=('rf_busy || rf_guided_busy || !rf_saved_recipe || !rf_source',),variant='outlined',size='small')
                 html.P('{{ rf_active_summary }}',v_if='!!rf_active_summary',classes='rf-notice')
                 with html.Div(v_if="rf_future || rf_future_armed || rf_approved",classes='rf-toolbar'):
-                    v.VChip(text=("rf_future_armed ? 'Future enrollment active' : rf_future ? 'Future enrollment requested · approval needed' : 'Existing scans only'",),
+                    v.VChip(text=("rf_future_armed ? 'Saved recipe follows new scans' : rf_future ? 'Future enrollment requested · approval needed' : 'Existing scans only'",),
                             prepend_icon='mdi-calendar-clock',size='small',variant='tonal',
                             color=("rf_future_armed ? '#dff2e8' : '#fff2d8'",))
                     v.VChip(text=("rf_approved ? 'Current plan approved' : 'Draft not approved'",),

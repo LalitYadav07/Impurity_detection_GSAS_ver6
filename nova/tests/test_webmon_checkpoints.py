@@ -62,13 +62,106 @@ def test_luna_handoff_pins_one_source_and_never_arms_future_runs(tmp_path):
     src=dict(id='source-1',source_sha256=opts[0]['source_sha256'],experiment='expt',experiment_label='Experiment',scan_key='run-1')
     opts[0]['refinement_source']=src;backend.config['checkpoint_options']['IPTS-7/10'][0]=opts[0]
     workspace=SimpleNamespace(state=dict(sources={},jobs={}))
-    workspace.observe=lambda items:workspace.state['sources'].update({x['id']:x for x in items})
+    workspace.observe=lambda items,**kwargs:workspace.state['sources'].update({x['id']:x for x in items})
     s=SimpleNamespace(powgen_ipts='7',webmon_run='10',webmon_busy=False,flush=lambda:None)
     obj=WebmonMixin();obj._webmon=backend;obj.server=SimpleNamespace(state=s);obj._refinement_store=lambda:workspace
     called=[];obj._refinement_sync=lambda:called.append('sync');obj.inspect_refinement_project=lambda:called.append('inspect')
     obj.webmon_open_refinement()
-    assert s.rf_source=='source-1' and s.rf_scans==['run-1'] and not s.rf_future
+    assert s.rf_source=='source-1' and s.rf_scans==['source:source-1'] and not s.rf_future
     assert s.experiment_result_view=='refinement' and called==['sync','inspect']
+    assert s.rf_setup_mode=='expert' and 'background' in s.rf_request
+
+
+def manual_handoff_workspace(tmp_path):
+    from radar_pd_nova.refinement_sources import RefinementScope
+    from radar_pd_nova.refinement_workspace import RefinementWorkspace
+    workspace=RefinementWorkspace(tmp_path,history_id='history',runtime=SimpleNamespace(kind='local'))
+    workspace.state['recipes']['watch']=dict(id='watch',experiment='expt',armed=True,
+        scope=RefinementScope('expt').to_dict(),approved_utc='2000-01-01T00:00:00+00:00',plan={'test':'queued only'})
+    obj=WebmonMixin();obj._refinement_store=lambda:workspace
+    obj.server=SimpleNamespace(state=SimpleNamespace(flush=lambda:None))
+    obj._refinement_sync=lambda:None;obj.inspect_refinement_project=lambda:None
+    source=dict(id='manual-1',source_sha256='a'*64,experiment='expt',experiment_label='Experiment',
+        scan_key='run-1',scan_label='Run 1',sample_key='sample',sample_label='Sample',run_number=1,bank='2')
+    return obj,workspace,source
+
+
+def test_opening_recipe_input_does_not_enqueue_an_already_armed_recipe(tmp_path):
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    obj._webmon_handoff_source(source,'Review only')
+    assert not workspace.state['jobs']
+    assert workspace.state['recipes']['watch']['armed'] is True
+    assert workspace.state['sources'][source['id']]['manual_recipe_input'] is True
+    assert obj.server.state.rf_scans==['source:manual-1']
+
+
+def test_later_live_arrival_does_not_silently_enroll_a_manually_selected_input(tmp_path):
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    obj._webmon_handoff_source(source,'Review only')
+    obj._webmon_handoff_source(source,'Review again')
+    live=dict(source,id='live-2',source_sha256='b'*64,scan_key='run-2',run_number=2,live_watch=True)
+    workspace.observe([live])
+    assert {j['source']['id'] for j in workspace.state['jobs'].values()}=={'live-2'}
+    assert {s['id'] for s in workspace.sources('expt')}=={'manual-1','live-2'}
+
+
+def test_real_live_catalog_can_promote_a_previous_manual_input(tmp_path):
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    obj._webmon_handoff_source(source,'Review only')
+    workspace.observe([dict(source,live_watch=True)])
+    assert not workspace.state['sources'][source['id']].get('manual_recipe_input')
+    assert {j['source']['id'] for j in workspace.state['jobs'].values()}=={'manual-1'}
+
+
+def test_handoff_does_not_remove_an_existing_live_sources_eligibility(tmp_path):
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    workspace.observe([dict(source,live_watch=True)])
+    previous=set(workspace.state['jobs'])
+    obj._webmon_handoff_source(source,'Review existing source')
+    assert not workspace.state['sources'][source['id']].get('manual_recipe_input')
+    assert set(workspace.state['jobs'])==previous
+
+
+def test_manual_recipe_scope_selects_one_publication_not_every_copy_of_a_run(tmp_path):
+    from radar_pd_nova.refinement_sources import RefinementScope
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    sibling=dict(source,id='manual-2',source_sha256='b'*64)
+    workspace.observe([sibling],enroll_future=False)
+    obj._webmon_handoff_source(source,'Review the selected publication')
+    state=obj.server.state
+    snapshot,_=workspace.selection(RefinementScope(state.rf_experiment,mode=state.rf_scope,
+        scans=tuple(state.rf_scans)))
+    assert snapshot['baseline']==[dict(id='manual-1',sha256='a'*64)]
+
+
+def test_manual_input_remains_nonautomatic_after_workspace_recovery(tmp_path):
+    from radar_pd_nova.refinement_workspace import RefinementWorkspace
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    obj._webmon_handoff_source(source,'Review only')
+    recovered=RefinementWorkspace(tmp_path,history_id='history',runtime=SimpleNamespace(kind='local'))
+    live=dict(source,id='live-2',source_sha256='b'*64,scan_key='run-2',run_number=2,live_watch=True)
+    recovered.observe([live])
+    assert recovered.state['sources']['manual-1']['manual_recipe_input'] is True
+    assert {j['source']['id'] for j in recovered.state['jobs'].values()}=={'live-2'}
+
+
+def test_manual_copy_does_not_hide_or_replace_the_actual_watched_scan(tmp_path):
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    live=dict(source,id='live-1',live_watch=True)
+    workspace.observe([live])
+    obj._webmon_handoff_source(dict(source,live_watch=True),'Inspect the other published GPX')
+    assert {s['id'] for s in workspace.sources('expt')}=={'manual-1','live-1'}
+    assert {j['source']['id'] for j in workspace.state['jobs'].values()}=={'live-1'}
+
+
+def test_manual_changed_revision_does_not_inherit_automatic_enrollment(tmp_path):
+    obj,workspace,source=manual_handoff_workspace(tmp_path)
+    workspace.observe([dict(source,live_watch=True)])
+    original_jobs=set(workspace.state['jobs'])
+    obj._webmon_handoff_source(dict(source,source_sha256='c'*64),'Review changed source')
+    workspace._enroll_future(workspace.state['recipes']['watch'])
+    assert workspace.state['sources'][source['id']]['manual_recipe_input'] is True
+    assert set(workspace.state['jobs'])==original_jobs
 
 
 def test_register_polish_checks_ancestry_and_rolls_back_invalid_binding(tmp_path):
