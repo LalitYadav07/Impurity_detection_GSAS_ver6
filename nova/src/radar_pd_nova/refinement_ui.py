@@ -250,7 +250,7 @@ def refinement_dashboard(app):
                         with html.Div(classes='rf-plot'):
                             fig=plotly.Figure(display_mode_bar=True,responsive=True,style='height:100%;width:100%');fig.data=('rf_fit.data',);fig.layout=('rf_fit.layout',)
                         html.P('{{ rf_fit_notice }}',classes='rf-notice')
-                    html.Div('Completed stages will appear here while original RADAR-PD results remain available in Results.',v_if='!rf_has_output',classes='rf-empty')
+                    html.Div('{{ rf_empty_message }}',v_if='!rf_has_output',classes='rf-empty',role='status')
                 with html.Div(v_show="rf_result_tab === 'trends'"):
                     with html.Div(classes='rf-toolbar'):
                         select('Stage for trends','rf_trend_stage','rf_trend_stage_options')

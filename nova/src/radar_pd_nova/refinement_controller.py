@@ -21,7 +21,7 @@ from .refinement_plots import empty_figure, fit_figure, trend_figure, electrical
 from .refinement_runtime import configured_runtime, verify_result_files
 from .refinement_sources import RefinementScope, CheckpointSelectionRequired, digest, source_from_record, refinement_source_title
 from .refinement_workspace import RefinementWorkspace
-from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence, galaxy_refinement_activity, review_notices, final_stage_criterion
+from .refinement_messages import convergence_notice, refinement_review_status, retain_review_evidence, galaxy_refinement_activity, review_notices, final_stage_criterion, refinement_empty_message
 from .results import experiment_axis_options
 from .guided_refinement_controller import GuidedRefinementMixin
 from .refinement_parameters import execution_parameters, parameter_table
@@ -463,7 +463,7 @@ class RefinementMixin(GuidedRefinementMixin):
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_checkpoint_runs=[],rf_checkpoint_run='',rf_checkpoint_options=[],rf_checkpoint_key='',rf_checkpoint_busy=False,rf_checkpoint_message='',rf_checkpoint_error='',
             rf_compatibility_rows=[],rf_compatibility_summary='',rf_compatibility_blocked=False,
-            rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',
+            rf_jobs=[],rf_job_search='',rf_job_status='all',rf_progress_text='No refinements started',rf_progress_percent=0,rf_selected_job='',rf_selected_title='',rf_selected_message='',rf_has_output=False,rf_output_provenance='',rf_empty_message=refinement_empty_message(),
             rf_result_tab='fit',rf_stage='final',rf_stages=[],rf_histogram='',rf_histograms=[],rf_axis='d',rf_display='compare',rf_fit=figure_json(empty_figure()),rf_fit_notice='',rf_rwp_summary='',rf_parameter_warnings=[],rf_convergence_notice='',rf_exposure_notice='',rf_zoom=0,rf_parallel_jobs=2,
             rf_trend=figure_json(empty_figure('Completed refinements will populate this trend')),rf_trend_notice='',rf_trend_stage='final',rf_trend_stage_options=[],rf_trend_metric='rwp',rf_trend_metrics=[dict(title='Rwp · original and polished',value='rwp')],rf_trend_axis='run_number',rf_trend_axes=[dict(title='Scan number',value='run_number')],rf_trend_display='absolute',rf_trend_temperature_span=True,
             rf_parameters=[],rf_parameter_search='',rf_parameter_notice='',rf_downloads=[],rf_download='',rf_can_open_gsas=False,rf_open_gsas_label='Open selected verified GPX in GSAS-II',rf_queue_running=False,rf_follow=True,rf_expanded=False)
@@ -739,7 +739,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _clear_refinement_output(self,*,clear_trends=False):
         """Release visible output ownership, retaining saved jobs and view caches."""
         defaults=self._refinement_state_defaults()
-        fields=('rf_selected_job','rf_selected_title','rf_selected_message','rf_has_output',
+        fields=('rf_selected_job','rf_selected_title','rf_selected_message','rf_has_output','rf_empty_message',
             'rf_output_provenance','rf_parameters','rf_parameter_notice','rf_parameter_warnings','rf_convergence_notice',
             'rf_exposure_notice','rf_stages','rf_stage','rf_histograms','rf_histogram',
             'rf_downloads','rf_download','rf_rwp_summary','rf_fit_notice','rf_fit',
@@ -950,7 +950,8 @@ class RefinementMixin(GuidedRefinementMixin):
                 status_label=('Completed · needs review' if reviews[j['id']]['needs_review'] else
                     'Completed · diagnostics unavailable' if reviews[j['id']]['status']=='unavailable' else 'Completed')
                     if j['status']=='completed' else refinement_activity_label(j,w.runtime.kind),
-                needs_review=j['status']=='completed' and reviews[j['id']]['needs_review'],review_message=reviews[j['id']]['message'],
+                needs_review=j['status']=='completed' and reviews[j['id']]['needs_review'],
+                review_message=reviews[j['id']]['message'] if j['status'] in {'completed','needs_review'} else j['message'],
                 filter_statuses=[j['status']]+(['needs_review'] if j['status']=='completed' and reviews[j['id']]['needs_review'] else []),
                 message=j['message'],recipe=', '.join(str(version.get(rid,'?')) for rid in j['recipes']),recipe_id=j['recipe_id'],recipe_ids=j['recipes'],has_output=bool((j.get('result') or {}).get('final_view') or (j.get('result') or {}).get('stages'))) for j in jobs]
             completed=sum(j['status']=='completed' for j in jobs)
@@ -965,6 +966,8 @@ class RefinementMixin(GuidedRefinementMixin):
             selected_job = next((j for j in jobs if j['id'] == s.rf_selected_job), None)
             if selected_job and selected_job['status'] in {'queued','running','recovering','paused','interrupted','failed'}:
                 s.rf_selected_message = selected_job['message']
+                if not s.rf_has_output and not selected_job.get('result'):
+                    s.rf_empty_message = refinement_empty_message(selected_job)
             self._refinement_sync_approval()
             self._sync_recipe_preparation_progress()
             s.flush()
@@ -1366,6 +1369,7 @@ class RefinementMixin(GuidedRefinementMixin):
         # Release the old curve before assigning a new scan's heading. Keep
         # visibility false across every awaited recovery or baseline read.
         s.rf_has_output=False;s.rf_fit=figure_json(empty_figure('Loading the selected verified fit'))
+        s.rf_empty_message='Loading the selected refinement and checking its saved outputs.'
         s.rf_selected_job=uid;s.rf_selected_title=refinement_result_title(job,w.state.get('recipes',{}))
         s.rf_selected_message=job['message'];s.rf_error='';s.rf_stage='final';s.rf_has_output=False;s.rf_output_provenance='';s.rf_parameter_warnings=[]
         # A running scan or a slow artifact recovery must not inherit another
@@ -1420,6 +1424,8 @@ class RefinementMixin(GuidedRefinementMixin):
         if result:s.rf_selected_message=refinement_status_message(result,baseline,source=job['source'])
         if not current():return
         s.rf_has_output=baseline is not None
+        if not s.rf_has_output:
+            s.rf_empty_message=refinement_empty_message(job,unavailable=bool(s.rf_error))
         if show_fit and s.rf_has_output:s.rf_result_tab='fit'
         self._refinement_plot_changed();self._refinement_trend_changed();s.flush()
 

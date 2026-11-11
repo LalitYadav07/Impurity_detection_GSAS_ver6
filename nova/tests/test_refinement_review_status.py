@@ -100,11 +100,13 @@ def test_selected_dispatch_message_refreshes_without_reselecting_or_loading_old_
     state.rf_selected_job = entry['id']
     app._refinement_sync()
     assert state.rf_jobs[0]['status_label'] == 'Preparing submission'
+    assert state.rf_jobs[0]['review_message'] == value['message']
     assert state.rf_selected_message == value['message']
     assert '1 active' in state.rf_progress_text and 'running' not in state.rf_progress_text
     value.update(remote_action={'galaxy_job_id': 'accepted'}, message='Submitted to Galaxy; waiting for the verified result')
     app._refinement_sync()
     assert state.rf_jobs[0]['status_label'] == 'Submitted to Galaxy'
+    assert state.rf_jobs[0]['review_message'] == value['message']
     assert state.rf_selected_message == value['message'] and not state.rf_has_output
 
 

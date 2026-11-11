@@ -54,6 +54,28 @@ def galaxy_refinement_activity(action):
     }.get((action or {}).get('status'), 'Submitted to Galaxy')
 
 
+def refinement_empty_message(job=None, *, unavailable=False):
+    """Describe why no fit is shown without promising a terminal job will finish."""
+    original = 'The original RADAR-PD result remains available in Results.'
+    if job is None:
+        return 'Select a scan to inspect its refinement. ' + original
+    if unavailable:
+        return 'The saved fit could not be opened. Review the error above and refresh the result. ' + original
+    status = job.get('status')
+    result = job.get('result') or {}
+    if status in {'completed', 'needs_review'}:
+        if result and not result.get('stages') and not result.get('final_view'):
+            return 'This recipe finished without an accepted refinement stage. Review the reason above. ' + original
+        return 'No verified fit is displayed for this result. Review its status and saved outputs. ' + original
+    if status in {'failed', 'interrupted', 'needs_recipe'}:
+        return 'This attempt stopped before a verified fit was available. Review the status above before retrying. ' + original
+    if status == 'paused':
+        return 'This scan is paused. Resume queued work when you are ready to refine it. ' + original
+    if status == 'queued':
+        return 'This scan is queued. Its verified stages will appear after processing. ' + original
+    return 'Waiting for the first verified refinement stage. ' + original
+
+
 def retain_review_evidence(result, view, criteria=None):
     """Retain small diagnostics from the verified final view, not its curves."""
     if (not isinstance(view,dict) or result.get('status')!='completed' or not result.get('output_sha256')
