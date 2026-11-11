@@ -80,7 +80,7 @@ def discover_snap_samples(ipts, sample_index, subfolder=snap.DEFAULT_FOLDER, pro
 
 
 def _select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=(),
-                 include_background_runs=False, include_ramp_runs=False):
+                 include_background_runs=False, include_ramp_runs=False, selection_stats=None):
     """Apply actual NeXus/catalog titles before the initial scan limit.
 
     Modern SNAP GSA headers contain geometry rather than a sample title. Read
@@ -90,19 +90,25 @@ def _select_runs(runs, index, selected_ids, *, limit=None, excluded_run_numbers=
     runs = list(runs)
     if selected_ids is not None and hasattr(index,'candidate_runs'):
         runs = index.candidate_runs(runs,selected_ids)
-    selected=[]
+    selected=[];excluded=set();reviewed=0
     for run in reversed(list(runs)):
+        reviewed+=1
         if run.run_number in excluded_run_numbers:
+            excluded.add(run.run_id)
             continue
         metadata=index.identity(run)
         if selected_ids is not None and metadata.get('sample_id') not in selected_ids:
             continue
         role=title_role(metadata.get('run_title') or '')
         if (role=='background' and not include_background_runs) or (role=='ramp' and not include_ramp_runs):
+            excluded.add(run.run_id)
             continue
         selected.append(replace(run,scan_metadata={**run.scan_metadata,**metadata,'run_role':role}))
         if limit is not None and len(selected)>=max(1,limit):
             break
+    if selection_stats is not None:
+        selection_stats.update(excluded_count=len(excluded), reviewed_scan_count=reviewed,
+            run_review_complete=reviewed==len(runs))
     return list(reversed(selected))
 
 
@@ -116,8 +122,10 @@ def preflight_snap_experiment(ipts, *, selected_sample_ids=None, selected_banks=
     definition = WatchDefinition(ipts,subfolder,'preflight','preflight','profile-required',instrument='SNAP')
     all_runs = discover_from_listing(definition,rows)
     index = sample_index or SnapSampleIndex(ipts)
+    selection_stats={}
     runs = _select_runs(all_runs,index,selected_sample_ids,limit=initial_backfill_limit,
-        excluded_run_numbers=excluded_run_numbers,include_background_runs=include_background_runs,include_ramp_runs=include_ramp_runs)
+        excluded_run_numbers=excluded_run_numbers,include_background_runs=include_background_runs,
+        include_ramp_runs=include_ramp_runs,selection_stats=selection_stats)
     errors,notices,setups,mappings = [],[],[],[]
     available = {}
     for run in runs:
@@ -150,7 +158,7 @@ def preflight_snap_experiment(ipts, *, selected_sample_ids=None, selected_banks=
     metadata = read_snap_scan_metadata(ipts,latest.run_number,condition_bindings=condition_bindings) if latest else {}
     notices.insert(0,'SNAP profiles and quantitative fractions require scientific review; an adjacent generated .instprm is not automatically calibrated')
     return {'ready':not errors,'source_directory':definition.source_directory,'scan_count':len(runs),
-        'total_scan_count':len(all_runs),'analysis_count':len(mappings),'available_banks':sorted(available),
+        'total_scan_count':len(all_runs),**selection_stats,'analysis_count':len(mappings),'available_banks':sorted(available),
         'bank_details':[{'bank':b.bank,'angle':b.angle,'approx_d_min':b.minimum_tof/b.difc,
                          'approx_d_max':b.maximum_tof/b.difc,'quality_errors':list(b.quality_errors),
                          'masked_bins':b.masked_bins,'valid_bins':b.valid_bins} for b in available.values()],
