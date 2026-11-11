@@ -79,8 +79,33 @@ def bindings(project, context):
     return phases, hists
 
 
+def hold_imported_displacement_modes(project):
+    """Hold known ISODISTORT mode flags for an explicit ordinary recipe.
+
+    These flags live in native new-variable constraints, outside the atom
+    flags cleared by freeze(). Preserve every equation and amplitude. Other
+    custom variables remain untouched so preflight can reject unknown work.
+    Model-exploration exports use their own reviewed mode active set.
+    """
+    known = set()
+    for phase in project.phases():
+        for variable in (phase.data.get('ISODISTORT') or {}).get('G2ModeList', []):
+            identity = (getattr(variable, 'phase', None), getattr(variable, 'name', None))
+            if identity[0] is not None and isinstance(identity[1], str) and identity[1]:
+                known.add(identity)
+    constraints = (project.data.get('Constraints') or {}).get('data') or {}
+    for row in constraints.get('Phase', []):
+        if not isinstance(row, list) or len(row) < 4 or row[-1] != 'f' or type(row[-2]) is not bool:
+            continue
+        variable = row[-3]
+        identity = (getattr(variable, 'phase', None), getattr(variable, 'name', None))
+        if identity in known:
+            row[-2] = False
+
+
 def configure(project, stage, context, added_constraints):
     freeze(project)
+    hold_imported_displacement_modes(project)
     phases, hists = bindings(project, context)
     bg = stage.get("background")
     if bg:

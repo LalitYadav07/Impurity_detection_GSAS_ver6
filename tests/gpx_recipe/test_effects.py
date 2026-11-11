@@ -210,6 +210,21 @@ def test_solver_dependent_negative_scale_cannot_hide_behind_native_positive_clip
     audit=constraint_bound_audit(state(p),{'varyList':['::constr0'],'variables':[.4]},lambda v:v.update({'0:0:Scale':v['::constr0']}));require_constraint_bounds(audit)
 
 
+def test_constraint_reconstruction_retains_held_generated_values_and_current_solver_values():
+    from gpx_recipe.effects import constraint_bound_audit
+    p=row('0:0:Scale',.5,'phase_fraction',True,'Scale')
+    p.update(lower_bound={'value':0.},upper_bound={'value':1.})
+    before=state(p)
+    before['constraints']={'generated_parameters':{'0::nv-mode':.027,'0:0:Scale':99.,'bad':float('nan')}}
+    seen={}
+    def reconstruct(values):seen.update(values)
+    audit=constraint_bound_audit(before,{'varyList':['0:0:Scale'],'variables':[.7]},reconstruct)
+    assert seen['0::nv-mode']==.027
+    assert seen['0:0:Scale']==.7
+    assert 'bad' not in seen
+    assert audit['parameters'][0]['solver_value_before_native_clipping']==.7
+
+
 @pytest.mark.parametrize('solver,saved',[(.00035940976450951807,.001),(12.,10.)])
 def test_positive_size_clipping_is_rejected_even_when_physical_bounds_pass(solver,saved):
     from gpx_recipe.effects import constraint_bound_audit,require_constraint_bounds,native_storage_audit,require_native_storage

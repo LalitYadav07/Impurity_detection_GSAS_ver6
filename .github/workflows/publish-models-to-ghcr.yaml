@@ -151,11 +151,14 @@ jobs:
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '
           python -m pip install --quiet pytest &&
-          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" RADAR_REQUIRE_STRUCTURAL_NATIVE=1 &&
           python -c "import GSASII.GSASIIscriptable, torch" &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_model_campaign_worker.py \
             /validation/tests/gpx_recipe/test_stage_recovery.py \
+            /validation/tests/gpx_recipe/test_imported_mode_reset.py \
+            /validation/tests/gpx_recipe/test_effects.py \
+            /validation/tests/gpx_recipe/test_imported_mode_recipe_native.py \
             /validation/tests/gpx_recipe/test_native_protocol.py \
             /validation/tests/gpx_recipe/test_symmetry_moment_models.py \
             /validation/tests/gpx_recipe/test_symmetry_campaign.py \

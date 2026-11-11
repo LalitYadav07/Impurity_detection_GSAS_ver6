@@ -664,6 +664,14 @@ def _reconstruct_parameter_space(
             "groups": _jsonable(groups),
             "parameter_lists": _jsonable(parameter_lists),
             "mapping_text": mapping_text,
+            # Fixed generated coordinates (including held ISODISTORT modes)
+            # can be absent from both the source parameter dictionary and the
+            # new covariance. Native Dict2Map still requires their values.
+            "generated_parameters": {
+                str(name): number for name, value in constraint_values.items()
+                if str(name) not in parameter_values
+                and (number := _finite_float(value)) is not None
+            },
         },
         "parameter_values": parameter_values,
         "parameter_descriptions": descriptions,

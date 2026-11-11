@@ -146,14 +146,19 @@ jobs:
           assert hasattr(helper.library,"proposal_tof_profile_sum")
           print("Reviewed preparation package and adapter identities available", work.__name__)'
 
-      - name: Verify recovered-stage publication in the built worker
+      - name: Verify recipe recovery and structural handoffs in the built worker
         shell: bash
         run: |
           docker run --rm --entrypoint sh \
-            -v "$PWD/tests/gpx_recipe/test_stage_recovery.py:/validation/test_stage_recovery.py:ro" \
+            -v "$PWD/tests/gpx_recipe:/validation:ro" \
             "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
             python -m pip install --quiet pytest &&
-            python -m pytest -q -o cache_dir=/tmp/pytest-cache /validation/test_stage_recovery.py'
+            export PYTHONPATH="/validation${PYTHONPATH:+:$PYTHONPATH}" RADAR_REQUIRE_STRUCTURAL_NATIVE=1 &&
+            python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+              /validation/test_stage_recovery.py \
+              /validation/test_effects.py \
+              /validation/test_imported_mode_reset.py \
+              /validation/test_imported_mode_recipe_native.py'
 
       - name: Verify complete CIF symmetry evidence in the built worker
         shell: bash

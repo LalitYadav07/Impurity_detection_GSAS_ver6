@@ -154,6 +154,8 @@ jobs:
             /validation-tests/test_refinement_convergence_request.py \
             /validation-tests/test_refinement_bound_labels.py \
             /scientific-test-support/test_convergence_intent.py \
+            /scientific-test-support/test_imported_mode_reset.py \
+            /scientific-test-support/test_effects.py \
             /scientific-test-support/test_stage_recovery.py'
 
       - name: Verify candidate-library diagnostics and source ownership

@@ -108,6 +108,8 @@ def constraint_bound_audit(before,covariance,reconstruct):
     """
     rows=before['parameter_space']['parameters']
     values={p['name']:p['current_value'] for p in rows if numeric(p.get('current_value'))}
+    for name,value in (before.get('constraints',{}).get('generated_parameters') or {}).items():
+        if isinstance(name,str) and numeric(value):values.setdefault(name,value)
     for name,value in zip(covariance.get('varyList',[]),covariance.get('variables',[])):values[str(name)]=float(value)
     reconstruct(values)
     checks=[];violations=[]
