@@ -581,7 +581,8 @@ class RefinementMixin(GuidedRefinementMixin):
                     except CheckpointSelectionRequired as exc:
                         warnings.append(dict(scan=record.name,reason=str(exc)))
                         if exc.choices:
-                            checkpoints[uid]=dict(record=record,scan=rows.get(uid),stamp=stamps[uid],choices=exc.choices)
+                            checkpoints[uid]=dict(record=record,scan=rows.get(uid),stamp=stamps[uid],choices=exc.choices,
+                                                  service=service,workspace=workspace,controller=controller)
                     except Exception as exc:warnings.append(dict(scan=record.name,reason=str(exc)))
                 return sources,warnings,checkpoints
             sources,warnings,checkpoints=await asyncio.to_thread(catalog)
@@ -683,7 +684,8 @@ class RefinementMixin(GuidedRefinementMixin):
             if controller:records.update({record.uid:record for record in controller.records.values()})
             record=records.get(selection[0])
             row=next((row for row in (s.powgen_all_scientific_rows or []) if row.get('record_uid')==selection[0]),None)
-            return (entry is not None and record is not None and _refinement_record_stamp(record)==entry['stamp']
+            return (entry is not None and entry['service'] is service and entry['workspace'] is workspace
+                    and entry['controller'] is controller and record is not None and _refinement_record_stamp(record)==entry['stamp']
                     and row==entry['scan'])
         try:
             if (workspace is None or entry is None or not current()

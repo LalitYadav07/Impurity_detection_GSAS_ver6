@@ -182,6 +182,20 @@ def test_explicit_selection_rejects_forged_key(tmp_path):
     assert len(workspace.state['sources'])==1 and app.checkpoints==0
 
 
+@pytest.mark.parametrize('owner',['service','workspace','controller'])
+def test_checkpoint_choices_are_bound_to_catalog_owner_before_click(tmp_path,owner):
+    app=rapid_app(tmp_path);state=app.server.state;workspace=app._refinement_workspace
+    asyncio.run(app._refresh_refinement_sources())
+    state.rf_checkpoint_run='record-1';app._refinement_checkpoint_run_changed()
+    state.rf_checkpoint_key=state.rf_checkpoint_options[0]['value']
+    if owner=='service':app.service=Service([record(1)])
+    elif owner=='workspace':app._refinement_workspace=Workspace(tmp_path/'other-history')
+    else:app._powgen_controller=SimpleNamespace(records={})
+    asyncio.run(app._choose_published_checkpoint())
+    assert 'Choose a current run' in state.rf_checkpoint_error
+    assert len(workspace.state['sources'])==1 and app.checkpoints==0
+
+
 def test_metadata_prefetch_has_exactly_two_workers_and_reuses_complete_cache(tmp_path):
     records=[record(i) for i in range(4)];original=[r.model_dump() for r in records]
     service=Service(records);service.release=threading.Event();workspace=Workspace(tmp_path)
