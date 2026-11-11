@@ -69,9 +69,13 @@ def test_provenance_comes_from_creating_job_and_omits_unrelated_stdout(tools, wi
         assert row['tool_version'] == '0.3.4' and row['certificate_path'] == '/staged/native-origin.json'
 
 
-def run_command(command, values, tmp_path):
+def run_command(command, values, tmp_path, *, folded=False):
     text = str(Template(command, searchList=[values]))
     text = re.sub(r'(?m)^(\s*)python\s', lambda match: match[1]+shlex.quote(sys.executable)+' ', text)
+    if folded:
+        # Galaxy normalizes command whitespace before dispatch. A shell
+        # backslash here can escape a space instead of a newline.
+        text = ' '.join(line.strip() for line in text.splitlines())
     # Child commands use the package under test, including in built images.
     env = dict(os.environ, PYTHONPATH=str(Path(certificates.__file__).resolve().parents[2]))
     return subprocess.run(['/bin/sh', '-c', text], cwd=tmp_path, env=env,
@@ -81,7 +85,8 @@ def run_command(command, values, tmp_path):
 @pytest.mark.parametrize('action', ['native', 'admission', 'chunk'])
 @pytest.mark.parametrize('source', ['inline', 'dataset'])
 @pytest.mark.parametrize('multipart', [False, True])
-def test_real_model_command_preserves_request_parts_and_publishes_certificate(tools, tmp_path, action, source, multipart):
+@pytest.mark.parametrize('folded', [False, True])
+def test_real_model_command_preserves_request_parts_and_publishes_certificate(tools, tmp_path, action, source, multipart, folded):
     tool = tools['model_campaign']
     script = tmp_path/'installed_worker.py'
     script.write_text("""import argparse,json,pathlib
@@ -113,7 +118,7 @@ implementation_sha256=package_signature(),result_archive_sha256='a'*64,entries=[
         preparation_provenance='server-context.json', preparation_certificate=str(certificate),
         result_bundle=str(archive), console_output=str(tmp_path/'console.txt'))
     command = tool.findtext('command').replace('/opt/radar-symmetry/ndip_model_campaign.py', shlex.quote(str(script)))
-    completed = run_command(command, values, tmp_path)
+    completed = run_command(command, values, tmp_path, folded=folded)
     result = json.loads(archive.read_text())
     assert result['action'] == action and result['source'] == 'source.gpx'
     assert result['asset_part'] == parts and result['request_content'] == requested
