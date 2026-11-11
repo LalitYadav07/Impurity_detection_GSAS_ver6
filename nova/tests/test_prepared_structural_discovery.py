@@ -358,7 +358,7 @@ def test_retained_authoritative_catalog_is_preserved_and_bound_to_requested_k(se
     original=dict(schema='radar-symmetry-catalog/v1',parent_setting_sha256='a'*64,
         k=['0','0','1/2'] if wrong_k else ['0','0','0'],candidates=copy.deepcopy(protocol['candidates']),
         coverage=dict(discovery_complete=True,discovered_count=2,constructed_count=2,opd_policy='all',
-            candidates=[dict(id=c['id'],state='constructed') for c in protocol['candidates']]))
+            candidates=[dict(id=c['id'],state='constructed',label='GM3+ · C2/m, basis={(1,0,0)}') for c in protocol['candidates']]))
     stage=bridge.stage_models
     def retained(*args):
         models=stage(*args);models[0]['original_catalogs']=[copy.deepcopy(original)];return models
@@ -369,6 +369,7 @@ def test_retained_authoritative_catalog_is_preserved_and_bound_to_requested_k(se
     else:
         assert provenance['original_catalog']==original
         assert provenance['original_catalog_sha256']==digest(original)
+        assert {r['label'] for r in catalog['coverage']['candidates']}=={'GM3+ · C2/m'}
 
 
 def test_multi_k_catalog_filters_only_protocol_and_preserves_complete_model(setup):

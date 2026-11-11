@@ -38,6 +38,18 @@ def test_structural_parameters_use_child_cell_and_mode_units_without_inventing_e
     assert parameter_note(None)==''
 
 
+def test_parameter_symmetry_comes_from_native_child_not_inherited_phase_name():
+    view=dict(phases=[dict(name='Parent-derived model (SG 166)',space_group='C 2/m',
+        cell=[5.,6.,7.,90.,103.,90.],modes=[dict(label='Ba displacement',value=.08)])])
+    before=json.loads(json.dumps(view))
+    rows=parameter_rows(dict(kind='structural'),view)
+    assert {r['space_group'] for r in rows}=={'C 2/m'}
+    assert {r['phase'] for r in rows}=={'Parent-derived model (SG 166)'}
+    view['phases'][0].pop('space_group')
+    assert {r['space_group'] for r in parameter_rows(dict(kind='structural'),view)}=={'—'}
+    assert before['phases'][0]['space_group']=='C 2/m'
+
+
 def test_expanded_fit_caption_retains_scan_model_residual_and_disposition():
     r=dict(metadata={'scan':'Run123 · Bank2'},name='R-3c',bns='167.103',rwp=23.171,status='inadequate_fit')
     assert fit_caption(r)=='Run123 · Bank2 · R-3c · BNS 167.103 · Rwp 23.171% · Rwp target not met'

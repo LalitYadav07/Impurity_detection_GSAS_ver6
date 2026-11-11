@@ -40,6 +40,21 @@ def structural_timing_summary(value):
 def candidate_display_name(catalog,candidate):
     """Use the authoritative constructed-child label, including its subgroup."""
     if candidate.get('magnetic_space_group'):return candidate['magnetic_space_group']
+    # Older prepared catalogs kept the full construction catalog in provenance
+    # but replaced its visible labels with only the irrep name. Recover a label
+    # only for the same sealed child, modes and embedding, never by ID alone.
+    prepared=(catalog.get('provenance') or {}).get('prepared_library') or {}
+    original=prepared.get('original_catalog')
+    if isinstance(original,dict) and digest(original)==prepared.get('original_catalog_sha256'):
+        from gpx_recipe.preparation.structural_hints import candidate_identity
+        try:
+            matches=[c for c in original.get('candidates',[])
+                     if candidate_identity(c)==candidate_identity(candidate)]
+        except (KeyError,TypeError,ValueError):matches=[]
+        if len(matches)==1:
+            for row in (original.get('coverage') or {}).get('candidates',[]):
+                if row.get('id')==matches[0]['id'] and row.get('label'):
+                    return str(row['label']).split(', basis=',1)[0]
     for row in (catalog.get('coverage') or {}).get('candidates',[]):
         if row.get('id')==candidate['id'] and row.get('label'):
             return str(row['label']).split(', basis=',1)[0]
@@ -535,15 +550,16 @@ def parameter_rows(row,view):
             and not isinstance(value,bool) and np.isfinite(value) and value>=0) else '—'
     rows=[]
     for phase in view['phases']:
+        symmetry=phase.get('space_group') or '—'
         if row.get('kind') == 'structural':
             for label, value in zip(('a', 'b', 'c', 'alpha', 'beta', 'gamma'), phase.get('cell', [])):
                 if isinstance(value, (int, float)) and not isinstance(value, bool) and np.isfinite(value):
-                    rows.append(dict(phase=phase['name'], parameter='Cell · '+label,
+                    rows.append(dict(phase=phase['name'], space_group=symmetry, parameter='Cell · '+label,
                         value=round(value, 6), uncertainty='—', unit='Å' if label in ('a','b','c') else '°'))
         for value in phase.get('moments',phase.get('modes',[])):
             magnetic='magnitude' in value
             uncertainty=estimates.get(value['label'],{}).get('magnitude_esd') if magnetic else value.get('esd')
-            rows.append(dict(phase=phase['name'],parameter=value['label'],
+            rows.append(dict(phase=phase['name'],space_group=symmetry,parameter=value['label'],
                              value=round(value.get('magnitude',value.get('value')),6),
                              uncertainty=uncertainty_label(uncertainty),
                              unit='µB' if magnetic else 'Å'))
@@ -551,7 +567,7 @@ def parameter_rows(row,view):
                 component_errors=estimates.get(value['label'],{}).get('component_esd') or {}
                 for axis,component in zip(('mx','my','mz'),value['components']):
                     error=component_errors.get(axis)
-                    rows.append(dict(phase=phase['name'],parameter=value['label']+' · '+axis,
+                    rows.append(dict(phase=phase['name'],space_group=symmetry,parameter=value['label']+' · '+axis,
                         value=round(component,6),uncertainty=uncertainty_label(error),unit='µB'))
     return rows
 
@@ -562,6 +578,7 @@ def parameter_note(row):
     if row.get('kind') == 'structural':
         return ('Cell values use the child crystallographic basis shown above. Mode values are normalized '
                 'ISODISTORT amplitudes, not individual atomic displacements or the bounded search coordinates. '
+                'The space-group column reports the native child symmetry; phase names can retain their original labels. '
                 'A dash means uncertainty is unavailable; none is inferred from the fit residual. '
                 'The exported GPX contains the atomic coordinates and cell. The fit status above still applies.')
     return ('The first row for each magnetic atom is its magnitude; mx, my and mz use the candidate crystallographic '

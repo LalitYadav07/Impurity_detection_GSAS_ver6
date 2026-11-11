@@ -225,6 +225,10 @@ def discover(app, draft, parent, k, progress):
             raise PreparedLibraryUnavailable('The original catalog belongs to another parent setting.')
         provenance.update(original_catalog=copy.deepcopy(original), original_catalog_sha256=digest(original),
             scope='Exact captured authoritative catalog for the selected k and child constructions; full model retained')
+        from .symmetry_workspace import candidate_display_name
+        by_id={c['id']:c for c in candidates}
+        for row in catalog['coverage']['candidates']:
+            row['label']=candidate_display_name(original,by_id[row['id']])
     write_json(directory/'catalog.json', catalog)
     return catalog
 

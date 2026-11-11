@@ -45,6 +45,25 @@ def test_child_space_group_stays_visible_in_model_choices_and_plan():
     assert candidate_display_name(catalog,dict(candidate,magnetic_space_group='F_S mm2'))=='F_S mm2'
 
 
+def test_legacy_prepared_labels_require_the_same_sealed_construction():
+    from gpx_recipe.symmetry.contracts import digest
+    candidate=dict(id='iso2:child',magnetic_space_group=None,irrep='GM3+',
+        child=dict(path='prepared/child.cif',sha256='a'*64),modes=['mode1'],
+        transformation_matrix=[[1,0,0],[0,1,0],[0,0,1]],origin_shift=[0,0,0])
+    original=dict(candidates=[dict(candidate,child=dict(path='original.cif',sha256='a'*64))],
+        coverage=dict(candidates=[dict(id=candidate['id'],label='GM3+ · C2/m, basis={(1,0,0)}')]))
+    catalog=dict(coverage=dict(candidates=[dict(id=candidate['id'],label='GM3+')]),
+        provenance=dict(prepared_library=dict(original_catalog=original,original_catalog_sha256=digest(original))))
+    before=deepcopy(catalog)
+    assert candidate_display_name(catalog,candidate)=='GM3+ · C2/m'
+    assert candidate_display_name(catalog,dict(candidate,modes=['different-mode']))=='GM3+'
+    assert candidate_display_name(catalog,dict(candidate,origin_shift=[.5,0,0]))=='GM3+'
+    invalid=deepcopy(catalog)
+    invalid['provenance']['prepared_library']['original_catalog']['coverage']['candidates'][0]['label']='Changed'
+    assert candidate_display_name(invalid,candidate)=='GM3+'
+    assert catalog==before
+
+
 def test_result_labels_use_the_same_hashed_catalog_as_the_plan(tmp_path):
     import json,hashlib
     root=tmp_path/'inputs'/'protocol';root.mkdir(parents=True)
