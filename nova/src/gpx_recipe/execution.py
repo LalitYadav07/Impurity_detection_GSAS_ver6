@@ -370,6 +370,8 @@ def run_plan(source, output, plan, *, approved=None, preview=False):
                     row["constraint_bound_audit"] = native_bounds
                     row["native_storage_audit"] = native_storage_audit(native_bounds,after)
                     row["convergence"] = convergence_evidence(after)
+                    if row["convergence"].get("aborted") is True:
+                        raise StageRejected("GSAS-II aborted this stage; no accepted checkpoint was produced")
                     row["blocking_frozen_variables"] = blocking_frozen_variables(state,after)
                     row["final_state"] = advanced.audit(project, context)
                     row["parameter_changes"] = parameter_changes(state, after)

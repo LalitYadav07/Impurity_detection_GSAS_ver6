@@ -153,7 +153,8 @@ jobs:
             /validation-tests/test_refinement_planner_payload.py \
             /validation-tests/test_refinement_convergence_request.py \
             /validation-tests/test_refinement_bound_labels.py \
-            /scientific-test-support/test_convergence_intent.py'
+            /scientific-test-support/test_convergence_intent.py \
+            /scientific-test-support/test_stage_recovery.py'
 
       - name: Verify candidate-library diagnostics and source ownership
         shell: bash

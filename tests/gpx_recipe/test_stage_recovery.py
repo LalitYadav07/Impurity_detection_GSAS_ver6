@@ -106,3 +106,49 @@ def test_stop_policy_preserves_previous_behavior(setup,tmp_path):
     with pytest.raises(ValueError,match='negative Uiso'):
         E.run_plan(source,tmp_path/'out.gpx',plan,approved={'approved_plan_sha256':'plan','model_signature':'model'})
     assert seen==[('first',0),('bad',1)]
+
+
+def report_native_abort(monkeypatch):
+    from gpx_recipe.convergence import convergence_evidence
+    original=E.extract_gsasii_refinement_state
+    def extract(*args,**kwargs):
+        state=original(*args,**kwargs)
+        aborted=args[1].data.get('last_refined')=='bad'
+        state['fit_statistics']={'Aborted':aborted,'converged':not aborted}
+        return state
+    monkeypatch.setattr(E,'extract_gsasii_refinement_state',extract)
+    monkeypatch.setattr(E,'convergence_evidence',convergence_evidence)
+    monkeypatch.setattr(E.advanced,'check_site_totals',lambda *a:None)
+
+
+def test_native_abort_rolls_back_without_an_optional_convergence_screen(setup,tmp_path,monkeypatch):
+    source,ctx,seen,plan=setup
+    report_native_abort(monkeypatch)
+    result=E.run_plan(source,tmp_path/'out.gpx',plan,
+        approved={'approved_plan_sha256':'plan','model_signature':'model'})
+    assert [s['status'] for s in result['stages']]==['completed','rejected','completed']
+    assert result['stages'][1]['convergence']['aborted'] is True
+    assert 'aborted' in result['stages'][1]['reason'].lower()
+    assert seen==[('first',0),('bad',1),('last',1)]
+    assert not (tmp_path/'out_bad.gpx').exists()
+    assert json.loads((tmp_path/'out.gpx').read_text())['value']==2
+
+
+def test_native_abort_stops_when_recovery_was_not_approved(setup,tmp_path,monkeypatch):
+    source,ctx,seen,plan=setup;plan['failure_policy']='stop'
+    report_native_abort(monkeypatch)
+    with pytest.raises(E.StageRejected,match='aborted'):
+        E.run_plan(source,tmp_path/'out.gpx',plan,
+            approved={'approved_plan_sha256':'plan','model_signature':'model'})
+    assert seen==[('first',0),('bad',1)]
+    assert not (tmp_path/'out_bad.gpx').exists()
+
+
+def test_nonconvergence_without_abort_retains_its_review_evidence(setup,tmp_path,monkeypatch):
+    source,ctx,seen,plan=setup
+    monkeypatch.setattr(E.advanced,'check_site_totals',lambda *a:None)
+    monkeypatch.setattr(E,'convergence_evidence',lambda *a:{'aborted':False,'native_converged':False})
+    result=E.run_plan(source,tmp_path/'out.gpx',plan,
+        approved={'approved_plan_sha256':'plan','model_signature':'model'})
+    assert all(s['status']=='completed' for s in result['stages'])
+    assert all(s['convergence']['native_converged'] is False for s in result['stages'])

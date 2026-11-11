@@ -155,6 +155,7 @@ jobs:
           python -c "import GSASII.GSASIIscriptable, torch" &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/tests/gpx_recipe/test_model_campaign_worker.py \
+            /validation/tests/gpx_recipe/test_stage_recovery.py \
             /validation/tests/gpx_recipe/test_native_protocol.py \
             /validation/tests/gpx_recipe/test_symmetry_moment_models.py \
             /validation/tests/gpx_recipe/test_symmetry_campaign.py \
