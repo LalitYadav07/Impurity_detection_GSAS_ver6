@@ -156,6 +156,23 @@ def test_bad_member_does_not_discard_valid_siblings_and_rejection_survives_resto
     assert len(service.submissions)==1
 
 
+def test_recovery_rechecks_a_prior_local_rejection_without_rerunning_the_worker(remote,tmp_path,monkeypatch):
+    import radar_pd_nova.preparation_queue as module
+    queue,_,base=setup(remote,tmp_path,count=4,batch_size=None);runtime,service,source=remote
+    queue.resume();queue.tick();job=queue.snapshot()['jobs'][0]
+    complete(queue,service,job,tmp_path)
+    original=module.publish_entry
+    def unavailable(library,identifier,*args,**kwargs):
+        if identifier==entry(job,1):raise ValueError('Local publication temporarily unavailable')
+        return original(library,identifier,*args,**kwargs)
+    monkeypatch.setattr(module,'publish_entry',unavailable)
+    assert queue.tick()['coverage']['counts']['failed']==1
+    monkeypatch.setattr(module,'publish_entry',original)
+    restored=restore(queue,base,runtime,service,source,tmp_path,monkeypatch)
+    assert restored.tick()['coverage']['all_prepared']
+    assert len(service.submissions)==1
+
+
 @pytest.mark.parametrize('mutation',['missing','duplicate','wrong_attempt','wrong_plan','wrong_counts','wrong_output'])
 def test_invalid_global_batch_receipt_never_becomes_partial_success(remote,tmp_path,mutation):
     queue,_,_=setup(remote,tmp_path,count=3,batch_size=None);_,service,_=remote

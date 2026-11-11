@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_live_snapshot_prototype" name="RADAR-PD Utility: Live Snapshot Analysis" version="0.1.10" profile="22.05">
+<tool id="neutrons_radar_pd_live_snapshot_prototype" name="RADAR-PD Utility: Live Snapshot Analysis" version="0.1.11" profile="22.05">
     <description>analyze one immutable provisional scan against a reviewed nuclear reference</description>
     <requirements><container type="docker">@IMMUTABLE_MODELS_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[

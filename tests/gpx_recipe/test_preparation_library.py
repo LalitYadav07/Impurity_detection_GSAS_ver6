@@ -102,6 +102,58 @@ def test_simultaneous_entry_admission_has_one_owner(tmp_path,monkeypatch,file_lo
         assert sorted(str(v) for v in results)==['1','already owned','already owned','already owned']
 
 
+@pytest.mark.parametrize('transition', ['start', 'finish'])
+def test_progress_refresh_cannot_replace_an_entry_commit(tmp_path, monkeypatch, transition):
+    """A browser's progress read must not discard a worker's pending commit."""
+    import threading
+    lib = library(tmp_path)
+    identifier = lib.document['entries'][0]['id']
+    if transition == 'finish':
+        attempt = lib.start(identifier)
+        folder = lib.root/'entries'/identifier
+        folder.mkdir(parents=True)
+        np.savez(folder/'response.npz', coefficient=np.array([1., 2.]))
+        operation = lambda: lib.finish(identifier, attempt, state='prepared',
+            files=['entries/'+identifier+'/response.npz'])
+    else:
+        operation = lambda: lib.start(identifier)
+
+    save_entered = threading.Event()
+    release_save = threading.Event()
+    read_finished = threading.Event()
+    original_save = lib._save
+
+    def paused_save():
+        save_entered.set()
+        assert release_save.wait(5)
+        original_save()
+
+    def progress_read():
+        try:
+            return lib.coverage()
+        finally:
+            read_finished.set()
+
+    monkeypatch.setattr(lib, '_save', paused_save)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(operation)
+        assert save_entered.wait(5)
+        reader = pool.submit(progress_read)
+        try:
+            # Permit either a coherent old snapshot or a read that waits for
+            # the commit, but never let the read overwrite the pending write.
+            read_finished.wait(.2)
+        finally:
+            release_save.set()
+        writer.result(timeout=5)
+        reader.result(timeout=5)
+
+    persisted = PreparationLibrary(lib.root).row(identifier)
+    assert persisted['attempt'] == 1
+    assert persisted['state'] == ('prepared' if transition == 'finish' else 'preparing')
+    assert bool(persisted['files']) == (transition == 'finish')
+
+
 @pytest.mark.parametrize('target', ['input', 'response', 'manifest'])
 def test_changed_bytes_cannot_be_exported_as_a_verified_preparation(tmp_path, target):
     lib = library(tmp_path); identifier = lib.document['entries'][0]['id']

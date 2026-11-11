@@ -194,7 +194,7 @@ class PreparationQueue:
                      dict(expected_implementation=expected_implementation))
             publish_entry(self.library,member['entry'],member['attempt'],request,result,**options)
 
-    def _collect(self,state,job):
+    def _collect(self,state,job,*,recheck_verification=False):
         requests,plan=self._inputs(job)
         result,_=self.runtime.collect_native(job['handle'],self.root)
         rows=outcomes(job,result,self.root,plan,requests=requests);checksum=stable_digest(result,self.root)
@@ -204,9 +204,11 @@ class PreparationQueue:
         for row in rows:
             member={k:row[k] for k in ('entry','attempt')};identifier=member['entry']
             previous=job['outcomes'].get(identifier)
-            # Preserve a locally rejected artifact on recovery. Its native
-            # worker completion was never permission to accept it anyway.
-            if previous and previous['source']=='verification':
+            # An active queue retains its checked rejection. A fresh recovery
+            # may recheck the same immutable receipt with current validators;
+            # it must still pass every input, digest and publication check.
+            # The previous rejection remains in the original History snapshot.
+            if previous and previous['source']=='verification' and not recheck_verification:
                 self._finish(member,previous['state'],previous['reason']);continue
             outcome=dict(state=row['state'],reason=row['reason'],source='worker')
             if row['state']=='prepared':
@@ -284,7 +286,7 @@ class PreparationQueue:
                     o['state']=='prepared' for o in job['outcomes'].values()):
                 # Authenticate the original complete receipt. Claimed status
                 # flags never reconstruct missing numeric arrays by themselves.
-                self._collect(state,job)
+                self._collect(state,job,recheck_verification=True)
             else:
                 status=self.runtime.poll_native(job['handle']);job['handle']=status['handle']
                 if status['state'] not in {'finished','failed','cancelled'}:

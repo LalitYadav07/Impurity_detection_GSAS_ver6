@@ -27,10 +27,22 @@ if hasattr(os,'register_at_fork'):os.register_at_fork(after_in_child=_after_fork
 
 
 @contextmanager
+def process_lock(path):
+    """Share the writer's reentrant lock with in-process metadata readers.
+
+    A reader may run inside an existing file transaction. Do not acquire a
+    second flock descriptor there: only the process-local lock is needed to
+    keep the shared Python document from changing underneath its writer.
+    """
+    with _process_lock(Path(path).resolve()):
+        yield
+
+
+@contextmanager
 def file_lock(path):
     import fcntl
     path=Path(path).resolve()
-    with _process_lock(path),path.open('a+b') as stream:
+    with process_lock(path),path.open('a+b') as stream:
         fcntl.flock(stream,fcntl.LOCK_EX)
         try:yield
         finally:fcntl.flock(stream,fcntl.LOCK_UN)

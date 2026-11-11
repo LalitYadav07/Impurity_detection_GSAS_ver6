@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager
+from functools import wraps
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -12,7 +13,7 @@ import uuid
 import zipfile
 
 from ..execution import write_json
-from ..locking import file_lock
+from ..locking import file_lock, process_lock
 from ..symmetry.contracts import digest
 
 SCHEMA = 'radar-experiment-preparation-library/v1'
@@ -128,6 +129,14 @@ def validate_manifest(value):
     return value
 
 
+def _locked_read(method):
+    @wraps(method)
+    def read(self, *args, **kwargs):
+        with process_lock(self.root/'.library.lock'):
+            return method(self, *args, **kwargs)
+    return read
+
+
 class PreparationLibrary:
     """One durable model/bank denominator; retries never erase past coverage."""
     def __init__(self, root):
@@ -170,6 +179,7 @@ class PreparationLibrary:
             shutil.rmtree(root)
             raise
 
+    @_locked_read
     def verify(self):
         validate_manifest(self.document)
         if digest(self._read_document()) != digest(self.document):
@@ -183,6 +193,7 @@ class PreparationLibrary:
             raise ValueError('Preparation library manifest is absent or oversized')
         return validate_manifest(json.loads(self.path.read_text()))
 
+    @_locked_read
     def refresh(self):
         """Read durable state; state inspection does not consume scientific arrays.
 
@@ -233,6 +244,7 @@ class PreparationLibrary:
                 from ..live.array_limits import validate_npz
                 validate_npz(path)
 
+    @_locked_read
     def verify_assets(self, names):
         """Check the exact published inputs/outputs a calculation will consume."""
         self.refresh()
@@ -244,6 +256,7 @@ class PreparationLibrary:
         self._verify_artifacts([inventory[n] for n in names])
         return {n: confined(self.root, n) for n in names}
 
+    @_locked_read
     def prepared_assets(self, identifier):
         """Verify a completed entry before handing its arrays to an evaluator."""
         self.refresh()
@@ -361,6 +374,7 @@ class PreparationLibrary:
             if count:self._save()
             return count
 
+    @_locked_read
     def coverage(self):
         self.refresh()
         counts = {state: 0 for state in sorted(STATES)}
