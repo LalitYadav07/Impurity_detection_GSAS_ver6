@@ -96,12 +96,12 @@ jobs:
         run: |
           mkdir -p numerical-validation
           chmod 0777 numerical-validation
-          docker run --rm "${IMAGE_NAME}:gsasii-gui" \
+          docker run --rm -v "$PWD/numerical-validation:/reports" "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python /opt/gsasii-gui/kernel_geometry_control.py --installed \
-            > numerical-validation/magnetic.json
-          docker run --rm "${IMAGE_NAME}:gsasii-gui" \
+            --output /reports/magnetic.json > numerical-validation/magnetic.log
+          docker run --rm -v "$PWD/numerical-validation:/reports" "${IMAGE_NAME}:gsasii-gui" \
             /opt/conda/bin/python /opt/gsasii-gui/nuclear_powder_control.py --installed \
-            > numerical-validation/nuclear.json
+            --output /reports/nuclear.json > numerical-validation/nuclear.log
           docker run --rm -v "$PWD:/validation:ro" \
             -v "$PWD/numerical-validation:/reports" \
             -e RADAR_GSASII_DESKTOP_SOURCE=/opt/GSAS-II/GSASII \

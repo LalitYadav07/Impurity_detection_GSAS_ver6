@@ -6,6 +6,7 @@ import copy
 import argparse
 import inspect
 import json
+from pathlib import Path
 
 import numpy as np
 from GSASII import GSASIIstrMath as M
@@ -108,4 +109,10 @@ def control(*,installed=False):
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--installed',action='store_true')
-    print(json.dumps(control(installed=parser.parse_args().installed),sort_keys=True))
+    parser.add_argument('--output',type=Path,help='Write a JSON receipt separately from GSAS-II startup messages')
+    args=parser.parse_args()
+    receipt=json.dumps(control(installed=args.installed),sort_keys=True)+'\n'
+    if args.output:
+        args.output.write_text(receipt)
+    else:
+        print(receipt,end='')

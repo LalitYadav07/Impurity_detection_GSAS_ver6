@@ -151,6 +151,7 @@ def main():
     mode=parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--kernel-patch',type=Path)
     mode.add_argument('--installed',action='store_true',help='Verify installed functions without constructing replacements')
+    parser.add_argument('--output',type=Path,help='Write a JSON receipt separately from GSAS-II startup messages')
     args=parser.parse_args()
     patch_record=None
     if args.installed:
@@ -304,7 +305,10 @@ def main():
         corrected_derivative_checks_passed=derivatives_passed,
         summary=summary,cases=results,full_orbit_cases=orbits,anisotropic_cases=anisotropic,
         derivative_checks=derivative_checks)
-    print(json.dumps(document,indent=2))
+    if args.output:
+        args.output.write_text(json.dumps(document,indent=2)+'\n')
+    else:
+        print(json.dumps(document,indent=2))
     raise SystemExit(0 if passed and orbit_passed and anisotropic_passed is not False and derivatives_passed is not False else 1)
 
 
