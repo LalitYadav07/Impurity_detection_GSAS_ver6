@@ -4,13 +4,20 @@
     <command detect_errors="exit_code"><![CDATA[
         touch '$result_bundle' '$response_cache_output' '$console_output' &&
         trap "chmod a+r '$result_bundle' '$response_cache_output' '$console_output' >/dev/null 2>&1 || true" EXIT &&
+        python '$resource_probe' > '$console_output' 2>&1 &&
         python -m gpx_recipe.live.galaxy_worker '$packet' worker '$result_bundle' '$response_cache_output' --preparation-evidence '$preparation_provenance' #slurp
         #if $response_cache
             --cache '$response_cache' #slurp
         #end if
-        > '$console_output' 2>&1
+        >> '$console_output' 2>&1
     ]]></command>
     <configfiles>
+        <configfile name="resource_probe"><![CDATA[import json, os
+from gpx_recipe.symmetry.resources import allocation
+names = ('GALAXY_SLOTS', 'GALAXY_MEMORY_MB')
+reported = {name: int(os.environ[name]) if os.environ.get(name, '').isascii() and os.environ.get(name, '').isdecimal() and 0 < int(os.environ[name]) < 2**40 else None for name in names}
+print('[RADAR RESOURCE ALLOCATION] ' + json.dumps(dict(schema='radar-resource-allocation/v1', reported=reported, capacity=allocation(4), scope='Allocation capacity, not a measurement of simultaneous CPU use.'), sort_keys=True))
+]]></configfile>
 @PREPARATION_PROVENANCE@
     </configfiles>
     <inputs>
