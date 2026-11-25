@@ -101,11 +101,56 @@ class GuidedRefinementMixin:
 
     def _guided_solver_form_key(self):
         s=self.server.state
-        return tuple(str(getattr(s,k,'')) for k in ('rf_guide_solver_limit','rf_guide_solver_override','rf_guide_solver_tolerance'))
+        def numeric(value):
+            try:number=float(value)
+            except (TypeError,ValueError):return ('raw',str(value))
+            return ('number',number) if not isinstance(value,bool) and math.isfinite(number) else ('raw',str(value))
+        override=getattr(s,'rf_guide_solver_override',False)
+        return (numeric(getattr(s,'rf_guide_solver_limit','')),
+                (type(override).__name__,str(override)),
+                numeric(getattr(s,'rf_guide_solver_tolerance','')) if override is True else None)
 
-    def guided_solver_controls_edited(self,*_,**__):
+    def _apply_guided_solver_form(self,payload):
+        if payload is None:return
+        if not isinstance(payload,dict) or set(payload)!={'maximum','override','tolerance'}:
+            raise ValueError('Review the numerical stopping settings again.')
+        s=self.server.state
+        # Use the values from the triggering browser event. A separate v-model
+        # update can arrive later, and non-finite JSON numbers may be discarded.
+        s.rf_guide_solver_limit=payload['maximum']
+        s.rf_guide_solver_override=payload['override']
+        s.rf_guide_solver_tolerance=payload['tolerance']
+
+    def _guided_state_with_solver_form(self,context):
+        s=self.server.state
+        raw=getattr(s,'rf_guide_solver_limit',None)
+        maximum=None
+        if raw is not None:
+            try:value=float(raw)
+            except (TypeError,ValueError):raise ValueError('Enter an integer native work limit.') from None
+            if isinstance(raw,bool) or not math.isfinite(value) or not value.is_integer():
+                raise ValueError('Enter an integer native work limit.')
+            maximum=int(value)
+        override=getattr(s,'rf_guide_solver_override',False)
+        if type(override) is not bool:raise ValueError('Choose whether to override the source stopping tolerance.')
+        try:tolerance=float(s.rf_guide_solver_tolerance) if override else None
+        except (TypeError,ValueError):raise ValueError('Enter a numeric relative-objective tolerance, for example 1e-5.') from None
+        return guided.with_solver_settings(context,deepcopy(self._guided_state),maximum=maximum,relative_objective_tolerance=tolerance)
+
+    def _guard_guided_solver_form(self,payload):
+        if payload is None:return
+        self._apply_guided_solver_form(payload)
+        self.guided_solver_controls_edited()
+        candidate=self._guided_state_with_solver_form(self._guided_context())
+        if candidate.get('solver_settings')!=self._guided_state.get('solver_settings'):
+            raise ValueError('Numerical controls changed. Build and check the recipe again before approval.')
+
+    def guided_solver_controls_edited(self,payload=None,*_,**__):
         s=self.server.state
         if s.rf_busy or s.rf_guided_busy or self._guided_state is None:return
+        try:self._apply_guided_solver_form(payload)
+        except ValueError as exc:
+            s.rf_error=str(exc);s.flush();return
         current=self._guided_solver_form_key()
         if current==self._guided_solver_form:return
         self._guided_solver_form=current
@@ -198,30 +243,19 @@ class GuidedRefinementMixin:
         except Exception as exc:s.rf_error=str(exc)
         s.flush()
 
-    def compile_guided_refinement(self,**_):
+    def compile_guided_refinement(self,payload=None,**_):
         s=self.server.state;w=self._refinement_workspace
         if s.rf_busy or s.rf_guided_busy:return
         try:
-            context=self._guided_context();state=deepcopy(self._guided_state)
-            raw=getattr(s,'rf_guide_solver_limit',None)
-            maximum=None
-            if raw is not None:
-                try:value=float(raw)
-                except (TypeError,ValueError):raise ValueError('Enter an integer native work limit.') from None
-                if isinstance(raw,bool) or not math.isfinite(value) or not value.is_integer():
-                    raise ValueError('Enter an integer native work limit.')
-                maximum=int(value)
-            override=getattr(s,'rf_guide_solver_override',False)
-            if type(override) is not bool:raise ValueError('Choose whether to override the source stopping tolerance.')
-            try:tolerance=float(s.rf_guide_solver_tolerance) if override else None
-            except (TypeError,ValueError):raise ValueError('Enter a numeric relative-objective tolerance, for example 1e-5.') from None
-            state=guided.with_solver_settings(context,state,maximum=maximum,relative_objective_tolerance=tolerance)
+            self._apply_guided_solver_form(payload)
+            if payload is not None:self.guided_solver_controls_edited()
+            context=self._guided_context();state=self._guided_state_with_solver_form(context)
             plan=guided.build_plan(context,state);source_id=s.rf_source;experiment=s.rf_experiment;epoch=self._guided_epoch
             self._guided_state=state
             s.rf_request=plan['request'];s.rf_guided_busy=True;s.rf_error='';s.rf_message='Checking the guided recipe against the native model. Approval and Start refinement are still required.';s.flush()
             owner=dict(workspace=w,selection=(experiment,source_id,plan['request'],getattr(s,'rf_setup_mode','guided')),
                        source_sha256=context['source']['sha256'],guided=state)
-        except Exception as exc:s.rf_error=str(exc);return
+        except Exception as exc:s.rf_error=str(exc);s.flush();return
         async def work():
             try:
                 draft=await self._prepare_recipe_with_progress(owner)

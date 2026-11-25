@@ -1,7 +1,7 @@
 """A single integrated refinement workspace; credentials never enter UI state."""
 from trame.widgets import client, html, plotly, vuetify3 as v
 from .symmetry_ui import model_exploration
-from .guided_refinement_ui import guided_setup
+from .guided_refinement_ui import guided_setup, GUIDED_SOLVER_GUARD
 
 
 def select(label,field,items,**kwargs):
@@ -204,8 +204,8 @@ def refinement_dashboard(app):
                     v.VBtn('Build the guided plan',v_if="!!rf_source && !rf_questions.length && rf_setup_mode === 'guided'",click="window.document.getElementById('radar-rf-guided')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
                     v.VBtn('Generate or revise the plan',v_if="!!rf_source && !rf_questions.length && rf_setup_mode === 'expert' && !!rf_request.trim()",click="window.document.getElementById('radar-rf-generate')?.scrollIntoView({block:'center'})",size='small',variant='tonal')
                 with html.Div(classes='rf-actions'):
-                    v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token]'),disabled=('!rf_plan_ready || rf_busy || rf_guided_busy || rf_approved || rf_compatibility_blocked',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')
-                    v.VBtn('Start refinement',click=app.start_refinement_queue,disabled=('!rf_approved || rf_busy || rf_guided_busy',),variant='flat',color='#15543c',prepend_icon='mdi-play')
+                    v.VBtn('Approve recipe and scope',click=(app.approve_refinement_recipe,'[rf_scope_token, '+GUIDED_SOLVER_GUARD+']'),disabled=('!rf_plan_ready || rf_busy || rf_guided_busy || rf_approved || rf_compatibility_blocked',),variant='outlined',color='#15543c',prepend_icon='mdi-check-decagram-outline')
+                    v.VBtn('Start refinement',click=(app.start_refinement_queue,'['+GUIDED_SOLVER_GUARD+']'),disabled=('!rf_approved || rf_busy || rf_guided_busy',),variant='flat',color='#15543c',prepend_icon='mdi-play')
                 html.P("{{ rf_approved ? 'Approved. Start refinement submits the reviewed plan to the selected scans.' : 'Approve recipe and scope records your review; it does not start calculations.' }}",classes='rf-notice mt-3')
                 html.P('{{ rf_transfer_notice }}',classes='rf-notice mt-4')
         with html.Div(v_show="rf_mode === 'results' && rf_experiments.length",classes='rf-results'):

@@ -100,6 +100,77 @@ def test_guided_solver_edit_survives_unrelated_source_refresh(context):
     assert app.server.state.rf_guide_solver_limit==20
 
 
+@pytest.fixture
+def solver_form_app(context):
+    import asyncio
+    from types import SimpleNamespace
+    from radar_pd_nova.guided_refinement_controller import GuidedRefinementMixin
+
+    context['controls']={'deriv type':'analytic Hessian','min dM/M':.001}
+    class App(GuidedRefinementMixin):
+        def _guided_context(self):return context
+        def _refinement_hold_enrollment(self):self.events.append('hold')
+        def _refinement_sync(self):pass
+        def _refinement_checkpoint(self):pass
+        def _refinement_schedule(self,work,label):asyncio.run(work)
+        async def _prepare_recipe_with_progress(self,owner):
+            self.plans.append(guided.build_plan(context,owner['guided']))
+            return {'plan':self.plans[-1]}
+    app=App();app.events=[];app.plans=[]
+    app.server=SimpleNamespace(state=SimpleNamespace(rf_source='s1',rf_experiment='exp',
+        rf_busy=False,rf_setup_mode='guided',rf_approved=True,flush=lambda:None))
+    app._init_guided_refinement()
+    app._guided_state=guided.with_solver_settings(context,complete(context,'mixture'),
+        maximum=24,relative_objective_tolerance=1e-5)
+    app._guided_epoch='test';app._guided_source_id='s1'
+    app._guided_solver_fields(context)
+    app._refinement_workspace=SimpleNamespace(discard_draft=lambda _:app.events.append('discard'))
+    return app
+
+
+def test_browser_edit_value_invalidates_draft_before_v_model_arrives(solver_form_app):
+    app=solver_form_app
+    app.guided_solver_controls_edited({'maximum':'24','override':True,'tolerance':'NaN'})
+    assert app.server.state.rf_guide_solver_tolerance=='NaN'
+    assert app.events==['hold','discard']
+
+
+def test_build_rejects_invalid_browser_value_instead_of_using_old_valid_value(solver_form_app):
+    app=solver_form_app
+    app.compile_guided_refinement({'maximum':'24','override':True,'tolerance':'NaN'})
+    assert not app.plans
+    assert 'tolerance' in app.server.state.rf_error.lower()
+    assert app.events==['hold','discard']
+
+
+def test_build_uses_complete_browser_snapshot_when_server_form_is_older(solver_form_app):
+    app=solver_form_app
+    app.compile_guided_refinement({'maximum':'25','override':True,'tolerance':'1e-6'})
+    assert len(app.plans)==1
+    assert all(s['cycles']==25 and s['relative_objective_tolerance']==1e-6
+        and s['convergence']=={'max_shift_over_sigma':.5} for s in app.plans[0]['stages'])
+
+
+@pytest.mark.parametrize('action',['approve','start'])
+@pytest.mark.parametrize('tolerance',['NaN','1e-6'])
+def test_unacknowledged_browser_edit_cannot_approve_or_start_old_plan(solver_form_app,action,tolerance):
+    from radar_pd_nova.refinement_controller import RefinementMixin
+    app=solver_form_app
+    payload={'maximum':'24','override':True,'tolerance':tolerance}
+    if action=='approve':RefinementMixin.approve_refinement_recipe(app,solver_form=payload)
+    else:RefinementMixin.start_refinement_queue(app,solver_form=payload)
+    assert app.server.state.rf_error
+    assert app.events==['hold','discard']
+    assert not app.plans
+
+
+@pytest.mark.parametrize('maximum,tolerance',[('24','1e-5'),('24.0','0.00001')])
+def test_unchanged_browser_form_preserves_checked_plan(solver_form_app,maximum,tolerance):
+    app=solver_form_app
+    app._guard_guided_solver_form({'maximum':maximum,'override':True,'tolerance':tolerance})
+    assert not app.events
+
+
 @pytest.mark.parametrize('method',['numeric','analytic Jacobian'])
 def test_numerical_guide_reviews_supported_stopping_before_building(context,method):
     context['controls']={'deriv type':method}

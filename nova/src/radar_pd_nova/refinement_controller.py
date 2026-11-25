@@ -1144,10 +1144,11 @@ class RefinementMixin(GuidedRefinementMixin):
             finally:self._refinement_sync();self._refinement_checkpoint();s.flush()
         self._refinement_schedule(work(),'radar-refinement-reuse')
 
-    def approve_refinement_recipe(self,selection_token=None,**_):
+    def approve_refinement_recipe(self,selection_token=None,solver_form=None,**_):
         s=self.server.state;w=self._refinement_workspace
         if s.rf_busy:return
         try:
+            self._guard_guided_solver_form(solver_form)
             experiment=s.rf_experiment;draft=copy.deepcopy(w.state['drafts'][experiment]);scope=self._refinement_scope()
             if not self._refinement_setup_matches(draft):raise ValueError('Build and review a recipe using the selected setup method before approving.')
             existing,future=bool(s.rf_existing),bool(s.rf_future)
@@ -1176,9 +1177,10 @@ class RefinementMixin(GuidedRefinementMixin):
             self._refinement_schedule(capture_and_approve(),'radar-refinement-approve')
         s.flush()
 
-    def start_refinement_queue(self,**_):
+    def start_refinement_queue(self,solver_form=None,**_):
         s=self.server.state
         try:
+            self._guard_guided_solver_form(solver_form)
             self._refinement_sync_approval()
             if not s.rf_approved:raise ValueError('Review and approve the current recipe and execution scope')
             self._refinement_workspace.start(s.rf_recipe_id,self._refinement_selection_token)

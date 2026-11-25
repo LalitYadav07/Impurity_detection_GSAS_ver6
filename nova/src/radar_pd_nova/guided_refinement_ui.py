@@ -1,6 +1,9 @@
 from trame.widgets import html, vuetify3 as v
 from .uploads import NamedFileUpload
 
+GUIDED_SOLVER_FORM = "{maximum:String(rf_guide_solver_limit),override:rf_guide_solver_override,tolerance:String(rf_guide_solver_tolerance)}"
+GUIDED_SOLVER_GUARD = "rf_setup_mode === 'guided' && rf_guide_complete ? " + GUIDED_SOLVER_FORM + " : null"
+
 
 def guided_setup(app):
     with html.Details(classes='mt-3'):
@@ -49,11 +52,14 @@ def guided_setup(app):
             html.P('Solver: {{ rf_guide_solver_method }}. Source relative-objective tolerance: {{ rf_guide_solver_source_tolerance }}.',classes='rf-notice')
             v.VTextField(label=("rf_guide_solver_numerical ? 'Maximum residual evaluations per stage' : 'Maximum cycles per stage'",),
                 v_model=('rf_guide_solver_limit',),type='text',inputmode='numeric',density='compact',
-                disabled=('rf_busy || rf_guided_busy',),update_modelValue=app.guided_solver_controls_edited)
+                disabled=('rf_busy || rf_guided_busy',),update_modelValue=(app.guided_solver_controls_edited,
+                    '[{maximum:String($event),override:rf_guide_solver_override,tolerance:String(rf_guide_solver_tolerance)}]'))
             v.VCheckbox(label='Override the source relative-objective stopping tolerance',v_model=('rf_guide_solver_override',),
-                density='compact',disabled=('rf_busy || rf_guided_busy',),update_modelValue=app.guided_solver_controls_edited)
+                density='compact',disabled=('rf_busy || rf_guided_busy',),update_modelValue=(app.guided_solver_controls_edited,
+                    '[{maximum:String(rf_guide_solver_limit),override:$event,tolerance:String(rf_guide_solver_tolerance)}]'))
             v.VTextField(v_if='rf_guide_solver_override',label='Relative-objective tolerance (for example 1e-5)',
                 v_model=('rf_guide_solver_tolerance',),type='text',inputmode='decimal',density='compact',
-                disabled=('rf_busy || rf_guided_busy',),update_modelValue=app.guided_solver_controls_edited)
+                disabled=('rf_busy || rf_guided_busy',),update_modelValue=(app.guided_solver_controls_edited,
+                    '[{maximum:String(rf_guide_solver_limit),override:rf_guide_solver_override,tolerance:String($event)}]'))
             html.P('Smaller tolerances may take more iterations or stall. This changes native stopping, not the separate final shift/sigma acceptance check. Rebuild and review the recipe after editing.',classes='rf-notice')
-        v.VBtn('Build and check recipe',v_if='rf_guide_complete',click=app.compile_guided_refinement,disabled=('rf_busy || rf_guided_busy',),color='#15543c',classes='mt-3')
+        v.VBtn('Build and check recipe',v_if='rf_guide_complete',click=(app.compile_guided_refinement,'['+GUIDED_SOLVER_FORM+']'),disabled=('rf_busy || rf_guided_busy',),color='#15543c',classes='mt-3')
