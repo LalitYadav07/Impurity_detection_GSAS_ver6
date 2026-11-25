@@ -159,7 +159,7 @@ def test_a_foreign_profile_or_parent_does_not_load_the_model(tmp_path,monkeypatc
 @pytest.mark.parametrize('kind',['edge','gap'])
 def test_unavailable_coverage_ranking_retains_every_native_candidate(tmp_path,monkeypatch,kind):
     from gpx_recipe.preparation import structural_ranker
-    from radar_pd_nova.model_admission import _ranking_window
+    from gpx_recipe.preparation.structural_features import pattern_features
     library,protocol=prepared(tmp_path/'control');packet=tmp_path/'packet'
     row=hints.capture(library,protocol,packet)['ranking_models']['entries'][0]
     q=np.linspace(1.,3.,201);valid=np.ones(len(q),bool)
@@ -168,9 +168,11 @@ def test_unavailable_coverage_ranking_retains_every_native_candidate(tmp_path,mo
     class CoverageGuard:
         def __init__(self,*args,**kwargs):pass
         def rank(self,q,intensity,**kwargs):
-            window=_ranking_window(dict(q=q,intensity=intensity,background=kwargs['background'],valid=kwargs['valid']),
-                np.linspace(1.,3.,65),role='current',source_sha256='a'*64,histogram='test')
-            assert window['minimum_bin_coverage']<.999
+            # Exercise the shared projection without requiring the web-only
+            # admission adapter in the standalone CUDA training image.
+            projected=pattern_features(q,intensity,np.linspace(1.,3.,65),
+                background=kwargs['background'],valid=kwargs['valid'])
+            assert projected[2].min()<.999
             raise ValueError('This structural ranker is not qualified for missing coordinate intervals')
     monkeypatch.setattr(structural_ranker,'Ranker',CoverageGuard)
     result=ranking.rank(packet,protocol,q,np.ones(len(q)),background=np.zeros(len(q)),valid=valid,
