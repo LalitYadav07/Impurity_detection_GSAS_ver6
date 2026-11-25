@@ -152,11 +152,12 @@ class PreparationQueue:
             except (OSError,ValueError):pass
             uncertain=bool(job['handle'] and job['handle']['submission_started'])
             from .preparation_training_runtime import TrainingCapacityPending,TrainingContractUnsupported
+            from .model_runtime import PreparationExamplesBatchUnsupported
+            unsupported=isinstance(exc,(TrainingContractUnsupported,PreparationExamplesBatchUnsupported)) and not uncertain
             job.update(phase='needs_recovery' if uncertain else 'awaiting_submission',
                 reason=('Recovering the existing Galaxy dispatch; no duplicate will be submitted.' if uncertain
-                    else str(exc) if isinstance(exc,(TrainingCapacityPending,TrainingContractUnsupported))
+                    else str(exc) if isinstance(exc,(TrainingCapacityPending,TrainingContractUnsupported,PreparationExamplesBatchUnsupported))
                     else 'Submission is waiting for inputs or its durable History checkpoint ('+type(exc).__name__+').'))
-            unsupported=isinstance(exc,TrainingContractUnsupported) and not uncertain
             if unsupported:state['paused']=True;self._paused.set()
             self._save(state,remote=unsupported);return
         job.update(handle=handle,phase='submitted' if handle['job'] else 'needs_recovery',reason='')

@@ -99,3 +99,25 @@ def test_direct_new_submission_cannot_bypass_the_backend_marker(remote,tmp_path)
     with pytest.raises(RuntimeUnavailable,match='does not support full-budget'):
         runtime._submit('native',source,dict(operation=batch.EXAMPLES_OPERATION),'asset','a'*24)
     assert not service.submissions
+
+
+def test_staged_batch_pauses_on_capability_loss_and_resumes_same_request(remote,tmp_path,monkeypatch):
+    queue,_,_=queue_for(remote,tmp_path);runtime,service,_=remote
+    original=queue._stage
+    def stage_then_capability_loss(job):
+        payload=original(job);service.tool_has_input=lambda *args:False;return payload
+    monkeypatch.setattr(queue,'_stage',stage_then_capability_loss)
+    queue.resume();result=queue.tick();job=queue.snapshot()['jobs'][0]
+    assert result['queue']['paused'] and not service.submissions
+    assert job['mode']=='examples-batch' and job['phase']=='awaiting_submission'
+    assert not job['handle']['submission_started']
+    assert 'Resume after the worker capability is restored' in job['reason']
+    identity=job['handle']['key'];members=job['members'];payload=job['handle']['request']['payload']
+    queue.tick();assert len(queue.snapshot()['jobs'])==1 and not service.submissions
+    monkeypatch.setattr(queue,'_stage',original)
+    service.tool_has_input=lambda tool,name:name==batch.EXAMPLES_CAPABILITY
+    queue.resume();queue.tick();resumed=queue.snapshot()['jobs'][0]
+    assert len(service.submissions)==1 and len(queue.snapshot()['jobs'])==1
+    assert resumed['handle']['key']==identity and resumed['members']==members
+    assert resumed['handle']['request']['payload']==payload
+    assert resumed['phase']=='submitted'

@@ -30,6 +30,10 @@ EMPTY_PACKET_BYTES=b'{"schema":"radar-model-packet/v1","files":{}}\n'
 EMPTY_PACKET_SHA256=hashlib.sha256(EMPTY_PACKET_BYTES).hexdigest()
 
 
+class PreparationExamplesBatchUnsupported(RuntimeUnavailable):
+    """A proven pre-POST capability mismatch, safe to pause and resume later."""
+
+
 def tick_model_campaign(campaign,transport,*,slots):
     """Use one successful job-metadata read per chunk in this scheduler pass."""
     scope=getattr(transport,'collection_pass',None)
@@ -317,7 +321,10 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
             from gpx_recipe.preparation.batch import EXAMPLES_OPERATION
             if (action=='native' and request.get('operation')==EXAMPLES_OPERATION
                     and not self.supports_preparation_examples_batch()):
-                raise RuntimeUnavailable('The installed Model Campaign worker does not support full-budget structural example batches. No new job was submitted.')
+                raise PreparationExamplesBatchUnsupported(
+                    'The installed Model Campaign worker does not support full-budget structural example batches. '
+                    'No new job was submitted. Resume after the worker capability is restored; '
+                    'this captured batch and its attempts stay unchanged.')
             entry['absence_verified']=True
             lookup_done=time.monotonic()
             self.wait_capacity(cancel)
