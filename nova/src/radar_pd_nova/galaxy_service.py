@@ -1253,13 +1253,44 @@ class GalaxyService:
             payload = yaml.safe_load(response.text)
         return payload if isinstance(payload, dict) else None
 
+    def _dataset_download_url(self, dataset_id: str) -> str:
+        """Use Galaxy's file route, without forwarding credentials off-origin.
+
+        The generic dataset display endpoint can stall for binary content.
+        Prefer the advertised History download route for completed files.
+        """
+        identifier = str(dataset_id)
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', identifier):
+            raise ValueError('Invalid Galaxy dataset identifier')
+        metadata = self._dataset_metadata(identifier)
+        if metadata.get('id', identifier) != identifier:
+            raise ValueError('Galaxy download metadata identifies a different dataset')
+        advertised = metadata.get('download_url')
+        if not advertised:
+            return f'{self.galaxy_url}/api/datasets/{identifier}/display'
+        if not isinstance(advertised, str):
+            raise ValueError('Invalid Galaxy dataset download route')
+        base = urlsplit(self.galaxy_url)
+        route = urlsplit(advertised)
+        if (route.scheme and route.scheme != base.scheme
+                or route.netloc and route.netloc != base.netloc
+                or route.query or route.fragment):
+            raise ValueError('Galaxy dataset download must stay on the authenticated origin')
+        prefix = re.escape(base.path.rstrip('/'))
+        dataset = re.escape(identifier)
+        allowed = (rf'{prefix}/api/histories/[A-Za-z0-9_-]+/contents/{dataset}/display',
+                   rf'{prefix}/api/datasets/{dataset}/display')
+        if not any(re.fullmatch(pattern, route.path) for pattern in allowed):
+            raise ValueError('Galaxy download route does not identify the requested dataset')
+        return urlunsplit((base.scheme, base.netloc, route.path, '', ''))
+
     def _download_dataset(self, dataset_id: str, destination: Path, *, maximum_bytes: int | None = None) -> None:
         """Download a durable Galaxy dataset without relying on a live Tool object."""
 
         if maximum_bytes is not None and (type(maximum_bytes) is not int or maximum_bytes < 1):
             raise ValueError('A download byte budget must be a positive integer')
         response = requests.get(
-            f"{self.galaxy_url}/api/datasets/{dataset_id}/display",
+            self._dataset_download_url(dataset_id),
             headers=self._headers,
             params={"raw": "true"},
             timeout=120,

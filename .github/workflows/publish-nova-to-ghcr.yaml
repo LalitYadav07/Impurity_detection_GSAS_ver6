@@ -322,6 +322,7 @@ jobs:
             /validation-tests/test_preparation_training_continuation.py \
             /validation-tests/test_preparation_batch_queue.py \
             /validation-tests/test_preparation_history.py \
+            /validation-tests/test_galaxy_download_route.py \
             /validation-tests/test_preparation_workspace.py \
             /validation-tests/test_preparation_controller.py \
             /validation-tests/test_preparation_coordinates.py \

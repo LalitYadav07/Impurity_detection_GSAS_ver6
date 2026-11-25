@@ -228,6 +228,7 @@ def test_editing_old_dataset_does_not_restore_stale_intent(remote,tmp_path):
 def test_bounded_download_preserves_old_artifact_and_removes_only_partial(remote,tmp_path,monkeypatch,failure):
     from radar_pd_nova import galaxy_service as module
     service=GalaxyService('https://galaxy.invalid','private','history',output_root=tmp_path/'service')
+    service._dataset_metadata=lambda identifier:{}
     target=tmp_path/'retained';target.write_bytes(b'original')
     closed=[]
     def chunks(**kwargs):
@@ -245,6 +246,7 @@ def test_bounded_download_preserves_old_artifact_and_removes_only_partial(remote
 def test_bounded_download_accepts_exact_limit_and_publishes_atomically(tmp_path,monkeypatch):
     from radar_pd_nova import galaxy_service as module
     service=GalaxyService('https://galaxy.invalid','private','history',output_root=tmp_path/'service')
+    service._dataset_metadata=lambda identifier:{}
     target=tmp_path/'result'
     response=SimpleNamespace(raise_for_status=lambda:None,iter_content=lambda **k:iter([b'ab',b'cd']),close=lambda:None)
     monkeypatch.setattr(module.requests,'get',lambda *a,**k:response)
