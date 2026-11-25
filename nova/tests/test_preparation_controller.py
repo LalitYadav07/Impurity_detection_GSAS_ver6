@@ -119,7 +119,8 @@ def test_structural_training_is_visible_and_separately_filterable(app,tmp_path,s
     first=queue.tick();jobs=first['queue']['jobs']
     trainer=next(row['id'] for row in store.registry.get(selected).document['entries']
         if row['model']['kind']=='structural-training')
-    assert len(jobs)==2
+    assert first['effective_job_limit']==1  # The fixture grants one Galaxy job.
+    assert len(jobs)==1
     for job in jobs:
         assert job['mode']==('examples-batch' if supports_full_units else 'single')
         assert len(job['members'])==(4 if supports_full_units else 1)
