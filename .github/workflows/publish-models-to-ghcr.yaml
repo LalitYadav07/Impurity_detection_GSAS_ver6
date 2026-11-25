@@ -218,6 +218,7 @@ jobs:
             /validation/tests/test_preparation_tool_contract.py \
             /validation/tests/gpx_recipe/test_live_preparation_authority.py \
             /validation/tests/gpx_recipe/test_preparation_batch.py \
+            /validation/tests/gpx_recipe/test_preparation_full_unit_batch.py \
             /validation/tests/gpx_recipe/test_preparation_batch_cancellation.py \
             /validation/tests/gpx_recipe/test_preparation_failures.py \
             /validation/tests/gpx_recipe/test_preparation_native_size.py \

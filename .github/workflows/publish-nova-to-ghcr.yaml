@@ -319,6 +319,7 @@ jobs:
             /validation-tests/test_native_operations.py \
             /validation-tests/test_prepared_structural_discovery.py \
             /validation-tests/test_preparation_queue.py \
+            /validation-tests/test_preparation_generation_batch.py \
             /validation-tests/test_preparation_training_continuation.py \
             /validation-tests/test_preparation_batch_queue.py \
             /validation-tests/test_preparation_history.py \
