@@ -129,7 +129,8 @@ implementation_sha256=package_signature(),result_archive_sha256='a'*64,entries=[
 
 
 @pytest.mark.parametrize('with_cache', [False, True])
-def test_live_command_preserves_the_cached_response_and_provenance(tools, tmp_path, with_cache):
+@pytest.mark.parametrize('folded', [False, True])
+def test_live_command_preserves_the_cached_response_and_provenance(tools, tmp_path, with_cache, folded):
     worker = tmp_path/'installed_live_worker.py'
     worker.write_text("""import argparse,json,pathlib
 p=argparse.ArgumentParser()
@@ -139,15 +140,25 @@ a=p.parse_args();pathlib.Path(a.result).write_text(json.dumps(vars(a)))
 pathlib.Path(a.cache_output).write_text('retained response')
 """)
     result, cache_output = tmp_path/'live-result.json', tmp_path/'cache.zip'
+    probe = tmp_path/'resource_probe.py'
+    probe.write_text(tools['live_snapshot'].findtext("configfiles/configfile[@name='resource_probe']"))
+    console = tmp_path/'console.txt'
     command = tools['live_snapshot'].findtext('command').replace('-m gpx_recipe.live.galaxy_worker', shlex.quote(str(worker)))
     run_command(command, dict(packet='scan.zip', response_cache='previous.zip' if with_cache else None,
         result_bundle=str(result), response_cache_output=str(cache_output),
-        preparation_provenance='server-context.json', console_output=str(tmp_path/'console.txt')), tmp_path)
+        preparation_provenance='server-context.json', resource_probe=str(probe),
+        console_output=str(console)), tmp_path, folded=folded)
     actual = json.loads(result.read_text())
     assert actual['packet'] == 'scan.zip'
     assert actual['cache'] == ('previous.zip' if with_cache else None)
     assert actual['preparation_evidence'] == 'server-context.json'
     assert cache_output.read_text() == 'retained response'
+    marker = '[RADAR RESOURCE ALLOCATION] '
+    resource = json.loads(next(line.removeprefix(marker) for line in console.read_text().splitlines()
+                               if line.startswith(marker)))
+    assert resource['schema'] == 'radar-resource-allocation/v1'
+    assert set(resource['reported']) == {'GALAXY_SLOTS', 'GALAXY_MEMORY_MB'}
+    assert 'not a measurement' in resource['scope']
 
 
 @pytest.mark.parametrize('image', ['ghcr.io/neutrons/radar-pd:latest', 'models-'+40*'a',

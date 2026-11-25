@@ -156,13 +156,15 @@ jobs:
       - name: Verify installed structural-library admission contract and native guards
         if: inputs.image_variant != 'preparation-cuda'
         run: |
-          docker run --rm --entrypoint sh -v "$PWD/tests/gpx_recipe:/validation:ro" "$IMAGE" -c '
+          docker run --rm --entrypoint sh -v "$PWD/tests/gpx_recipe:/validation:ro" \
+            -v "$PWD/nova/tests:/validation-ui:ro" "$IMAGE" -c '
           python -m pip install --quiet pytest &&
           export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation" &&
           export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 RADAR_ADMISSION_PACKAGED=1 &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache \
             /validation/test_model_admission_contract.py \
-            /validation/test_model_admission_native.py'
+            /validation/test_model_admission_native.py \
+            /validation-ui/test_model_admission_coverage.py'
 
       - name: Verify resource, protocol and runtime gates
         run: |
