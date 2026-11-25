@@ -18,6 +18,65 @@ PATH_FIELDS = ('source', 'parent', 'instrument', 'model', 'weights')
 MAX_BYTES = {'source': 128*1024**2, 'parent': 10*1024**2, 'instrument': 1024**2,
              'model': 2*1024**2, 'weights': 32*1024**2, 'reference': 128*1024**2,
              'child': 10*1024**2}
+MIN_RANKING_COVERAGE = .999
+
+
+def _ranking_window(features, edges, *, role, source_sha256, histogram):
+    """Record the unchanged ML coverage gate independently of native reuse."""
+    import numpy as np
+    from gpx_recipe.preparation.structural_features import pattern_features
+    projected = pattern_features(features['q'], features['intensity'], edges,
+        background=features['background'], valid=features['valid'])
+    coverage = np.asarray(projected[2], float)
+    valid_q = np.asarray(features['q'])[features['valid']]
+    incomplete = int(np.count_nonzero(coverage < MIN_RANKING_COVERAGE))
+    return dict(source_role=role, source_sha256=source_sha256, histogram=histogram,
+        valid_q_min=float(valid_q[0]), valid_q_max=float(valid_q[-1]),
+        trained_q_min=float(edges[0]), trained_q_max=float(edges[-1]),
+        minimum_bin_coverage=float(coverage.min()), incomplete_bins=incomplete,
+        total_bins=len(coverage), coverage_complete=incomplete == 0)
+
+
+def _ranking_applicability(sources):
+    complete = all(row['coverage_complete'] for row in sources)
+    return dict(status='coverage_passed' if complete else 'unavailable',
+        minimum_required_coverage=MIN_RANKING_COVERAGE, sources=sources,
+        ranking_evaluated=False, candidate_pruning_authorized=False,
+        reason=('Each source covers the trained Q window; paired coverage, inference and model-support checks have not run.' if complete else
+            'ML ranking is unavailable for this window because valid data do not cover every trained Q bin. '
+            'The complete native candidate set is retained.'))
+
+
+def _validate_ranking_applicability(value, result, payload):
+    import math
+    keys={'status','minimum_required_coverage','sources','ranking_evaluated','candidate_pruning_authorized','reason'}
+    roles=['current']+(['reference'] if 'reference' in payload else [])
+    if (not isinstance(value,dict) or set(value)!=keys
+            or value.get('minimum_required_coverage')!=MIN_RANKING_COVERAGE
+            or value.get('ranking_evaluated') is not False or value.get('candidate_pruning_authorized') is not False
+            or not isinstance(value.get('sources'),list) or len(value['sources'])!=len(roles)):
+        raise ValueError('Native admission omitted bounded ranking-coverage evidence')
+    expected_keys={'source_role','source_sha256','histogram','valid_q_min','valid_q_max',
+        'trained_q_min','trained_q_max','minimum_bin_coverage','incomplete_bins','total_bins','coverage_complete'}
+    for role,row in zip(roles,value['sources']):
+        checksum=(result['identity']['files']['source'] if role=='current' else result['identity']['reference_sha256'])
+        histogram=result.get('histogram' if role=='current' else 'reference_histogram')
+        if (not isinstance(row,dict) or set(row)!=expected_keys or row['source_role']!=role
+                or row['source_sha256']!=checksum or not isinstance(histogram,str) or not histogram
+                or row['histogram']!=histogram or len(histogram)>4096
+                or type(row['total_bins']) is not int or not 1<=row['total_bins']<=8192
+                or type(row['incomplete_bins']) is not int or not 0<=row['incomplete_bins']<=row['total_bins']
+                or type(row['coverage_complete']) is not bool
+                or any(type(row[k]) not in (int,float) or not math.isfinite(row[k])
+                    for k in ('valid_q_min','valid_q_max','trained_q_min','trained_q_max','minimum_bin_coverage'))
+                or not 0<row['valid_q_min']<row['valid_q_max']
+                or not 0<row['trained_q_min']<row['trained_q_max']
+                or not 0<=row['minimum_bin_coverage']<=1
+                or row['coverage_complete']!=(row['incomplete_bins']==0)
+                or row['coverage_complete']!=(row['minimum_bin_coverage']>=MIN_RANKING_COVERAGE)):
+            raise ValueError('Native admission ranking coverage differs from its captured source')
+    if value!=_ranking_applicability(value['sources']):
+        raise ValueError('Native admission overstated ranking applicability')
 
 
 def vector(value):
@@ -111,6 +170,7 @@ def validate_receipt(result, payload):
             or result.get('excluded_candidate_ids')!=excluded
             or result.get('candidate_ids')!=[c['id'] for c in candidates]):
         raise ValueError('Native admission changed the complete selected-k coverage')
+    _validate_ranking_applicability(result.get('ranking_applicability'),result,payload)
     return result
 
 
@@ -152,7 +212,6 @@ def execute(payload):
     from gpx_recipe.preparation.reference import create_reference
     from gpx_recipe.preparation.structural_ranking_native import require_compatible, require_unconstrained_project, observed_features
     from gpx_recipe.preparation.structural_ranker import Ranker
-    from gpx_recipe.preparation.structural_features import pattern_features
     from gpx_recipe.snapshot import gsas
     from gpx_recipe.symmetry.native_audit import inspect_source
     from gsas_isodistort_import import add_isodistort_phase
@@ -181,9 +240,9 @@ def execute(payload):
         reference = G.G2Project(gpxfile=prepared['path'])
         expected_parent = reference.phase(prepared['parent_phase']); expected_hist = reference.histogram(prepared['histogram'])
         context = inspect_source(prepared['path'], include_runtime=False)
-        distances = []
+        distances = []; ranking_windows = []
 
-        def check(source, phase, histogram=None):
+        def check(source, phase, histogram=None, *, role='current'):
             project = G.G2Project(gpxfile=source); require_unconstrained_project(project)
             current = project.phase(phase)
             histograms = [project.histogram(histogram)] if histogram else project.histograms()
@@ -197,19 +256,19 @@ def execute(payload):
                     if len(active) != 1 or active[0].name != current.name:
                         raise ValueError('Prepared ranking needs one active nuclear phase')
                     features = observed_features(source, hist)
-                    projected = pattern_features(features['q'], features['intensity'], ranker.edges,
-                        background=features['background'], valid=features['valid'])
-                    if (projected[2] < .999).any():
-                        raise ValueError('The current native grid does not cover the complete trained Q range')
-                    accepted.append((hist, distance))
+                    window = _ranking_window(features,ranker.edges,role=role,
+                        source_sha256=(before['files']['source'] if role=='current' else before['reference_sha256']),
+                        histogram=hist.name)
+                    accepted.append((hist, distance, window))
                 except ValueError as error: reasons.append(str(error))
             if len(accepted) != 1:
                 raise ValueError('No unique compatible native bank: '+('; '.join(reasons)[:700] or 'parent is inactive'))
             distances.append(accepted[0][1])
+            ranking_windows.append(accepted[0][2])
             return accepted[0][0].name
 
         current_hist = check(payload['source'], payload['phase'], payload['histogram'])
-        before_hist = check(payload['reference'], payload['phase']) if 'reference' in payload else None
+        before_hist = check(payload['reference'], payload['phase'],role='reference') if 'reference' in payload else None
         candidate_checks = []
         for index, (candidate, child) in enumerate(zip(candidates, payload['children'])):
             if candidate['child']['sha256'] != before['children'][index]:
@@ -229,6 +288,7 @@ def execute(payload):
             eligible_candidate_ids=eligible,excluded_candidate_ids=excluded,
             k_verified=True, mode_inventory_verified=True, candidate_checks=candidate_checks,
             parent_setting_sha256=context['phases'][0]['setting_sha256'],
+            ranking_applicability=_ranking_applicability(ranking_windows),
             maximum_parent_metric=maximum, actual_parent_metrics=distances,
             histogram=current_hist, reference_histogram=before_hist,
             reason=(f'Native context matched; {len(eligible)} of {len(candidates)} stored candidates are eligible for the selected k; '

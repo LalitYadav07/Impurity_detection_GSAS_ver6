@@ -156,6 +156,31 @@ def test_a_foreign_profile_or_parent_does_not_load_the_model(tmp_path,monkeypatc
     assert result['candidate_order']==['first','second']
 
 
+@pytest.mark.parametrize('kind',['edge','gap'])
+def test_unavailable_coverage_ranking_retains_every_native_candidate(tmp_path,monkeypatch,kind):
+    from gpx_recipe.preparation import structural_ranker
+    from radar_pd_nova.model_admission import _ranking_window
+    library,protocol=prepared(tmp_path/'control');packet=tmp_path/'packet'
+    row=hints.capture(library,protocol,packet)['ranking_models']['entries'][0]
+    q=np.linspace(1.,3.,201);valid=np.ones(len(q),bool)
+    if kind=='edge':q[0]+=.001
+    else:valid[90:111]=False
+    class CoverageGuard:
+        def __init__(self,*args,**kwargs):pass
+        def rank(self,q,intensity,**kwargs):
+            window=_ranking_window(dict(q=q,intensity=intensity,background=kwargs['background'],valid=kwargs['valid']),
+                np.linspace(1.,3.,65),role='current',source_sha256='a'*64,histogram='test')
+            assert window['minimum_bin_coverage']<.999
+            raise ValueError('This structural ranker is not qualified for missing coordinate intervals')
+    monkeypatch.setattr(structural_ranker,'Ranker',CoverageGuard)
+    result=ranking.rank(packet,protocol,q,np.ones(len(q)),background=np.zeros(len(q)),valid=valid,
+        parent_sha256=row['files']['parent']['sha256'],instrument_sha256=row['files']['instrument']['sha256'],entry_id=row['entry'])
+    assert result['candidate_order']==[c['id'] for c in protocol['candidates']]
+    assert result['ranking_available'] is result['candidate_pruning_authorized'] is False
+    assert result['complete_native_search_required'] and result['native_refinement_required']
+    assert result['discarded_entries']==[dict(entry=row['entry'],error_type='ValueError')]
+
+
 def test_another_bank_entry_cannot_be_selected_by_a_shared_instrument_file_hash(tmp_path):
     library,protocol=prepared(tmp_path/'control');packet=tmp_path/'packet'
     document=hints.capture(library,protocol,packet);row=document['ranking_models']['entries'][0]

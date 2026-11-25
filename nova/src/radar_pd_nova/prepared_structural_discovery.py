@@ -19,6 +19,12 @@ class PreparedLibraryUnavailable(RuntimeError):
         self.candidate_checks=list(candidate_checks)
 
 
+def ranking_notice(admission):
+    applicability=admission.get('ranking_applicability') or {}
+    if applicability.get('status')!='unavailable':return ''
+    return 'Native candidates reused; '+applicability['reason']
+
+
 def reference_notice(kind, *, has_reference=False):
     """Describe the stored model's inputs without changing its inference."""
     from gpx_recipe.preparation.structural_attention_weights import REFERENCE_KIND, FIXED_REFERENCE_KIND

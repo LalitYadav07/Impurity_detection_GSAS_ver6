@@ -17,8 +17,15 @@ from test_preparation_workspace import workspace, finish_inspection, catalog as 
 
 def admitted(payload, candidates):
     from radar_pd_nova import model_admission
-    return dict(schema=SCHEMA, identity=request_identity(payload), compatible=True,
+    identity=request_identity(payload)
+    windows=[dict(source_role=role,source_sha256=(identity['files']['source'] if role=='current' else identity['reference_sha256']),
+        histogram=payload['histogram'],valid_q_min=.5,valid_q_max=4.,trained_q_min=.5,trained_q_max=4.,
+        minimum_bin_coverage=1.,incomplete_bins=0,total_bins=128,coverage_complete=True)
+        for role in ['current']+(['reference'] if 'reference' in payload else [])]
+    return dict(schema=SCHEMA, identity=identity, compatible=True,
         adapter_sha256=file_sha(model_admission.__file__),
+        histogram=payload['histogram'],reference_histogram=payload['histogram'] if 'reference' in payload else None,
+        ranking_applicability=model_admission._ranking_applicability(windows),
         no_refinement=True, inputs_unchanged=True, reason='Native fixture admission',
         k_verified=True, mode_inventory_verified=True,
         parent_setting_sha256='a'*64, candidate_ids=[c['id'] for c in candidates],
@@ -245,7 +252,7 @@ def test_new_admission_action_uses_existing_durable_submission_guard(remote,tmp_
     with pytest.raises(ValueError):validate_native_timeout(OPERATION,float('nan'))
 
 
-@pytest.mark.parametrize('has_library',[True,False,'mixed'])
+@pytest.mark.parametrize('has_library',[True,False,'mixed','partial-coverage'])
 def test_actual_discovery_controller_uses_bridge_or_ordinary_path(setup,monkeypatch,has_library):
     import asyncio
     from radar_pd_nova.symmetry_controller import SymmetryMixin
@@ -260,6 +267,16 @@ def test_actual_discovery_controller_uses_bridge_or_ordinary_path(setup,monkeypa
             result['excluded_candidate_ids']=[protocol['candidates'][0]['id']]
             return result
         helper._symmetry_native=subset
+    elif has_library=='partial-coverage':
+        from radar_pd_nova.model_admission import _ranking_applicability
+        full=helper._symmetry_native
+        def partial(*args):
+            result=full(*args)
+            windows=result['ranking_applicability']['sources']
+            windows[0].update(minimum_bin_coverage=.998,incomplete_bins=1,coverage_complete=False)
+            result['ranking_applicability']=_ranking_applicability(windows)
+            return result
+        helper._symmetry_native=partial
     class State(SimpleNamespace):
         def flush(self):pass
     app=SymmetryMixin();app.server=SimpleNamespace(state=State(**vars(helper.server.state),
@@ -294,6 +311,13 @@ def test_actual_discovery_controller_uses_bridge_or_ordinary_path(setup,monkeypa
         assert len(app.server.state.sx_discovery_rows)==2
         assert {row['state'] for row in app.server.state.sx_discovery_rows}=={'eligible','excluded'}
         assert '1 / 2 candidates eligible' in app.server.state.sx_preparation_notice
+    elif has_library=='partial-coverage':
+        assert len(app.server.state.sx_candidates)==len(protocol['candidates'])
+        assert len(app.server.state.sx_discovery_rows)==len(protocol['candidates'])
+        for text in (app.server.state.sx_preparation_notice,app.server.state.sx_discovery_scope,app.server.state.sx_message):
+            assert 'Native candidates reused' in text and 'ML ranking is unavailable for this window' in text
+    elif has_library:
+        assert 'ML ranking is unavailable' not in app.server.state.sx_preparation_notice
 
 
 def test_explicit_prepared_library_error_is_not_swallowed_by_optional_transport(remote,tmp_path):

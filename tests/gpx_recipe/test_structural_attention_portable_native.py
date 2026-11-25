@@ -99,13 +99,15 @@ def test_a_leading_parent_family_does_not_swallow_the_entire_child_search_order(
     assert result['candidate_pruning_authorized'] is False and result['complete_native_search_required']
 
 
-@pytest.mark.parametrize('case',['missing','q_grid','reference_mask','mask','foreign_context'])
+@pytest.mark.parametrize('case',['missing','q_grid','reference_mask','mask','edge','foreign_context'])
 def test_inference_requires_the_exact_native_parent_and_covered_range(tmp_path,case):
     _,q,current,request,_,_=artifact(tmp_path/'model');loaded=Ranker(tmp_path/'model')
     if case=='missing':request['reference']=None
     elif case=='q_grid':request['reference']['q']=q+1e-8
     elif case=='reference_mask':request['reference']['valid']=np.ones(len(q))
     elif case=='mask':request['valid']=np.ones(len(q),bool);request['valid'][100:120]=False
+    elif case=='edge':
+        q=q.copy();q[0]+=.0001;request['reference']['q']=q.copy()
     else:request['parent_sha256']='f'*64
     with pytest.raises(ValueError):loaded.rank(q,current,**request)
 

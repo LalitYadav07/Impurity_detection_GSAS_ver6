@@ -88,6 +88,25 @@ def test_admission_accepts_new_gpx_identity_name_and_covered_cell(control,tmp_pa
     assert file_sha(payload['source'])==before
     assert result['identity']['files']['source']!=file_sha(control['source']) or change is None
     assert len(result['candidate_checks'])==2
+    assert result['ranking_applicability']['status']=='coverage_passed'
+    assert result['ranking_applicability']['ranking_evaluated'] is False
+
+
+@pytest.mark.parametrize('window',['edge','gap'])
+def test_native_candidates_survive_a_shortened_or_gapped_ml_window(control,tmp_path,window):
+    payload=request(control,tmp_path)
+    project=G.G2Project(gpxfile=payload['source']);hist=project.histogram(0)
+    if window=='edge':hist.data['Limits'][1][1]-=1000.
+    else:hist.data['Limits'].append([15000.,16000.])
+    project.save();before=file_sha(payload['source'])
+    result=execute(payload);validate_receipt(result,payload)
+    assert result['compatible'] and result['no_refinement'] and result['inputs_unchanged']
+    assert file_sha(payload['source'])==before
+    assert len(result['candidate_checks'])==len(result['eligible_candidate_ids'])==2
+    applicability=result['ranking_applicability']
+    assert applicability['status']=='unavailable'
+    assert applicability['sources'][0]['minimum_bin_coverage']<.999
+    assert applicability['ranking_evaluated'] is applicability['candidate_pruning_authorized'] is False
 
 
 @pytest.mark.parametrize('change',['outside','profile','bank_profile','lookup','atom','sample','hap','isotope','adp','constraint','k','bytes'])
