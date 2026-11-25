@@ -93,7 +93,9 @@ def test_selected_preparation_concurrency_can_reach_every_offered_job_slot(app,t
     assert not service.submissions
 
 
-def test_structural_training_is_visible_and_separately_filterable(app,tmp_path):
+@pytest.mark.parametrize('supports_full_units',[False,True])
+def test_structural_training_is_visible_and_separately_filterable(app,tmp_path,supports_full_units):
+    from gpx_recipe.preparation.batch import EXAMPLES_CAPABILITY
     from gpx_recipe.symmetry.compiler import file_sha
     application,store,key,service=app;s=application.server.state
     load_context(application,store,key,service,tmp_path)
@@ -112,11 +114,17 @@ def test_structural_training_is_visible_and_separately_filterable(app,tmp_path):
     assert '0 / 8 blocks prepared' in s.prep_entries[0]['reason']
     s.prep_stage_filter='structural';application._preparation_table_changed()
     assert s.prep_table_count==1 and 'training patterns' not in s.prep_entries[0]['model']
+    service.tool_has_input=lambda tool,name:supports_full_units and name==EXAMPLES_CAPABILITY
     queue=store.queue(selected);queue.resume(maximum_jobs=2)
     first=queue.tick();jobs=first['queue']['jobs']
     trainer=next(row['id'] for row in store.registry.get(selected).document['entries']
         if row['model']['kind']=='structural-training')
-    assert all(job['mode']=='batch' for job in jobs)
+    assert len(jobs)==2
+    for job in jobs:
+        assert job['mode']==('examples-batch' if supports_full_units else 'single')
+        assert len(job['members'])==(4 if supports_full_units else 1)
+        assert all(store.registry.get(selected).row(member['entry'])['model']['kind']=='structural-examples'
+                   for member in job['members'])
     assert trainer not in {member['entry'] for job in jobs for member in job['members']}
     captured=[(job['id'],job['handle']['key']) for job in jobs]
     assert [(job['id'],job['handle']['key']) for job in queue.tick()['queue']['jobs']]==captured
