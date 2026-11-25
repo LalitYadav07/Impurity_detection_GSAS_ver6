@@ -318,6 +318,8 @@ def model_exploration(app):
                         v_if="gsasii_session_status === 'ready' && !!gsasii_launch_url",variant='flat',color='#15543c',size='small')
                     v.VBtn('Download native GPX',click=(app.download_symmetry_artifact,"['gpx']"),disabled=('!sx_has_gpx',),variant='outlined',size='small',prepend_icon='mdi-download')
                     v.VBtn('Download trial receipt',click=(app.download_symmetry_artifact,"['receipt']"),disabled=('!sx_has_receipt',),variant='text',size='small')
+                html.P('Keep the trial receipt with this magnetic GPX. Reproducing its intensities requires a compatible GSAS-II numerical runtime. The hosted desktop includes the reviewed powder corrections; a different local build can give different recalculated intensities.',
+                    v_if="sx_selected_kind === 'magnetic' && sx_has_gpx",classes='rf-notice')
                 html.P('Open this exact structural GPX as one recipe input. Its constraints and review warnings are retained; no refinement starts until you approve and start a recipe.',
                     v_if="sx_selected_kind === 'structural'",classes='rf-notice')
                 html.P('{{ gsasii_status_message }}',v_if="gsasii_session_status === 'starting' || gsasii_session_status === 'error'",classes='rf-notice',raw_attrs=['aria-live="polite"'])
