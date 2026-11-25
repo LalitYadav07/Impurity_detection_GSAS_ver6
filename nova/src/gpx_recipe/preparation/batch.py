@@ -26,6 +26,13 @@ from .worker import input_roles
 SCHEMA='radar-preparation-batch/v1'
 RESULT_SCHEMA='radar-preparation-batch-result/v1'
 DEADLINE_INTERRUPTED='interrupted_at_batch_deadline'
+EXAMPLES_OPERATION='preparation-examples-batch'
+EXAMPLES_CAPABILITY='preparation_examples_batch_v1'
+EXAMPLES_MAX_TASKS=4
+EXAMPLES_UNIT_SECONDS=3600
+EXAMPLES_ADMISSION_SECONDS=60
+EXAMPLES_SECONDS=EXAMPLES_ADMISSION_SECONDS+EXAMPLES_UNIT_SECONDS
+EXAMPLES_TIMEOUT=EXAMPLES_SECONDS+30
 MAX_TASKS=64
 MAX_METADATA=8*1024*1024
 RESULT_BUDGET=480*1024*1024
@@ -76,6 +83,23 @@ def validate_request(value):
     return value
 
 
+def validate_examples_request(value):
+    """A separate full-unit contract; ordinary batches keep their deadlines."""
+    value=fields(value,['source','plan','destination','workers','seconds'])
+    if (type(value['workers']) is not int or not 1<=value['workers']<=EXAMPLES_MAX_TASKS
+            or type(value['seconds']) is not int or value['seconds']!=EXAMPLES_SECONDS
+            or any(not isinstance(value[k],str) or not value[k] for k in ('source','plan','destination'))):
+        raise ValueError('Use the bounded complete-unit structural example batch contract')
+    return value
+
+
+def validate_examples_plan(plan):
+    if (len(plan['tasks'])>EXAMPLES_MAX_TASKS
+            or any(task['kind']!='structural-examples' for task in plan['tasks'])):
+        raise ValueError('A complete-unit batch contains only structural example units')
+    return plan
+
+
 def read_plan(path):
     path=Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size>MAX_METADATA:
@@ -89,7 +113,7 @@ def inputs(plan):
         for role in input_roles(task['kind'])})
 
 
-def stage(library, entries, directory, *, workers=4, seconds=480):
+def stage(library, entries, directory, *, workers=4, seconds=480, examples=False):
     """Capture or resume the same immutable batch before its first dispatch."""
     from .operations import stage_entry
     directory=Path(directory)
@@ -115,7 +139,9 @@ def stage(library, entries, directory, *, workers=4, seconds=480):
     if path.exists():
         if read_plan(path)!=plan:raise ValueError('An immutable preparation batch plan changed')
     else:write_json(path,plan)
-    return validate_request(dict(source=str(parent),plan=str(path),destination=str(directory),
+    if examples:validate_examples_plan(plan)
+    validator=validate_examples_request if examples else validate_request
+    return validator(dict(source=str(parent),plan=str(path),destination=str(directory),
         workers=workers,seconds=seconds))
 
 
@@ -186,15 +212,18 @@ def verify_result(task, request, row, *, maximum_bytes=None):
     return paths
 
 
-def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, environ=None):
+def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, environ=None, examples=False):
     from .native_size import read as read_native_size
     from .structural_training_blocks import REPRESENTATION
-    request=validate_request(value);plan_path=Path(request['plan']).resolve();plan=read_plan(plan_path)
+    request=(validate_examples_request if examples else validate_request)(value)
+    plan_path=Path(request['plan']).resolve();plan=read_plan(plan_path)
+    if examples:validate_examples_plan(plan)
     parent=Path(request['source']).resolve();source_sha=file_sha(parent)
     captured={name:file_sha(confined(plan_path.parent,name)) for name in inputs(plan)}
     output=Path(request['destination']).resolve();output.mkdir(parents=True,exist_ok=False)
     budget=allocation(request['workers'],environ=environ);cancel=cancel or threading.Event()
     began=clock();deadline=began+request['seconds'];remaining=list(plan['tasks']);active={};finished={}
+    admission_deadline=began+EXAMPLES_ADMISSION_SECONDS if examples else deadline
     paths=[];used=0;peak=0;peak_reserved=0;stop_reason='';sized=set();invalid_size=set();waited=False
     implementation=package_signature()
 
@@ -228,7 +257,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
     with ThreadPoolExecutor(max_workers=budget['workers']) as pool:
         while remaining or active:
             refresh_reservations()
-            while remaining and len(active)<budget['workers'] and clock()<deadline and not cancel.is_set():
+            while remaining and len(active)<budget['workers'] and clock()<admission_deadline and not cancel.is_set():
                 reserved=sum(t['_reserve'] for t in active.values())
                 index=next((i for i,t in enumerate(remaining) if used+reserved+RESERVES[t['kind']]<=RESULT_BUDGET),None)
                 if index is None:
@@ -239,9 +268,10 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                 if file_sha(payload['source'])!=source_sha:raise ValueError('Batch parent CIF changed between entries')
                 payload['destination']=str(confined(output,payload['destination'],exists=False))
                 scratch=output/'.work'/task['entry']/('attempt-'+str(task['attempt']))
-                future=pool.submit(runner,task,payload,scratch,cancel=cancel,timeout=max(1.,deadline-clock()))
+                timeout=float(EXAMPLES_UNIT_SECONDS) if examples else max(1.,deadline-clock())
+                future=pool.submit(runner,task,payload,scratch,cancel=cancel,timeout=timeout)
                 active[future]=dict(task,payload=payload,scratch=scratch,_reserve=RESERVES[task['kind']],
-                    _late_admission=waited)
+                    _late_admission=waited and not examples)
                 peak=max(peak,len(active));peak_reserved=max(peak_reserved,used+sum(t['_reserve'] for t in active.values()))
             progress()
             if not active:break
@@ -256,6 +286,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                     if row['state']=='interrupted':
                         row=dict(state='pending' if task['_late_admission'] else 'failed',
                             reason=(DEADLINE_INTERRUPTED if task['_late_admission'] else
+                                'Native preparation exceeded its full unit budget' if examples else
                                 'Native preparation exceeded its full fresh batch budget'),
                             seconds=row['seconds'])
                     if row['state']=='prepared':
@@ -274,7 +305,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                     paths.append(target);used+=target.stat().st_size
                 finished[task['entry']]=dict(entry=task['entry'],attempt=task['attempt'],**row)
         if cancel.is_set():stop_reason='cancelled_before_start'
-        elif clock()>=deadline:stop_reason='batch_time_budget'
+        elif clock()>=admission_deadline:stop_reason='batch_time_budget'
     if captured!={name:file_sha(confined(plan_path.parent,name)) for name in captured}:
         raise ValueError('Preparation inputs changed during batch execution')
     for task in remaining:
@@ -289,6 +320,9 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
             native_size_reports_rejected=len(invalid_size),peak_reserved_result_bytes=peak_reserved),
         output=str(output),observations_included=False,scientific_result=False,
         artifacts=sorted(str(p.relative_to(output)) for p in paths),seconds=clock()-began)
+    if examples:
+        result['allocation'].update(deadline_mode='complete_units',unit_seconds=EXAMPLES_UNIT_SECONDS,
+            admission_seconds=EXAMPLES_ADMISSION_SECONDS,outer_timeout_seconds=EXAMPLES_TIMEOUT)
     write_json(output/'batch.json',result);result['artifacts']+=['batch.json','progress.json']
     progress()
     return result

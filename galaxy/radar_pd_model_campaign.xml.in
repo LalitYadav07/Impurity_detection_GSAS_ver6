@@ -53,6 +53,7 @@ else:
 ]]></configfile>
     </configfiles>
     <inputs>
+        <param name="preparation_examples_batch_v1" type="hidden" value="1"/>
         <param name="action" type="select" label="Reviewed model operation">
             <option value="native">Inspect, simulate, prepare or train</option>
             <option value="admission">Validate a prepared structural library for this scan</option>

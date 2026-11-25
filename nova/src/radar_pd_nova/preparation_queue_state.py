@@ -29,12 +29,13 @@ def validate(value,library,runtime,identity):
     for job in value['jobs']:
         if (not isinstance(job,dict) or set(job)!={'id','mode','phase','handle','members','outcomes','reason','result_sha256'}
                 or not isinstance(job['id'],str) or not re.fullmatch('[a-f0-9]{32}',job['id']) or job['id'] in seen
-                or not isinstance(job['mode'],str) or job['mode'] not in {'batch','single'}
+                or not isinstance(job['mode'],str) or job['mode'] not in {'batch','single','examples-batch'}
                 or not isinstance(job['phase'],str) or job['phase'] not in JOB_PHASES
                 or not isinstance(job['reason'],str) or len(job['reason'])>2000
                 or not isinstance(job['members'],list) or not 1<=len(job['members'])<=64
                 or not isinstance(job['outcomes'],dict)
                 or (job['mode']=='single' and len(job['members'])!=1)
+                or (job['mode']=='examples-batch' and len(job['members'])>4)
                 or (job['result_sha256'] is not None and (not isinstance(job['result_sha256'],str)
                     or not re.fullmatch('[a-f0-9]{64}',job['result_sha256'])))):
             raise ValueError('Invalid preparation job record')
@@ -43,6 +44,7 @@ def validate(value,library,runtime,identity):
             validate_handle(runtime,job['handle'])
             operation=job['handle']['request']['operation']
             if (job['handle']['source']!=identity or (job['mode']=='batch' and operation!='preparation-batch')
+                    or (job['mode']=='examples-batch' and operation!='preparation-examples-batch')
                     or (job['mode']=='single' and operation not in {'preparation-magnetic','preparation-structural',
                         'preparation-structural-examples','preparation-structural-training'})):
                 raise ValueError('Preparation handle names another source or operation')
@@ -53,6 +55,8 @@ def validate(value,library,runtime,identity):
                     or not 1<=member['attempt']<=1000000):
                 raise ValueError('Invalid or duplicate preparation member')
             entry=member['entry'];attempt=member['attempt'];owned.add(entry)
+            if job['mode']=='examples-batch' and library.row(entry)['model']['kind']!='structural-examples':
+                raise ValueError('Full-unit batches contain only structural examples')
             previous=latest.get(entry)
             if previous is None:
                 allowed=attempt==base[entry]+1
@@ -76,7 +80,7 @@ def validate(value,library,runtime,identity):
                 training=(job['mode']=='single' and job['handle'] is not None
                     and job['handle']['request']['operation']=='preparation-structural-training'
                     and outcome['reason']==REASON)
-                if ((job['mode']!='batch' and not training) or job['result_sha256'] is None
+                if ((job['mode'] not in {'batch','examples-batch'} and not training) or job['result_sha256'] is None
                         or outcome['source']!='worker'):
                     raise ValueError('Only a verified batch or training checkpoint may defer an unfinished member')
             if outcome['state']=='prepared' and (not job['handle'] or not job['handle']['job']):

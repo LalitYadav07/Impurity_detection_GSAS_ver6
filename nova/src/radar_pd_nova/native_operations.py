@@ -139,13 +139,15 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         if field in payload:
             path=Path(payload[field]).resolve();relative=str(path.relative_to(root))
             files.append(relative);payload[field]=relative
-    if operation=='preparation-batch':
-        from gpx_recipe.preparation.batch import read_plan,inputs
+    if operation in {'preparation-batch','preparation-examples-batch'}:
+        from gpx_recipe.preparation.batch import read_plan,inputs,validate_examples_plan
         plan_path=confined(root,payload['plan']);plan=read_plan(plan_path)
+        if operation=='preparation-examples-batch':validate_examples_plan(plan)
         for name in inputs(plan):
             path=confined(plan_path.parent,name)
             files.append(str(path.relative_to(root)))
-        if float(timeout)<payload['seconds']+15:
+        allowance=30 if operation=='preparation-examples-batch' else 15
+        if float(timeout)<payload['seconds']+allowance:
             raise ValueError('Preparation batch timeout must include its declared work and cleanup allowance')
     if operation=='preparation-structural-training':
         from gpx_recipe.preparation.structural_jobs import read_plan, plan_inputs, checked_blocks
@@ -197,7 +199,7 @@ def capture(runtime, operation, payload, root, source, timeout, preparation_atte
         write_json(root/'packet.json',{'schema':'radar-native-input-marker/v1'})
         files=['packet.json']
     source=runtime.resolve(source)
-    if operation in STRUCTURAL_SNAPSHOT_OPERATIONS|{'preparation-structural-training','preparation-structural-examples'}:
+    if operation in STRUCTURAL_SNAPSHOT_OPERATIONS|{'preparation-structural-training','preparation-structural-examples','preparation-examples-batch'}:
         if file_sha(confined(root,payload['source']))!=source['source_sha256']:
             raise ValueError('Structural operation belongs to another Galaxy source revision')
     request=dict(schema='radar-model-native/v1',operation=operation,payload=payload,

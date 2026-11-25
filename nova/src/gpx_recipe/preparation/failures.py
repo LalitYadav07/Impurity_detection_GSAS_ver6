@@ -8,7 +8,7 @@ from .tof_kernel_arrays import read_bounded
 
 SCHEMA='radar-preparation-worker-failure/v1'
 MAX_BYTES=8192
-KINDS={'reference','magnetic','structural','kernel','batch','structural-examples','structural-training'}
+KINDS={'reference','magnetic','structural','kernel','batch','examples-batch','structural-examples','structural-training'}
 REASONS={
     'parent_cell_domain_conflict':
         'The sampled parent-reference cells exceed this child model\u2019s reviewed cell bounds. '

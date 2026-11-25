@@ -29,6 +29,39 @@ def test_invalid_offline_training_deadlines_are_rejected(value):
         validate_native_timeout('preparation-structural-training',value)
 
 
+def test_full_unit_deadline_reaches_native_process_without_narrowing(tmp_path,monkeypatch):
+    from gpx_recipe.preparation import batch
+    from test_preparation_native_size import example_plan
+    request,_=example_plan(tmp_path/'fixture');packet=Path(request['plan']).parent
+    payload=dict(request,source=Path(request['source']).name,plan='plan.json',
+        destination='prepared',seconds=batch.EXAMPLES_SECONDS)
+    script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'
+    spec=importlib.util.spec_from_file_location('full_unit_worker_test',script)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    monkeypatch.setattr(module,'require_adapters',lambda:None)
+    monkeypatch.setattr('gpx_recipe.symmetry.compiler.native_environment',lambda:{'OPENBLAS_NUM_THREADS':'1'})
+    observed=[]
+    def run(command,**kwargs):
+        observed.append((command,kwargs))
+        assert command[3]=='examples-batch' and kwargs['timeout']==3690
+        captured=json.loads(Path(command[-2]).read_text())
+        assert captured['seconds']==3660 and captured['workers']==4
+        Path(command[-1]).write_text(json.dumps({'schema':'contract-control','artifacts':[]}))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(module,'run_scientific',run)
+    message=dict(schema='radar-model-native/v1',operation=batch.EXAMPLES_OPERATION,payload=payload,
+        implementation_sha256=package_signature(),expected_source_sha256=file_sha(Path(request['source'])),
+        dispatch_key='a'*24,timeout=3690,
+        input_hashes={str(path.relative_to(packet)):file_sha(path) for path in packet.rglob('*') if path.is_file()})
+    root=tmp_path/'worker';root.mkdir()
+    result,_=module.native(message,packet,root,None)
+    assert result['schema']=='contract-control' and len(observed)==1
+    message['timeout']=3689
+    with pytest.raises(ValueError,match='complete-unit'):
+        module.native(message,packet,root,None)
+    assert len(observed)==1
+
+
 @pytest.mark.parametrize('moment_model', [None, 'collinear', 'symmetry_allowed'])
 def test_inventory_reaches_native_worker_with_its_requested_geometry(tmp_path, monkeypatch, moment_model):
     script=Path(__file__).resolve().parents[2]/'scripts/ndip_model_campaign.py'

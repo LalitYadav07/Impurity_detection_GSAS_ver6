@@ -64,6 +64,9 @@ def validate_request(kind, request):
     if kind=='batch':
         from .batch import validate_request as validate_batch
         return validate_batch(request)
+    if kind=='examples-batch':
+        from .batch import validate_examples_request
+        return validate_examples_request(request)
     required = ['source', 'instrument', 'grid', 'settings', 'destination']
     if kind in {'structural','kernel'}:
         required.append('child')
@@ -91,9 +94,9 @@ def execute(kind, request):
     if kind == 'structural-training':
         from .structural_jobs import execute_training
         return execute_training(request)
-    if kind=='batch':
+    if kind in {'batch','examples-batch'}:
         from .batch import execute as execute_batch
-        return execute_batch(request)
+        return execute_batch(request,examples=kind=='examples-batch')
     request = validate_request(kind, request)
     settings, grid = request['settings'], request['grid']
     started = time.monotonic()
@@ -240,18 +243,19 @@ def execute(kind, request):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('kind', choices=['reference', 'magnetic', 'structural', 'kernel', 'batch',
-                                      'structural-examples', 'structural-training'])
+                                      'structural-examples', 'structural-training', 'examples-batch'])
     parser.add_argument('request')
     parser.add_argument('output')
     args = parser.parse_args()
     request=json.loads(Path(args.request).read_text())
     try:
-        if args.kind=='batch':
+        if args.kind in {'batch','examples-batch'}:
             import threading
             from ..process import cancellation_signals
             from .batch import execute as execute_batch
             cancel=threading.Event()
-            with cancellation_signals(cancel):result=execute_batch(request,cancel=cancel)
+            with cancellation_signals(cancel):
+                result=execute_batch(request,cancel=cancel,examples=args.kind=='examples-batch')
         else:result=execute(args.kind,request)
     except Exception as error:
         from .failures import write as write_failure

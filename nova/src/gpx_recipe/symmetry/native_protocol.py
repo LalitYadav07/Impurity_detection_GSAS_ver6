@@ -17,6 +17,7 @@ FIELDS = {
     'preparation-structural': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
     'preparation-kernel': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
     'preparation-batch': ({'source', 'plan', 'destination', 'workers', 'seconds'}, set()),
+    'preparation-examples-batch': ({'source', 'plan', 'destination', 'workers', 'seconds'}, set()),
     'preparation-structural-examples': ({'source', 'instrument', 'child', 'grid', 'settings', 'destination'}, set()),
     'preparation-structural-training': ({'source', 'instrument', 'grid', 'plan', 'destination', 'settings'}, set()),
     'structural-snapshot': ({'source','directory','anchor_snapshot','snapshot','receipt','mapping',
@@ -30,9 +31,11 @@ FIELDS.update({name: ({'source','plan','children','destination'}, set()) for nam
 
 def native_timeout_limit(operation):
     if operation not in FIELDS:raise ValueError('Unsupported native operation')
-    # Complete signed-mode simulation units can take longer than a short
-    # multi-model batch. They receive independent jobs, retaining all curves.
-    # These offline ceilings never widen fit, discovery or batch deadlines.
+    # Dedicated offline operations retain every simulation unit. Their longer
+    # ceilings do not widen fit, discovery or ordinary preparation batches.
+    if operation=='preparation-examples-batch':
+        from ..preparation.batch import EXAMPLES_TIMEOUT
+        return EXAMPLES_TIMEOUT
     return {'preparation-structural-training':7200,
             'preparation-structural-examples':3600}.get(operation,600)
 
@@ -41,6 +44,8 @@ def validate_native_timeout(operation,value):
     if (type(value) not in {int,float} or not math.isfinite(value)
             or not 1<=value<=native_timeout_limit(operation)):
         raise ValueError('Invalid native deadline for this operation')
+    if operation=='preparation-examples-batch' and value!=native_timeout_limit(operation):
+        raise ValueError('A complete-unit example batch needs its full admission, work and cleanup deadline')
     return float(value)
 
 

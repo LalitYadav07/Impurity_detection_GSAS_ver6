@@ -107,11 +107,13 @@ def example_plan(root):
 
 
 @pytest.mark.parametrize('report',['valid','absent','foreign','large','uploaded'])
-def test_only_valid_owned_small_sizes_unlock_granted_workers(tmp_path,monkeypatch,report):
+@pytest.mark.parametrize('complete_units',[False,True])
+def test_only_valid_owned_small_sizes_unlock_granted_workers(tmp_path,monkeypatch,report,complete_units):
     from gpx_recipe.symmetry.resources import allocation
     monkeypatch.setattr(batch,'allocation',lambda requested,**kwargs:
         allocation(requested,cgroup=tmp_path/'no-cgroup',**kwargs))
     request,template=example_plan(tmp_path);guard=threading.Lock();active=peak=0;barrier=threading.Barrier(4)
+    if complete_units:request['seconds']=batch.EXAMPLES_SECONDS
     def runner(task,payload,scratch,**kwargs):
         nonlocal active,peak
         root=Path(payload['destination']);root.mkdir(parents=True)
@@ -143,7 +145,8 @@ def test_only_valid_owned_small_sizes_unlock_granted_workers(tmp_path,monkeypatc
             return dict(state='prepared',reason='',result=result)
         finally:
             with guard:active-=1
-    result=batch.execute(request,runner=runner,environ={'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'})
+    result=batch.execute(request,runner=runner,examples=complete_units,
+        environ={'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'})
     assert result['all_prepared'] and result['counts']['prepared']==4
     assert result['allocation']['workers']==4
     assert peak==(4 if report=='valid' else 2)

@@ -18,8 +18,16 @@ from test_preparation_batch import plan
 
 
 @pytest.mark.skipif(os.name!='posix',reason='POSIX process-group cancellation control')
-def test_cancelling_batch_reaps_its_owned_native_process_group(tmp_path):
-    request=plan(tmp_path,count=2);request['workers']=1
+@pytest.mark.parametrize('complete_units',[False,True])
+def test_cancelling_batch_reaps_its_owned_native_process_group(tmp_path,complete_units):
+    if complete_units:
+        from test_preparation_native_size import example_plan
+        from gpx_recipe.preparation.batch import EXAMPLES_SECONDS
+        request,_=example_plan(tmp_path);request['seconds']=EXAMPLES_SECONDS
+        path=Path(request['plan']);document=json.loads(path.read_text());document['tasks']=document['tasks'][:2]
+        path.write_text(json.dumps(document))
+    else:request=plan(tmp_path,count=2)
+    request['workers']=1
     message=tmp_path/'request.json';message.write_text(json.dumps(request))
     child_pid=tmp_path/'child.pid';stop_child=tmp_path/'stop-owned-child';token='owned-preparation-test-'+uuid.uuid4().hex
     script=tmp_path/'owned_batch.py'
@@ -38,13 +46,15 @@ def test_cancelling_batch_reaps_its_owned_native_process_group(tmp_path):
                 return dict(state='cancelled',reason='Owned native child stopped')
             return dict(state='failed',reason='Unexpected natural completion')
         with cancellation_signals(cancel):
-            result=execute(json.loads(Path(sys.argv[1]).read_text()),cancel=cancel,runner=runner)
+            result=execute(json.loads(Path(sys.argv[1]).read_text()),cancel=cancel,runner=runner,
+                examples=sys.argv[6]=='examples')
         Path(sys.argv[4]).write_text(json.dumps(result))
     '''))
     stopped=threading.Event();log=tmp_path/'outer.log';result=tmp_path/'result.json';pid=None
     def outer():
         with log.open('w') as stream:
-            return run_scientific([sys.executable,str(script),str(message),str(child_pid),token,str(result),str(stop_child)],
+            return run_scientific([sys.executable,str(script),str(message),str(child_pid),token,str(result),str(stop_child),
+                'examples' if complete_units else 'ordinary'],
                 timeout=40,cancel_event=stopped,env=native_environment(),stdout=stream,stderr=subprocess.STDOUT)
     with ThreadPoolExecutor(max_workers=1) as pool:
         future=pool.submit(outer)

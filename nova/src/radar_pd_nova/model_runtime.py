@@ -110,6 +110,12 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
 
     def dataset_id(self,source):return identifier(super().dataset_id(source))
 
+    def supports_preparation_examples_batch(self):
+        """Only a wrapper paired with the new worker may admit full-unit batches."""
+        from gpx_recipe.preparation.batch import EXAMPLES_CAPABILITY
+        capability=getattr(self.service,'tool_has_input',None)
+        return bool(capability and capability(self.tool_id,EXAMPLES_CAPABILITY))
+
     def stop_preparations(self):
         with self._event_lock:
             for event,root in self._events:event.set();self._cancelled_roots.add(root)
@@ -308,6 +314,10 @@ class GalaxyModelRuntime(GalaxyRefinementRuntime):
                 entry['job']=job_record(existing);self._save();return existing
             if entry.get('pending'):
                 raise RuntimeUnavailable('This model submission has no acknowledged job yet. Recover the existing dispatch before retrying; no duplicate was submitted.')
+            from gpx_recipe.preparation.batch import EXAMPLES_OPERATION
+            if (action=='native' and request.get('operation')==EXAMPLES_OPERATION
+                    and not self.supports_preparation_examples_batch()):
+                raise RuntimeUnavailable('The installed Model Campaign worker does not support full-budget structural example batches. No new job was submitted.')
             entry['absence_verified']=True
             lookup_done=time.monotonic()
             self.wait_capacity(cancel)

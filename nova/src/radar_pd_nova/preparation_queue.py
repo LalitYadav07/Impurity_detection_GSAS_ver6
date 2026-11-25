@@ -104,9 +104,11 @@ class PreparationQueue:
         return row['state']!='pending'
 
     def _stage(self,job):
-        if job['mode']=='batch':
+        if job['mode'] in {'batch','examples-batch'}:
+            examples=job['mode']=='examples-batch'
             return batch.stage(self.library,[(m['entry'],m['attempt']) for m in job['members']],
-                self.root/'batches'/job['id'],workers=4,seconds=480)
+                self.root/'batches'/job['id'],workers=4,
+                seconds=batch.EXAMPLES_SECONDS if examples else 480,examples=examples)
         member=job['members'][0]
         resume=None
         if self.library.row(member['entry'])['model']['kind']=='structural-training':
@@ -132,7 +134,8 @@ class PreparationQueue:
 
     def _submit(self,state,job):
         payload=self._stage(job)
-        operation='preparation-batch' if job['mode']=='batch' else (
+        operation=(batch.EXAMPLES_OPERATION if job['mode']=='examples-batch' else
+            'preparation-batch' if job['mode']=='batch' else
             'preparation-'+self.library.row(job['members'][0]['entry'])['model']['kind'])
         timeout=native_timeout_limit(operation)
         def before_post(handle):
@@ -371,8 +374,9 @@ class PreparationQueue:
                     and latest.get(identifier,{}).get('reason')==batch.DEADLINE_INTERRUPTED),None)
                 training=next((identifier for identifier in pending
                     if self.library.row(identifier)['model']['kind']=='structural-training'),None)
-                generation=(pending[0] if pending and
-                    self.library.row(pending[0])['model']['kind']=='structural-examples' else None)
+                generations=[i for i in pending
+                    if self.library.row(i)['model']['kind']=='structural-examples']
+                generation=generations[0] if generations else None
                 # A trainer owns its allocation-sized tensor pool. Never nest
                 # it under a multi-model native batch's process pool.
                 if interrupted is not None:
@@ -385,10 +389,15 @@ class PreparationQueue:
                 elif training is not None:
                     identifiers=[training];mode='single'
                 elif generation is not None:
-                    # Do not give a complete simulation unit the remainder
-                    # of an eight-minute batch. Its native portfolio and
-                    # attempt identity stay unchanged; only dispatch differs.
-                    identifiers=[generation];mode='single'
+                    # Each admitted process gets the complete simulation-unit
+                    # budget, independent of the short admission window. The
+                    # registered wrapper must advertise the matching worker;
+                    # older installations retain their single-unit transport.
+                    capability=getattr(self.runtime,'supports_preparation_examples_batch',None)
+                    if capability and capability():
+                        identifiers=generations[:min(state['batch_size'],batch.EXAMPLES_MAX_TASKS)]
+                        mode='examples-batch'
+                    else:identifiers=[generation];mode='single'
                 else:
                     mode='batch'
                 # A small catalog must not fill one large batch and leave the

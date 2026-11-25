@@ -42,6 +42,8 @@ def test_canonical_tools_preserve_the_reviewed_producer_and_transport_contract(t
         assert evidence.attrib['format'] == 'json'
         assert '--preparation-evidence' in tool.findtext('command')
     assert model.find("inputs/param[@name='model_asset_parts']").attrib['multiple'] == 'true'
+    capability=model.find("inputs/param[@name='preparation_examples_batch_v1']")
+    assert capability is not None and capability.attrib['type']=='hidden' and capability.attrib['value']=='1'
     assert model.findtext("configfiles/configfile[@name='preparation_provenance']") == live.findtext(
         "configfiles/configfile[@name='preparation_provenance']")
 
