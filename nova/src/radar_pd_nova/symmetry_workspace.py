@@ -5,6 +5,7 @@ import json
 import copy
 import time
 import threading
+import re
 from collections import OrderedDict
 from pathlib import Path
 from functools import lru_cache
@@ -54,6 +55,27 @@ def structural_preparation_summary(value):
     return ''
 
 
+def structural_display_label(label,candidate=None):
+    """Format a complete authoritative row; preserve unknown older formats."""
+    original=str(label).split(', basis=',1)[0]
+    from gpx_recipe.symmetry.isodistort_forms import _method2_catalog_metadata,ExternalServiceError
+    try: metadata=_method2_catalog_metadata(str(label))
+    except (ValueError,TypeError,ExternalServiceError): return original
+    if not metadata:return original
+    if candidate is not None:
+        try:
+            if (not np.allclose(candidate['transformation_matrix'],metadata['catalog_basis'],rtol=0,atol=1e-12)
+                    or not np.allclose(candidate['origin_shift'],metadata['catalog_origin'],rtol=0,atol=1e-12)):
+                return original
+        except (KeyError,TypeError,ValueError):return original
+    irrep=str((candidate or {}).get('irrep') or str(label).split('·',1)[0]).strip()
+    irrep=re.sub(r',\s*k\d+t\d+$','',irrep)
+    direction=re.search(r'\*?[A-Za-z]\d+\s+(\([^()]*\))\s+\d{1,3}\s+',str(label))
+    if direction is None:return original
+    return (f"{metadata['catalog_child_space_group_symbol']} (No. {metadata['catalog_child_space_group_number']})"
+            +f' · {irrep} · OPD '+direction.group(1))
+
+
 def candidate_display_name(catalog,candidate):
     """Use the authoritative constructed-child label, including its subgroup."""
     if candidate.get('magnetic_space_group'):return candidate['magnetic_space_group']
@@ -71,10 +93,10 @@ def candidate_display_name(catalog,candidate):
         if len(matches)==1:
             for row in (original.get('coverage') or {}).get('candidates',[]):
                 if row.get('id')==matches[0]['id'] and row.get('label'):
-                    return str(row['label']).split(', basis=',1)[0]
+                    return structural_display_label(row['label'],candidate)
     for row in (catalog.get('coverage') or {}).get('candidates',[]):
         if row.get('id')==candidate['id'] and row.get('label'):
-            return str(row['label']).split(', basis=',1)[0]
+            return structural_display_label(row['label'],candidate)
     return candidate.get('irrep') or candidate['id']
 
 
@@ -93,7 +115,7 @@ def structural_result_names(root,protocol,protocol_sha):
 def structural_discovery_feedback(catalog):
     """Keep failed construction visible without offering an empty fit plan."""
     coverage=catalog.get('coverage') or {}
-    rows=[dict(id=str(row.get('id','')),model=str(row.get('label','')).split(', basis=',1)[0],
+    rows=[dict(id=str(row.get('id','')),model=structural_display_label(row.get('label','')),
                state=str(row.get('state','unknown')).replace('_',' '),reason=str(row.get('reason','')))
           for row in coverage.get('candidates',[])]
     ready=len(catalog.get('candidates') or [])
