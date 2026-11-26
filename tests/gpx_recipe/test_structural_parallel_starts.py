@@ -10,6 +10,19 @@ from gpx_recipe.structural_live.service import SearchSettings
 from gpx_recipe.structural_live.optimization import parallel_starts as module
 
 
+def test_serial_path_uses_the_current_shared_optimizer(monkeypatch):
+    from gpx_recipe.structural_live.optimization import profiled_native_fit
+    called=[]
+    def current(*args, **kwargs):
+        called.append(kwargs)
+        return {'method':'current_optimizer'}, np.ones(3)
+    monkeypatch.setattr(profiled_native_fit,'fit',current)
+    monkeypatch.setattr(module,'allocation',lambda _:dict(workers=1))
+    result,_=module.fit_allocated(None,None,SearchSettings(),None,None,None,None)
+    assert called and result['method']=='current_optimizer'
+    assert result['parallel_execution']['workers']==1
+
+
 def failing_start(directory,*unused):
     """Use real child processes to test failure cleanup, without native work."""
     if Path(directory).name=='start-00':raise RuntimeError('deliberate test failure')

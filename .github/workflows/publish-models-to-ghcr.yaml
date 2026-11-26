@@ -256,7 +256,10 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_parallel_starts.py \
             /validation/tests/gpx_recipe/test_structural_parallel_starts_native.py \
             /validation/tests/gpx_recipe/test_structural_fit_service_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/parallel.xml\").findall(\".//testcase\"); assert len(cases)==6 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"All six structural parallelism and export checks must run without skips\""'
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/parallel.xml\").findall(\".//testcase\"); assert len(cases)==7 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"All seven structural parallelism and export checks must run without skips\"" &&
+          GALAXY_SLOTS=1 python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/joint-dispatch.xml \
+            /validation/tests/gpx_recipe/test_native_joint_profiled_fit.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/joint-dispatch.xml\").findall(\".//testcase\"); assert len(cases)==2 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"The existing joint optimizer dispatch must remain compatible\""'
       - name: Require portable preparation and structural acquisition handoffs
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '

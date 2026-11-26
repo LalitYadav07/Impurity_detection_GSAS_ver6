@@ -20,7 +20,12 @@ import numpy as np
 
 from ...execution import write_json
 from ...symmetry.resources import allocation
-from .profiled_native_fit import fit
+
+
+def fit(*args, **kwargs):
+    """Resolve the shared optimizer at call time, as the serial service did."""
+    from .profiled_native_fit import fit as current_fit
+    return current_fit(*args, **kwargs)
 
 
 def _cpu():
