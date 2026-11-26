@@ -6045,11 +6045,19 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 state.flush()
                 return False
             from .sample_models import check_model_selection
-            model_scope = check_model_selection(configuration,
-                instrument=self._live_adapter().instrument, ipts=ipts,
-                selected_sample_ids=self._powgen_processing_ids(),
-                galaxy_url=self.service.galaxy_url, history_id=self.service.history_id,
-                cohort_metadata=result.get("metadata_resolution", []))
+            if result.get("scan_count"):
+                model_scope = check_model_selection(configuration,
+                    instrument=self._live_adapter().instrument, ipts=ipts,
+                    selected_sample_ids=self._powgen_processing_ids(),
+                    galaxy_url=self.service.galaxy_url, history_id=self.service.history_id,
+                    cohort_metadata=result.get("metadata_resolution", []))
+            else:
+                # An empty readable experiment can still be configured. There
+                # is no acquisition whose identity can be checked yet, and it
+                # must not become ready or obscure the original no-data notice.
+                model_scope = "No completed reductions; sample model scope will be checked before submission"
+                result = {**result, "ready": False,
+                          "message": result.get("message") or "No completed reductions match the selection."}
             state.nomad_quality_notices = result.get("quality_notices", []) if self._live_adapter().instrument != "PG3" else []
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])

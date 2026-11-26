@@ -1,6 +1,7 @@
 """Mixed samples must not borrow sister-compound models or main phases."""
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import threading
@@ -13,6 +14,19 @@ from radar_pd_nova.live_setup import LiveSetupMixin, configuration_digest
 from radar_pd_nova.models import AnalysisConfig
 from radar_pd_nova.sample_models import bind_sample_models, check_model_selection, single_sample_cohort
 from radar_pd_nova.setup_forms import configuration_form_values, configuration_from_form
+
+
+def configuration_schema_path():
+    override = os.environ.get("RADAR_CONFIG_SCHEMA_PATH")
+    if override:
+        path = Path(override)
+        assert path.is_file(), f"RADAR_CONFIG_SCHEMA_PATH does not name a file: {path}"
+        return path
+    for parent in Path(__file__).resolve().parents:
+        path = parent / "schemas/ndip/radar-pd-config-v1.schema.json"
+        if path.is_file():
+            return path
+    raise AssertionError("Configuration schema unavailable; mount it and set RADAR_CONFIG_SCHEMA_PATH")
 
 
 def routing(instrument="NOM"):
@@ -103,7 +117,7 @@ def test_unknown_live_source_explains_exact_single_pattern_fallback():
 def test_full_contract_yaml_schema_and_form_roundtrip(tmp_path):
     cfg=config()
     wire=cfg.portable_contract()
-    schema=json.loads((Path(__file__).resolve().parents[2]/"schemas/ndip/radar-pd-config-v1.schema.json").read_text())
+    schema=json.loads(configuration_schema_path().read_text())
     jsonschema.validate(wire, schema)
     path=dump_configuration(cfg, tmp_path/"models.yaml")
     assert load_configuration(path).sample_models == cfg.sample_models

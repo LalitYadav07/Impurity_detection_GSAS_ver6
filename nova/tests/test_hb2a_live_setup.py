@@ -9,7 +9,10 @@ from radar_pd_nova.scan_interpretation_ui import scan_label
 
 
 def test_live_cw_draft_profile_check_and_saved_recipe_are_independent(live,archive,profile):
-    add(archive)
+    _, raw = add(archive)
+    # This profile/recipe test uses a declared synthetic physical sample;
+    # name-only acquisition scopes are exercised in test_sample_models.
+    raw.write_text(raw.read_text() + '# sample_id = synthetic-cw\n')
     state=live.server.state
     state.live_beamline='HB2A';state.flush()
     state.powgen_ipts='1';state.flush()
