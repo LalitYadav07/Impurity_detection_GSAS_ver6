@@ -426,6 +426,37 @@ def test_resuming_preparation_confirms_completion_instead_of_leaving_action_titl
     assert s.prep_message=='Preparation resumed. Completed results are retained; unfinished entries will continue.'
 
 
+@pytest.mark.parametrize('action',['inspect','resume'])
+def test_pending_initial_checkpoint_keeps_its_existing_queue_monitored(app,monkeypatch,action):
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    application,store,key,_=app;s=application.server.state;s.prep_library=key
+    calls=[];drivers=[]
+    def start(current,**_):
+        calls.append(current)
+        store._queues[current]=SimpleNamespace(snapshot=lambda:dict(paused=False,jobs=[]))
+        raise CheckpointUploadPending('existing-upload','queued')
+    monkeypatch.setattr(store,'start',start)
+    monkeypatch.setattr(application,'_prep_start_driver',lambda:drivers.append(True))
+    monkeypatch.setattr(application,'_prep_refresh',lambda:None)
+    async def pending():
+        if action=='inspect':await application._prep_start_inspection(key)
+        else:
+            application.resume_preparation()
+            await asyncio.gather(*tuple(application._prep_tasks))
+    asyncio.run(pending())
+    assert calls==[key] and drivers==[True]
+    assert 'same checkpoint' in s.prep_message and 'No replacement' in s.prep_message
+
+
+def test_checkpoint_wait_without_an_owned_queue_does_not_start_a_driver(app,monkeypatch):
+    from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
+    application,store,key,_=app
+    def start(*_,**__):raise CheckpointUploadPending('existing-upload','queued')
+    monkeypatch.setattr(store,'start',start)
+    monkeypatch.setattr(application,'_prep_start_driver',lambda:pytest.fail('No queue exists to monitor'))
+    with pytest.raises(CheckpointUploadPending):asyncio.run(application._prep_resume_queue(key))
+
+
 def test_outdated_reference_replaces_old_completion_message_with_revalidation_action(app,tmp_path):
     application,store,key,service=app;s=application.server.state
     finish_inspection(store,key,service,tmp_path,old_implementation=True)

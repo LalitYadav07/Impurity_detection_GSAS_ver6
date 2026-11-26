@@ -27,6 +27,7 @@ from .preparation_registry import PreparationRegistry
 from .preparation_limits import PREPARATION_JOBS
 from .preparation_coordinates import convert_limits,native_range_label
 from .uploads import inspect_cif_upload
+from .checkpoint_uploads import CheckpointUploadPending
 
 PREPARATION_PROGRESS_SECONDS = 1.0
 
@@ -310,9 +311,8 @@ class PreparationMixin:
     async def _prep_start_inspection(self,key):
         s=self.server.state;store=self._preparation_store()
         s.prep_library=key;s.prep_reference=key;s.prep_tab='new';self._prep_refresh()
-        await asyncio.to_thread(store.start,key,maximum_jobs=finite_number(s.prep_parallel_jobs,integer=True))
-        s.prep_message='Parent/profile inspection submitted. No experimental scans are being refined.'
-        self._prep_start_driver()
+        await self._prep_resume_queue(key,
+            message='Parent/profile inspection submitted. No experimental scans are being refined.')
 
     def inspect_preparation_library(self,**_):
         async def inspect():
@@ -391,9 +391,8 @@ class PreparationMixin:
         if identity!=self._prep_model_identity():
             self._prep_refresh();s.prep_message='Setup changed. The captured model plan was saved without starting jobs; review the current settings.';return
         s.prep_library=key;s.prep_tab='libraries';self._prep_refresh()
-        await asyncio.to_thread(store.start,key,maximum_jobs=finite_number(s.prep_parallel_jobs,integer=True))
-        s.prep_message='Preparation submitted. These are reusable model calculations, not experimental fit results.'
-        self._prep_start_driver()
+        await self._prep_resume_queue(key,
+            message='Preparation submitted. These are reusable model calculations, not experimental fit results.')
 
     def _prep_model_identity(self):
         s=self.server.state
@@ -405,6 +404,24 @@ class PreparationMixin:
         self._prep_stopping=False
         if self._prep_driver is None or self._prep_driver.done():
             self._prep_driver=self._prep_schedule(self._prep_drive(),'radar-preparation-queue')
+
+    async def _prep_resume_queue(self,key,*,message='Preparation resumed. Completed results are retained; unfinished entries will continue.'):
+        store=self._preparation_store();ready=True
+        try:
+            await asyncio.to_thread(store.start,key,
+                maximum_jobs=finite_number(self.server.state.prep_parallel_jobs,integer=True))
+        except CheckpointUploadPending:
+            queue=store._queues.get(key)
+            if queue is None or queue.snapshot()['paused']:raise
+            # resume() already saved the local intent. The tick's own durable
+            # checkpoint gate still prevents dispatch until the acknowledged
+            # upload settles; continue watching that same queue and upload.
+            ready=False
+            message=('Galaxy is still saving the preparation checkpoint. The same checkpoint '
+                     'and queue are being monitored. No replacement upload or calculation is being started.')
+        if self.server.state.prep_library==key:self.server.state.prep_message=message
+        self._prep_start_driver()
+        return ready
 
     async def _prep_queue_tick(self,key,queue):
         # A tick can wait for several acknowledged checkpoint uploads. Keep
@@ -747,21 +764,15 @@ class PreparationMixin:
     def resume_preparation(self,**_):
         async def resume():
             key=self.server.state.prep_library
-            await asyncio.to_thread(self._preparation_store().start,key,
-                maximum_jobs=finite_number(self.server.state.prep_parallel_jobs,integer=True))
-            if self.server.state.prep_library==key:
-                self.server.state.prep_message='Preparation resumed. Completed results are retained; unfinished entries will continue.'
-            self._prep_start_driver()
+            await self._prep_resume_queue(key)
         return self._prep_action(resume(),'Resuming pending preparation')
 
     def retry_preparation_entry(self,entry):
         async def retry():
             store=self._preparation_store();key=self.server.state.prep_library
             await asyncio.to_thread(store.registry.get(key).retry,entry)
-            await asyncio.to_thread(store.start,key,maximum_jobs=finite_number(self.server.state.prep_parallel_jobs,integer=True))
-            if self.server.state.prep_library==key:
-                self.server.state.prep_message='Retry requested. Completed results are retained; current job progress is shown below.'
-            self._prep_start_driver()
+            await self._prep_resume_queue(key,
+                message='Retry requested. Completed results are retained; current job progress is shown below.')
         return self._prep_action(retry(),'Retrying the selected failed entry')
 
     def refresh_preparation_saved(self,**_):
