@@ -22,7 +22,7 @@ from gpx_recipe.symmetry.contracts import digest,validate_candidate,validate_pro
 from gpx_recipe.symmetry.native_audit import inspect_source
 
 
-def snapshot_case(tmp_path,shared):
+def snapshot_case(tmp_path,shared,*,starts=2):
     """The same public acquisition for wrapper and in-process state checks."""
     source,public=native_source(tmp_path/'public','PNT');source_sha=sha(source)
     parent=G.G2Project(gpxfile=str(source));warm=tmp_path/'warm.gpx'
@@ -57,7 +57,7 @@ def snapshot_case(tmp_path,shared):
         k=['0','0','0'],sites=[],candidates=[candidate],seeds=[dict(id='prepared')],
         policy=dict(cycles=20,timeout_seconds=180,maximum_trials=1,maximum_cell_multiplier=8,maximum_moment=6.,
             fit_band_percent=.25,maximum_mode=.5,adequate_rwp_percent=12.,refine_cell=True,refine_histogram_scale=True,
-            refine_background=True,structural_optimizer='prepared_nonlinear',structural_starts=2,structural_seconds=4.,
+            refine_background=True,structural_optimizer='prepared_nonlinear',structural_starts=starts,structural_seconds=4.,
             structural_mode_radius=.05,structural_cell_radius=.005)))
     packet=tmp_path/'packet';packet.mkdir()
     if shared:

@@ -275,6 +275,19 @@ jobs:
             test_model_checkpoint.py test_native_job_admission.py test_restored_display_inputs.py \
             test_live_admission_guard.py test_restricted_watch_retention.py test_nomad.py test_nomad_preflight_throughput.py'
 
+      - name: Verify four-CPU structural Live handoff and native publications
+        shell: bash
+        run: |
+          docker run --rm --cpus=4 --memory=8g --entrypoint sh \
+            -v "$PWD:/validation:ro" -e GALAXY_SLOTS=4 -e GALAXY_MEMORY_MB=8192 \
+            -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          python -m pip install --quiet pytest==8.4.2 &&
+          export PYTHONPATH="/src/src/gpx_recipe/symmetry/adapters:/src/src:/validation/tests/gpx_recipe" &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/live-parallel.xml \
+            /validation/tests/gpx_recipe/test_structural_parallel_snapshot_native.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/live-parallel.xml\").findall(\".//testcase\"); assert len(cases)==1 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"The native four-CPU Live handoff must pass without skips\""'
+
       - name: Verify planner transport, storage and workspace navigation
         shell: bash
         run: |

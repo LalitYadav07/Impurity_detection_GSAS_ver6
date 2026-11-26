@@ -69,7 +69,7 @@ class SymmetryMixin(KSearchMixin):
         for key,value in defaults.items():setattr(s,key,value)
         extra=dict(sx_existing='selected',sx_selected_scans=[],sx_selectable_scans=[],sx_follow_new=False,sx_max_scans=200,sx_enrollments=[],sx_priority_acquisition='',sx_priority_options=[],sx_priority_notice='',sx_retry_acquisition='',sx_retry_options=[],sx_retry_notice='',sx_following=False,sx_campaign_running=False,sx_pause_pending=False,sx_parallel_jobs=8,
             sx_queue_notice='',sx_backend='',sx_batches=[],sx_dispatch_recovery_notice='',sx_dispatch_retry_ready=False,sx_dispatch_retry_ack=False,sx_structural_priority_rows=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
-            sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,
+            sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,sx_stored_candidate_scope=False,
             sx_structural_starts=4,sx_structural_seconds=DEFAULT_FIT_SECONDS,
             sx_structural_radius=.05,sx_structural_cells=DEFAULT_CELL_RADIUS,sx_structural_recovery=0.,sx_parent_reference='')
         for key,value in extra.items():setattr(s,key,value)

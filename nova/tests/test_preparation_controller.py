@@ -537,3 +537,68 @@ def test_structural_selection_caption_states_qualification_without_claiming_live
     caption=app._prepared_selection_caption()
     assert '3 / 5' in caption and 'current geometry' in caption and 'rebuild automatically' in caption
     assert 'Live' not in caption
+
+
+@pytest.mark.parametrize('ranking_kind',['structural-training','structural-ranking-model'])
+@pytest.mark.parametrize('with_curves',[False,True])
+def test_ranking_caption_reports_native_curve_contents(ranking_kind,with_curves):
+    app=PreparationMixin()
+    kinds=[ranking_kind]+(['structural'] if with_curves else [])
+    app._preparation_workspace=SimpleNamespace(registry=SimpleNamespace(
+        selected_key=lambda:'selected',summaries=lambda:[dict(id='selected',available=True,
+            name='Retained finite library',kinds=kinds,prepared=7,total=7)]))
+    caption=app._prepared_selection_caption()
+    assert 'complete stored candidate scope' in caption
+    if with_curves:
+        assert 'also contains native starting-curve entries' in caption
+        assert 'no prepared native starting curves' not in caption
+    else:assert 'no prepared native starting curves' in caption
+
+
+@pytest.mark.parametrize('original',['highest-symmetry-per-irrep','all'])
+def test_stored_scope_selection_preserves_the_previous_ordinary_search(original):
+    app=PreparationMixin();state=State(sx_opd_policy=original,sx_stored_candidate_scope=False)
+    app.server=SimpleNamespace(state=state)
+    app._model_active_campaigns={'already-running':object()}
+    active=app._model_active_campaigns.copy()
+    app._sync_prepared_structural_scope({'structural','structural-training'})
+    assert state.sx_opd_policy=='all' and state.sx_stored_candidate_scope
+    # Table progress refreshes and changing between trained libraries do not
+    # replace the saved ordinary search preference with the forced value.
+    app._sync_prepared_structural_scope({'structural-ranking-model'})
+    app._sync_prepared_structural_scope({'structural'})
+    assert state.sx_opd_policy==original and not state.sx_stored_candidate_scope
+    assert app._model_active_campaigns==active
+
+
+def test_clearing_stored_scope_does_not_replace_a_new_explicit_search_preference():
+    app=PreparationMixin();state=State(sx_opd_policy='highest-symmetry-per-irrep',sx_stored_candidate_scope=False)
+    app.server=SimpleNamespace(state=state)
+    app._sync_prepared_structural_scope({'structural-training'})
+    state.sx_opd_policy='highest-symmetry-per-irrep'
+    app._sync_prepared_structural_scope(set())
+    assert state.sx_opd_policy=='highest-symmetry-per-irrep'
+    assert not state.sx_stored_candidate_scope
+
+
+def test_stop_using_library_retires_reuse_without_deleting_or_resubmitting(app):
+    application,store,key,service=app;state=application.server.state
+    state.prep_library=key;application._preparation_library_changed()
+    library=store.registry.get(key);before=len(service.submissions)
+    active=object();application._model_active_campaigns={'existing':active}
+    application.stop_using_preparation()
+    assert not state.prep_library and not store.registry.selected_key()
+    assert store.registry.get(key) is library and library.root.exists()
+    assert len(service.submissions)==before
+    assert application._model_active_campaigns=={'existing':active}
+    assert 'Saved calculations and existing jobs remain available' in state.prep_message
+    application._prep_refresh()
+    assert not state.prep_library and not store.registry.selected_key()
+
+
+def test_empty_library_picker_clears_durable_reuse_selection(app):
+    application,store,key,_=app;state=application.server.state
+    state.prep_library=key;application._preparation_library_changed()
+    state.prep_library='';application._preparation_library_changed()
+    assert not store.registry.selected_key()
+    assert store.registry.get(key).root.exists()

@@ -57,6 +57,7 @@ class PreparationMixin:
         self._prep_input_revision=0
         self._prep_profile_handoff=None
         self._prep_range_axis='native'
+        self._prep_structural_scope_previous=None
         s=self.server.state
         values=dict(prep_busy=False,prep_operation='',prep_error='',prep_message='',prep_tab='new',
             prep_name='Experiment preparation',prep_parent_path='',prep_profile_path='',prep_bank_label='',
@@ -461,9 +462,42 @@ class PreparationMixin:
         s=self.server.state;s.prep_page=1;s.prep_download_href='';s.prep_active_jobs=0;s.prep_job_status=''
         s.prep_training_record_open=False;s.prep_training_record=None
         if s.prep_library:self._preparation_store().registry.select(s.prep_library)
+        elif self._preparation_workspace is not None:
+            registry=self._preparation_workspace.registry
+            if registry.selected_key():registry.clear_selection()
         invalidate = getattr(self, '_symmetry_unapprove', None)
         if callable(invalidate): invalidate()
         self._preparation_table_changed()
+
+    def stop_using_preparation(self,**_):
+        """Change future reuse without stopping jobs or deleting calculations."""
+        s=self.server.state
+        s.prep_library=''
+        self._preparation_library_changed()
+        s.prep_message='No library selected for new searches. Saved calculations and existing jobs remain available.'
+        if hasattr(s,'sx_preparation_notice'):s.sx_preparation_notice=self._prepared_selection_caption()
+        if hasattr(s,'webmon_preparation_notice'):s.webmon_preparation_notice=self._prepared_selection_caption()
+        s.flush()
+
+    def _sync_prepared_structural_scope(self,kinds):
+        """Keep a selected trained library's finite candidate scope intact.
+
+        The ordinary discovery policy is restored when that library is no
+        longer selected. This changes only the unapproved setup draft.
+        """
+        s=self.server.state
+        policy=getattr(s,'sx_opd_policy',None)
+        enabled=bool({'structural-training','structural-ranking-model'}&set(kinds))
+        if isinstance(policy,str):
+            if enabled:
+                if not getattr(s,'sx_stored_candidate_scope',False):
+                    self._prep_structural_scope_previous=policy
+                s.sx_opd_policy='all'
+            else:
+                previous=getattr(self,'_prep_structural_scope_previous',None)
+                if previous is not None and policy=='all':s.sx_opd_policy=previous
+                self._prep_structural_scope_previous=None
+        s.sx_stored_candidate_scope=enabled
 
     def _capture_prepared_model_inputs(self,protocol,root):
         """Called off the UI thread before a new immutable source dispatch."""
@@ -500,7 +534,7 @@ class PreparationMixin:
                 return 'No preparation library selected. Model searches build the required physics when they run.'
             row=next(row for row in registry.summaries() if row['id']==selected)
             if not row['available']:raise ValueError('Selected preparation needs review')
-            if 'structural-ranking-model' in row['kinds']:
+            if {'structural-training','structural-ranking-model'}&set(row['kinds']):
                 draft=getattr(self,'_symmetry_draft',None) or {}
                 marker=draft.get('catalog',{}).get('provenance',{}).get('prepared_library')
                 if (marker and marker['library_id']==row['library_id']
@@ -509,9 +543,13 @@ class PreparationMixin:
                     return (f"Admitted trained library: {row['name']} · "
                         f"{len(admission['eligible_candidate_ids'])} / {len(admission['candidate_checks'])} candidates eligible · "
                         f"{len(admission['excluded_candidate_ids'])} excluded from this k · native context checks passed.")
+                curves=('This library also contains native starting-curve entries; '
+                        'each scan must pass their compatibility checks before reuse.'
+                        if 'structural' in row['kinds'] else
+                        'This library contains no prepared native starting curves.')
                 return (f"Trained structural model: {row['name']}. "
-                    'Compatible scans use its scores to prioritize the complete native candidate search. '
-                    'This library contains no prepared native starting curves.')
+                    'Compatible scans use its scores to prioritize the complete stored candidate scope. '
+                    +curves)
             if 'structural' in row['kinds']:
                 return (f"Prepared library: {row['name']} · {row['prepared']} / {row['total']} entries prepared. "
                     'Structural Model calculations check the current geometry and complete starting bank before reuse; changed contexts rebuild automatically.')
@@ -527,6 +565,7 @@ class PreparationMixin:
         s=self.server.state
         s.prep_can_pause=False;s.prep_can_resume=False
         if not s.prep_library:
+            self._sync_prepared_structural_scope(())
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
             s.prep_coverage='';s.prep_library_kind='';s.prep_stage_rows=[];s.prep_active_jobs=0;s.prep_job_status=''
             return
@@ -552,6 +591,7 @@ class PreparationMixin:
                 for row in library.document['entries']))
             s.prep_can_resume=bool(runnable and paused and not (recovery and recovery['remaining']))
             kinds={r['model']['kind'] for r in library.document['entries']}
+            self._sync_prepared_structural_scope(kinds)
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             if kinds=={'structural-ranking-model'}:s.prep_library_kind='Imported trained structural model'
             if library.document.get('storage'):s.prep_library_kind='Compiled model library'
@@ -603,6 +643,7 @@ class PreparationMixin:
                 row['validation']=training_validation(library,entry)
             s.prep_entries=visible
         except (OSError,ValueError) as exc:
+            self._sync_prepared_structural_scope(())
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1;s.prep_stage_rows=[]
             s.prep_active_jobs=0;s.prep_job_status=''
             s.prep_error=str(exc)

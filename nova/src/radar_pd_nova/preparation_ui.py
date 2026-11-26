@@ -122,6 +122,7 @@ def libraries_panel(app):
         html.P('{{ prep_library_kind }} · {{ prep_coverage }}',v_if='!!prep_library',classes='text-body-2')
         html.P('{{ prep_job_status }}',v_if='!!prep_library && !!prep_job_status',classes='text-caption')
         with html.Div(v_if='!!prep_library',classes='d-flex flex-wrap my-3',style='gap:8px'):
+            v.VBtn('Stop using library',click=app.stop_using_preparation,disabled=('prep_busy',),variant='outlined',size='small',prepend_icon='mdi-link-off')
             v.VBtn('Pause new batches',click=app.pause_preparation,disabled=('prep_busy || !prep_can_pause',),variant='outlined',size='small',prepend_icon='mdi-pause')
             v.VBtn('Resume pending work',click=app.resume_preparation,disabled=('prep_busy || !prep_can_resume',),variant='outlined',size='small',prepend_icon='mdi-play')
             v.VBtn('Inspect captured inputs',click=app.inspect_preparation_library,disabled=('prep_busy',),variant='text',size='small',prepend_icon='mdi-magnify')
