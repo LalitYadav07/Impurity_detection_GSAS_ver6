@@ -150,13 +150,16 @@ def test_switching_candidate_refreshes_open_model_choices_and_discards_context(t
     app=rapid_app(tmp_path);state=app.server.state;workspace=app._refinement_workspace
     app._symmetry_draft=None;app._model_preparations={}
     state.sx_start_sources=[]
-    for name in ('_symmetry_start_changed','_symmetry_scan_choices','_clear_symmetry_setup_details'):
+    app._prepared_selection_caption=lambda: 'Selected library needs admission for this source'
+    for name in ('_symmetry_start_changed','_symmetry_scan_choices','_clear_symmetry_setup_details',
+                 '_refresh_symmetry_preparation_notice'):
         setattr(app,name,MethodType(getattr(SymmetryMixin,name),app))
     asyncio.run(app._refresh_refinement_sources())
     state.rf_checkpoint_run='record-1';app._refinement_checkpoint_run_changed()
     selected=[]
     for choice in state.rf_checkpoint_options:
         state.rf_message='Previous source inspected'
+        state.sx_preparation_notice='Previous source passed native admission'
         state.rf_checkpoint_key=choice['value']
         asyncio.run(app._choose_published_checkpoint())
         assert not state.rf_checkpoint_error
@@ -166,6 +169,7 @@ def test_switching_candidate_refreshes_open_model_choices_and_discards_context(t
         assert source['collection_name'] in label
         assert state.sx_start_source==source['id']
         assert app._symmetry_draft is None and state.sx_has_context is False
+        assert state.sx_preparation_notice=='Selected library needs admission for this source'
         selected.append(source['id'])
         app._symmetry_draft={'root':str(tmp_path/'previous-native-context')}
         state.sx_has_context=True
