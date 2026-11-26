@@ -275,15 +275,15 @@ jobs:
             test_model_checkpoint.py test_native_job_admission.py test_restored_display_inputs.py \
             test_live_admission_guard.py test_restricted_watch_retention.py test_nomad.py test_nomad_preflight_throughput.py'
 
-      - name: Verify four-CPU structural Live handoff and native publications
+      - name: Verify four-CPU Live handoff with the native worker runtime
         shell: bash
         run: |
           docker run --rm --cpus=4 --memory=8g --entrypoint sh \
             -v "$PWD:/validation:ro" -e GALAXY_SLOTS=4 -e GALAXY_MEMORY_MB=8192 \
             -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
-            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+            ghcr.io/lalityadav07/impurity_detection_gsas_ver6@sha256:7922c6a5de3ddcd86b00497be3128441ecc2a9e94ab00b1cc12e1414408a97ea -c '
           python -m pip install --quiet pytest==8.4.2 &&
-          export PYTHONPATH="/src/src/gpx_recipe/symmetry/adapters:/src/src:/validation/tests/gpx_recipe" &&
+          export PYTHONPATH="/validation/nova/src/gpx_recipe/symmetry/adapters:/validation/nova/src:${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
           python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/live-parallel.xml \
             /validation/tests/gpx_recipe/test_structural_parallel_snapshot_native.py &&
           python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/live-parallel.xml\").findall(\".//testcase\"); assert len(cases)==1 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"The native four-CPU Live handoff must pass without skips\""'
