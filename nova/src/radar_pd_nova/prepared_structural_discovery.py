@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from pathlib import Path
 import shutil
 
@@ -22,7 +23,30 @@ class PreparedLibraryUnavailable(RuntimeError):
 def ranking_notice(admission):
     applicability=admission.get('ranking_applicability') or {}
     if applicability.get('status')!='unavailable':return ''
-    return 'Native candidates reused; '+applicability['reason']
+    fallback='Native candidates reused; '+applicability['reason']
+    rows=applicability.get('sources')
+    if not isinstance(rows,list) or not 1<=len(rows)<=2:return fallback
+    roles=set();details=[];windows=set();missing=0
+    for row in rows:
+        if not isinstance(row,dict):return fallback
+        role=row.get('source_role');count=row.get('incomplete_bins');total=row.get('total_bins')
+        if (role not in {'current','reference'} or role in roles
+                or type(count) is not int or type(total) is not int
+                or not 0<=count<=total<=8192 or total<1):return fallback
+        keys=('valid_q_min','valid_q_max','trained_q_min','trained_q_max')
+        if any(type(row.get(k)) not in (int,float) or not math.isfinite(row[k]) for k in keys):return fallback
+        lo,hi,trained_lo,trained_hi=(row[k] for k in keys)
+        if not 0<lo<hi or not 0<trained_lo<trained_hi:return fallback
+        roles.add(role);windows.add((trained_lo,trained_hi))
+        missing+=count
+        label='target' if role=='current' else 'reference'
+        details.append(f'{label}: {count:,} / {total:,} bins incomplete; valid Q {lo:.6g}–{hi:.6g} Å⁻¹')
+    if len(windows)!=1 or 'current' not in roles or not missing:return fallback
+    trained_lo,trained_hi=next(iter(windows))
+    return ('Native candidates reused; ML ranking is unavailable for this window. '+
+        f'Trained Q {trained_lo:.6g}–{trained_hi:.6g} Å⁻¹. '+'; '.join(details)+'. '+
+        'Choose a compatible library, or rebuild training data within the scans’ common valid Q coverage. '+
+        'The complete native candidate set is retained.')
 
 
 def reference_notice(kind, *, has_reference=False):
