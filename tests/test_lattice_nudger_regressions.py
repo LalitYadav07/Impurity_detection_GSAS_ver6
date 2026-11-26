@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,6 +27,23 @@ from scripts.lattice_nudger import (
     infer_constraints,
     bootstrap_fraction_window,
 )
+
+
+@contextmanager
+def declared_worker_allocation(cpu_slots=4):
+    """Isolate policy tests from the test runner's actual container quota."""
+    import worker_budget
+    resources = worker_budget._resources()
+    allocate = resources.allocation
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / "cpu.max").write_text(f"{cpu_slots * 100000} 100000")
+        (root / "memory.max").write_text(str(8 * 1024**3))
+        with patch.object(resources, "affinity_limit", return_value=256), patch.object(
+            resources, "allocation",
+            side_effect=lambda requested, **kwargs: allocate(requested, cgroup=root, **kwargs),
+        ):
+            yield
 
 
 class Stage4WorkerPolicyTests(unittest.TestCase):
@@ -108,12 +126,12 @@ class Stage4WorkerPolicyTests(unittest.TestCase):
         self.assertEqual(_lattice_deviation_metric(lattice, lattice, 1.0, 3.0), 0.0)
 
     def test_outer_workers_are_capped_by_candidate_count(self):
-        with patch.dict(os.environ, {'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
+        with declared_worker_allocation(), patch.dict(os.environ, {'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
             workers = LatticeNudger._resolve_outer_workers(2)
         self.assertEqual(workers, 2)
 
     def test_outer_worker_env_override_still_caps_to_real_work(self):
-        with patch.dict(os.environ, {"STAGE4_MAX_WORKERS": "64",'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
+        with declared_worker_allocation(), patch.dict(os.environ, {"STAGE4_MAX_WORKERS": "64",'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
             workers = LatticeNudger._resolve_outer_workers(10)
         self.assertEqual(workers, 4)
 
@@ -127,9 +145,15 @@ class Stage4WorkerPolicyTests(unittest.TestCase):
             self.assertEqual(LatticeNudger._resolve_inner_workers(50, allow_parallel=False),1)
 
     def test_inner_workers_are_capped_by_rep_count_when_enabled(self):
-        with patch.dict(os.environ, {'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=32):
+        with declared_worker_allocation(), patch.dict(os.environ, {'GALAXY_SLOTS':'4','GALAXY_MEMORY_MB':'8192'}, clear=False), patch("scripts.lattice_nudger.os.cpu_count", return_value=32):
             workers = LatticeNudger._resolve_inner_workers(3, allow_parallel=True)
         self.assertEqual(workers, 3)
+
+    def test_lower_cgroup_quota_caps_a_larger_scheduler_grant(self):
+        with declared_worker_allocation(cpu_slots=1), patch.dict(
+            os.environ, {"STAGE4_MAX_WORKERS": "64", "GALAXY_SLOTS": "4", "GALAXY_MEMORY_MB": "8192"}, clear=False
+        ), patch("scripts.lattice_nudger.os.cpu_count", return_value=256):
+            self.assertEqual(LatticeNudger._resolve_outer_workers(10), 1)
 
     def test_zero_tolerance_short_circuits_candidate_generation(self):
         nudger = LatticeNudger.__new__(LatticeNudger)
