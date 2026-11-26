@@ -6,7 +6,9 @@ from pathlib import Path
 import tempfile
 
 from gpx_recipe.symmetry.compiler import file_sha
+from gpx_recipe.symmetry.contracts import digest
 from .galaxy_service import _parameter_value
+from .model_checkpoint import archived_chunk
 from .model_runtime import identifier
 
 
@@ -24,11 +26,14 @@ def published_project(transport, trial_id, protocol_sha256, captured):
         chunk=copy.deepcopy(transport.state.get('chunks',{}).get(key))
     if not chunk or not chunk.get('complete') or not chunk.get('job'):
         return None
-    request=chunk.get('request') or {}
+    request=chunk.get('request')
     if (chunk.get('key')!=key or chunk.get('protocol')!=protocol_sha256
-            or request.get('protocol_sha256')!=protocol_sha256
-            or trial_id not in request.get('trials',[])):
+            or (request is not None and (not isinstance(request,dict)
+                or request.get('protocol_sha256')!=protocol_sha256
+                or trial_id not in request.get('trials',[])))):
         raise ValueError('Published model lookup differs from the selected trial')
+    if request is None and not archived_chunk(chunk):
+        raise ValueError('Published model lookup lacks its completed archive witness')
     job_id=identifier(chunk['job']['galaxy_job_id'])
     service=transport.runtime.service
     details=service._job_details(job_id)
@@ -41,8 +46,33 @@ def published_project(transport, trial_id, protocol_sha256, captured):
         raise ValueError('Published model request exceeds its verification bound')
     try:actual=json.loads(base64.b64decode(encoded,validate=True))
     except (ValueError,TypeError):raise ValueError('Published model request could not be verified') from None
-    if actual!=request or _parameter_value(params,'action')!='chunk':
+    if not isinstance(actual,dict) or _parameter_value(params,'action')!='chunk':
         raise ValueError('Published model job differs from its captured request')
+    if request is not None:
+        if actual!=request:
+            raise ValueError('Published model job differs from its captured request')
+    else:
+        # Completed transport checkpoints retire the bulky request. Recover it
+        # from the authenticated producing job, keeping the local protocol,
+        # dispatch, member list and finished result as independent witnesses.
+        # Older compact checkpoints lack the new full-request fingerprint;
+        # their exact GPX bytes are still checked below before any handoff.
+        members=chunk.get('members')
+        finished={row.get('id') for row in chunk['result'].get('trials',[])
+                  if isinstance(row,dict) and row.get('state')=='finished'}
+        trials=actual.get('trials')
+        if (not isinstance(members,list) or not isinstance(trials,list)
+                or not 1<=len(trials)<=256
+                or any(not isinstance(uid,str) for uid in members+trials)
+                or len(set(trials))!=len(trials)
+                or set(trials)!=set(members) or trial_id not in finished
+                or actual.get('protocol_sha256')!=protocol_sha256
+                or actual.get('dispatch_key')!=key
+                or not isinstance(actual.get('protocol'),dict)
+                or digest(actual['protocol'])!=protocol_sha256
+                or (chunk.get('request_sha256') is not None
+                    and digest(actual)!=chunk['request_sha256'])):
+            raise ValueError('Published model job differs from its completed checkpoint')
     outputs=service._job_output_ids(details)
     labels={'reviewable_projects':'Structural point-fit GPXs (review required)',
             'verified_projects':'Qualified model GPXs'}

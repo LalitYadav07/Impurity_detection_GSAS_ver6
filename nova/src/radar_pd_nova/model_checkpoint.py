@@ -31,7 +31,14 @@ def compact_transport(state):
         job=chunk.get('job')
         if isinstance(job,dict) and _identity(job.get('galaxy_job_id')):
             job.pop('inputs',None)
-        if archived_chunk(chunk):chunk.pop('request',None)
+        if archived_chunk(chunk):
+            request=chunk.get('request')
+            if isinstance(request,dict):
+                fingerprint=digest(request)
+                if chunk.get('request_sha256',fingerprint)!=fingerprint:
+                    raise ValueError('A completed model request changed before checkpointing')
+                chunk['request_sha256']=fingerprint
+                chunk.pop('request',None)
 
 
 def portable_checkpoint(document):
