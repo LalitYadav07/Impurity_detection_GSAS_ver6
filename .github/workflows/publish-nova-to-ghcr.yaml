@@ -140,6 +140,8 @@ jobs:
         run: |
           docker run --rm --entrypoint sh -v "$PWD/nova/tests:/validation-tests:ro" \
             -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
+            -v "$PWD/schemas/ndip/radar-pd-config-v1.schema.json:/validation-config-schema.json:ro" \
+            -e RADAR_CONFIG_SCHEMA_PATH=/validation-config-schema.json \
             -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
             "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
           python -m pip install --quiet pytest==8.4.2 &&
