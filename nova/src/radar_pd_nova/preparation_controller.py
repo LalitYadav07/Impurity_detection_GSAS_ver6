@@ -28,6 +28,8 @@ from .preparation_limits import PREPARATION_JOBS
 from .preparation_coordinates import convert_limits,native_range_label
 from .uploads import inspect_cif_upload
 
+PREPARATION_PROGRESS_SECONDS = 1.0
+
 
 def finite_number(value,*,integer=False):
     if isinstance(value,bool):raise ValueError('Use a finite number')
@@ -404,6 +406,31 @@ class PreparationMixin:
         if self._prep_driver is None or self._prep_driver.done():
             self._prep_driver=self._prep_schedule(self._prep_drive(),'radar-preparation-queue')
 
+    async def _prep_queue_tick(self,key,queue):
+        # A tick can wait for several acknowledged checkpoint uploads. Keep
+        # reporting its persisted local state while the same operation runs;
+        # never call tick again to obtain progress or repeat a submission.
+        work=asyncio.create_task(asyncio.to_thread(queue.tick,
+            maximum_submissions=1,maximum_replays=1),name='radar-preparation-tick')
+        try:
+            while not work.done():
+                done,_=await asyncio.wait({work},timeout=PREPARATION_PROGRESS_SECONDS)
+                if not done and self.server.state.prep_library==key:
+                    try:self._prep_refresh()
+                    except Exception as exc:
+                        # A display failure must not orphan the owned work or
+                        # lead the driver to start another tick around it.
+                        self.server.state.prep_error=(
+                            'Preparation progress could not refresh ('+type(exc).__name__+
+                            '). The existing operation is still being monitored.')
+                    self.server.state.flush()
+            return await work
+        except asyncio.CancelledError:
+            # A running thread cannot be cancelled safely halfway through a
+            # durable upload/dispatch. Let its existing operation settle.
+            await asyncio.shield(work)
+            raise
+
     async def _prep_drive(self):
         store=self._preparation_store();s=self.server.state
         while not self._prep_stopping:
@@ -412,7 +439,7 @@ class PreparationMixin:
                 # A durable submission may include several slow Galaxy
                 # uploads. Return to collection and UI refresh after each
                 # one instead of hiding progress until every slot is filled.
-                try:result=await asyncio.to_thread(queue.tick,maximum_submissions=1,maximum_replays=1)
+                try:result=await self._prep_queue_tick(key,queue)
                 except Exception as exc:
                     message='Preparation queue needs attention ('+type(exc).__name__+'). Existing Galaxy jobs were not restarted.'
                     self._prep_queue_errors[key]=message;s.prep_error=message
@@ -620,7 +647,7 @@ class PreparationMixin:
             queue_state=queue.snapshot() if queue else None
             from .preparation_labels import queue_activity,queue_activity_label
             s.prep_active_jobs=queue_activity(queue_state)['accepted']
-            s.prep_job_status=queue_activity_label(queue_state)
+            s.prep_job_status=queue_activity_label(queue_state,pending=counts['pending'])
             recovery=queue.recovery_progress(queue_state) if queue else None
             if recovery and recovery['remaining']:
                 s.prep_job_status=(f"Recovering saved results: {recovery['verified']} / {recovery['total']} checked. "

@@ -453,6 +453,72 @@ def test_transient_queue_observation_is_repolled_without_a_new_dispatch(app,monk
     assert not s.prep_error
 
 
+def test_slow_queue_operation_refreshes_progress_without_repeating_the_operation(app,monkeypatch):
+    import threading
+    application,_,key,_=app;s=application.server.state;s.prep_library=key
+    released=threading.Event();started=threading.Event();calls=[];updates=[]
+    def tick(**kwargs):
+        calls.append(kwargs);started.set()
+        assert released.wait(2), 'Progress never reached the interface'
+        return {'complete':True}
+    def refresh():
+        assert started.is_set()
+        updates.append('visible');released.set()
+    monkeypatch.setattr(module,'PREPARATION_PROGRESS_SECONDS',0.01)
+    monkeypatch.setattr(application,'_prep_refresh',refresh)
+    result=asyncio.run(application._prep_queue_tick(key,SimpleNamespace(tick=tick)))
+    assert result=={'complete':True}
+    assert calls==[dict(maximum_submissions=1,maximum_replays=1)]
+    assert updates and all(task.done() for task in application._prep_tasks)
+
+
+def test_queue_progress_never_changes_the_selected_library(app,monkeypatch):
+    application,_,_,_=app
+    application.server.state.prep_library='another-library'
+    monkeypatch.setattr(application,'_prep_refresh',lambda:pytest.fail('Unselected library refreshed'))
+    result=asyncio.run(application._prep_queue_tick('old-library',SimpleNamespace(tick=lambda **_:42)))
+    assert result==42 and application.server.state.prep_library=='another-library'
+
+
+def test_progress_display_failure_does_not_orphan_the_running_operation(app,monkeypatch):
+    import threading
+    application,_,key,_=app;application.server.state.prep_library=key
+    release=threading.Event();calls=[]
+    def tick(**_):
+        calls.append(True)
+        assert release.wait(2)
+        return 42
+    def broken_display():
+        release.set()
+        raise RuntimeError('display fixture failure')
+    monkeypatch.setattr(module,'PREPARATION_PROGRESS_SECONDS',0.01)
+    monkeypatch.setattr(application,'_prep_refresh',broken_display)
+    result=asyncio.run(application._prep_queue_tick(key,SimpleNamespace(tick=tick)))
+    assert result==42 and calls==[True]
+    assert 'existing operation is still being monitored' in application.server.state.prep_error
+
+
+def test_cancelling_progress_wait_keeps_the_owned_dispatch_until_it_settles(app):
+    import threading
+    application,_,key,_=app;application.server.state.prep_library='another-library'
+    started=threading.Event();release=threading.Event();finished=[]
+    def tick(**_):
+        started.set()
+        assert release.wait(2)
+        finished.append(True)
+        return 42
+    async def cancel_after_start():
+        task=asyncio.create_task(application._prep_queue_tick(key,SimpleNamespace(tick=tick)))
+        assert await asyncio.to_thread(started.wait,2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and not finished
+        release.set()
+        with pytest.raises(asyncio.CancelledError):await task
+        assert finished==[True]
+    asyncio.run(cancel_after_start())
+
+
 def test_paused_recovery_refreshes_each_verified_receipt_until_the_chain_is_complete(app,monkeypatch):
     application,store,key,_=app;s=application.server.state
     s.prep_library=key;application._prep_recovering.add(key)

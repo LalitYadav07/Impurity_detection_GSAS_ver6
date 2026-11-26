@@ -32,6 +32,15 @@ def test_queue_status_label_keeps_submission_uncertainty_and_completed_receipts_
     assert queue_activity_label(None)=='No Galaxy jobs awaiting results.'
 
 
+def test_pending_admission_does_not_look_idle_while_its_recovery_state_is_saved():
+    from radar_pd_nova.preparation_labels import queue_activity_label
+    state=dict(paused=False,jobs=[])
+    assert queue_activity_label(state,pending=1)==(
+        'Preparing the next batch and saving its recovery information; no Galaxy job has been submitted yet.')
+    assert queue_activity_label(dict(paused=True,jobs=[]),pending=1)=='No Galaxy jobs awaiting results.'
+    assert queue_activity_label(state,pending=0)=='No Galaxy jobs awaiting results.'
+
+
 @pytest.mark.parametrize('phase,started,status,reason,expected',[
     ('awaiting_submission',False,None,'','no training job has been acknowledged'),
     ('needs_recovery',True,None,'','Recovering the existing training submission'),

@@ -22,7 +22,7 @@ def queue_activity(state):
     return counts
 
 
-def queue_activity_label(state):
+def queue_activity_label(state, *, pending=0):
     counts=queue_activity(state);parts=[]
     if counts['accepted']:
         n=counts['accepted']
@@ -33,7 +33,11 @@ def queue_activity_label(state):
     if counts['waiting']:
         n=counts['waiting']
         parts.append(f"{n} {'batch waiting' if n==1 else 'batches waiting'} to submit")
-    return ' · '.join(parts)+'.' if parts else 'No Galaxy jobs awaiting results.'
+    if parts:return ' · '.join(parts)+'.'
+    if state and not state.get('paused',True) and pending:
+        return ('Preparing the next batch and saving its recovery information; '
+                'no Galaxy job has been submitted yet.')
+    return 'No Galaxy jobs awaiting results.'
 
 
 def training_progress(library,state):
