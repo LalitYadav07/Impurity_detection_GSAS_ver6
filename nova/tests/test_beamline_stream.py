@@ -16,6 +16,15 @@ from test_powgen_controller import FakeGalaxyService
 from test_nomad import source, supplied
 
 
+@pytest.fixture
+def powgen_lifecycle_identity(monkeypatch):
+    # These reduced-file revision fixtures have no facility NeXus companion.
+    # Their one synthetic sample is independent of the source/receipt bytes
+    # changed below; identity resolution is covered by its own reader tests.
+    monkeypatch.setattr('radar_pd_nova.powgen_samples.PowgenSampleIndex.identity',
+        lambda self, run: {'sample_id': 'synthetic-standard', 'identity_status': 'resolved'})
+
+
 def test_partial_nomad_completion_replaces_placeholder_below_backfill_floor(source, monkeypatch):
     monkeypatch.setattr(
         WatchDefinition, "source_directory", property(lambda self: str(source.parent))
@@ -47,7 +56,7 @@ def test_partial_nomad_completion_replaces_placeholder_below_backfill_floor(sour
 
 @pytest.mark.parametrize("receipt_change", [False, True])
 def test_powgen_source_or_receipt_replacement_preserves_result_and_flags_review(
-    tmp_path, monkeypatch, receipt_change
+    tmp_path, monkeypatch, receipt_change, powgen_lifecycle_identity
 ):
     path = powgen_source(tmp_path)
     monkeypatch.setattr(WatchDefinition, "source_directory", property(lambda self: str(tmp_path)))
@@ -84,7 +93,7 @@ def test_powgen_source_or_receipt_replacement_preserves_result_and_flags_review(
     assert len(service.snapshots) == 1
 
 
-def test_powgen_identical_atomic_rewrite_does_not_flag_changed_input(tmp_path, monkeypatch):
+def test_powgen_identical_atomic_rewrite_does_not_flag_changed_input(tmp_path, monkeypatch, powgen_lifecycle_identity):
     path = powgen_source(tmp_path)
     monkeypatch.setattr(WatchDefinition, "source_directory", property(lambda self: str(tmp_path)))
     monkeypatch.setattr(PowgenWatchController, "_read_scan_metadata", lambda *a: {})

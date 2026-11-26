@@ -36,7 +36,7 @@ def captured_watch(tmp_path,monkeypatch,instrument,*,text=None):
     adapter=beamline_adapter(instrument)
     if instrument=='NOM':
         text=text if text is not None else nomad_profile(2,2837.58510543,31.).replace('difA:0','difA:4.2').replace('Zero:0','Zero:-3')
-        local=nomad_source.__wrapped__(tmp_path)
+        local=nomad_source.__wrapped__(tmp_path,monkeypatch)
         setup=nomad.inspect_reduced_setup(local,selected_bank=2)
         extra=dict(selected_banks=(2,),profile_bank=2,profile_acknowledged=True,allow_exploratory=True)
         receipt_key='nomad_bank_provenance'
