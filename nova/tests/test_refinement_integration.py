@@ -1279,16 +1279,23 @@ def test_galaxy_claim_is_backed_up_before_any_native_submission(tmp_path):
     rt.save_workspace=lambda state:snapshots.append(state)
     original=rt.call
     def call(action,source,directory,**kwargs):
-        assert snapshots and next(iter(snapshots[-1]['jobs'].values()))['status']=='running'
-        assert next(iter(snapshots[-1]['jobs'].values()))['message']=='Saving the dispatch checkpoint before submission'
-        assert next(iter(w.state['jobs'].values()))['message']=='Preparing the approved refinement for Galaxy'
-        kwargs['on_submitted']({'uid':'acknowledged-job'})
-        assert next(iter(snapshots[-1]['jobs'].values()))['remote_action']=={'uid':'acknowledged-job'}
-        assert next(iter(snapshots[-1]['jobs'].values()))['message']=='Submitted to Galaxy; waiting for the verified result'
+        claim=next(iter(snapshots[-1]['jobs'].values()))
+        assert claim['status']=='running' and claim['transport_phase']=='saving_dispatch'
+        assert not claim.get('remote_action')
+        assert not next(iter(w.state['jobs'].values())).get('transport_phase')
+        accepted={'uid':'acknowledged-job','galaxy_job_id':'accepted-native-job'}
+        kwargs['on_submitted'](accepted)
+        acknowledgment=next(iter(snapshots[-1]['jobs'].values()))
+        assert acknowledgment['remote_action']==accepted
+        assert acknowledgment['status']=='running'
+        assert acknowledgment['transport_phase']=='saving_acknowledgement'
+        assert not next(iter(w.state['jobs'].values())).get('transport_phase')
         return original(action,source,directory,**kwargs)
     rt.call=call
-    assert w.run_next()['status']=='completed'
+    result=w.run_next()
+    assert result['status']=='completed',result['message']
     assert len(snapshots)==2
+    assert len([call for call in rt.calls if call[0]=='run'])==1
 
 
 def test_failed_galaxy_recovery_backup_prevents_submission(tmp_path):
