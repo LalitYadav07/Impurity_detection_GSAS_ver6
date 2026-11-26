@@ -457,6 +457,21 @@ class LiveSetupMixin:
         self._sample_model_assignments_ui(locked)
 
     def _sample_model_assignments_ui(self, locked):
+        # Names are presentation-only and follow the current History inventory.
+        # Never resolve a saved assignment against a different History's IDs.
+        current_history = (
+            f"live_sample_models.galaxy_url === {json.dumps(self.service.galaxy_url.rstrip('/'))}"
+            f" && live_sample_models.history_id === {json.dumps(self.service.history_id)}"
+        )
+
+        def model_name(field, items, empty, missing):
+            selected = f"({items} || []).find(item => String(item.id) === String(assignment.{field}))"
+            return (
+                f"assignment.{field} ? (({current_history}) && "
+                f"(({selected} || {{}}).display_name || ({selected} || {{}}).name)"
+                f" || {json.dumps(missing)}) : {json.dumps(empty)}"
+            )
+
         with html.Details(classes="radar-soft-panel mb-2"):
             html.Summary("Sample model assignments")
             html.P("Assign each sample its allowed candidate library and optional known main CIF. An empty main keeps blind discovery within that library. Sample names and a low Rwp do not establish chemical identity. Assignments use datasets already saved in this History.", classes="radar-help-copy")
@@ -483,7 +498,8 @@ class LiveSetupMixin:
                 disabled=(locked + " || !live_model_sample_id",), variant="outlined", size="small")
             vuetify.VBtn("Clear assignments", click=self.clear_live_sample_models,
                 disabled=(locked + " || !live_sample_models",), variant="text", size="small")
-            with html.Table(v_if="live_sample_models", classes="radar-table"):
+            with html.Table(v_if="live_sample_models", classes="radar-table",
+                            style="table-layout:fixed;width:100%;overflow-wrap:anywhere"):
                 with html.Thead():
                     with html.Tr():
                         for title in ("Sample scope", "Acquisitions", "Allowed library", "Known main"):
@@ -492,8 +508,17 @@ class LiveSetupMixin:
                     with html.Tr(v_for="assignment in (live_sample_models ? live_sample_models.assignments : [])"):
                         html.Td("{{ assignment.instrument }} / {{ assignment.ipts }} / {{ assignment.sample_id }}")
                         html.Td("{{ (assignment.acquisition_ids || []).join(', ') || 'Matching sample ID' }}")
-                        html.Td("{{ assignment.candidate_library_dataset_id || 'Built-in catalog' }}")
-                        html.Td("{{ assignment.known_main_cif_dataset_id || 'Blind discovery' }}")
+                        for field, items, empty, missing in (
+                            ("candidate_library_dataset_id", "history_archive_datasets", "Built-in catalog", "Library not listed in this History"),
+                            ("known_main_cif_dataset_id", "history_cif_datasets", "Blind discovery", "Main CIF not listed in this History"),
+                        ):
+                            with html.Td(style="vertical-align:top"):
+                                html.Div("{{ " + model_name(field, items, empty, missing) + " }}",
+                                         style="white-space:normal;overflow-wrap:anywhere")
+                                html.Small("{{ assignment." + field + " }}",
+                                           v_if="assignment." + field,
+                                           title=("assignment." + field,),
+                                           style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7")
             html.P("Without assignments, the shared library and main CIF apply to one verified sample. All samples is also allowed when the checked cohort contains only that sample. With assignments, shared model inputs are ignored and unassigned samples stop for review.", classes="radar-help-copy")
 
     def _apply_live_configuration(self, config):
