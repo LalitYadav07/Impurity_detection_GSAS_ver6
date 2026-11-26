@@ -115,6 +115,16 @@ class LiveSetupMixin:
         self.server.state.change(*fields)(self._live_setup_changed)
         self._clear_shared_main_on_sample_change()
 
+    def _clear_live_test_feedback(self):
+        """Discard only feedback owned by the previous one-scan context."""
+        state = self.server.state
+        previous = str(getattr(state, "live_test_message", "") or "")
+        state.live_test_message = ""
+        if previous:
+            for name in ("notice", "error_message"):
+                if getattr(state, name, "") == previous:
+                    setattr(state, name, "")
+
     def _live_setup_changed(self, **_):
         state = self.server.state
         state.powgen_preflight_ready = False
@@ -123,7 +133,7 @@ class LiveSetupMixin:
         state.powgen_preflight_message = (
             "Live settings changed. Check experiment and inputs again."
         )
-        state.live_test_message = ""
+        self._clear_live_test_feedback()
 
     def _live_configuration(self):
         self._require_library_decision("live")

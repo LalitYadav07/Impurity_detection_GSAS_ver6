@@ -9,6 +9,54 @@ from test_live_setup import live, LocalGalaxy
 from test_partial_library_launch_guard import pending_review
 
 
+@pytest.mark.parametrize('change', ['ipts', 'source', 'processing', 'settings'])
+def test_new_live_context_clears_only_the_previous_one_scan_feedback(change):
+    from types import SimpleNamespace
+    from radar_pd_nova.app import RadarPdNovaApp
+    from test_app_selection import _State
+    app=RadarPdNovaApp.__new__(RadarPdNovaApp)
+    old='One-scan test submitted: NOM_138777_BANK2. Continuous monitoring is stopped.'
+    state=_State(live_beamline='NOM',powgen_ipts='25897',powgen_monitoring=False,
+        powgen_source_subfolder='shared/autoNOM/GSAS',live_test_message=old,
+        notice=old,error_message='An unrelated current warning',powgen_preflight_ready=True)
+    app.server=SimpleNamespace(state=state)
+    app._powgen_form_ipts='IPTS-21886'
+    app._powgen_form_source='shared/autoNOM/previous'
+    marker=object();app.records={'old-job':marker}
+    if change=='ipts':app._powgen_ipts_changed()
+    elif change=='source':app._powgen_source_changed()
+    elif change=='processing':app._powgen_processing_changed()
+    else:app._live_setup_changed()
+    assert state.live_test_message=='' and state.notice==''
+    assert state.error_message=='An unrelated current warning'
+    assert state.powgen_preflight_ready is False
+    assert app.records=={'old-job':marker} and not state.powgen_monitoring
+
+
+def test_equivalent_live_ipts_preserves_current_feedback():
+    from types import SimpleNamespace
+    from radar_pd_nova.app import RadarPdNovaApp
+    from test_app_selection import _State
+    app=RadarPdNovaApp.__new__(RadarPdNovaApp)
+    state=_State(powgen_ipts='25897',live_test_message='Current one-scan feedback',notice='Current notice')
+    app.server=SimpleNamespace(state=state);app._powgen_form_ipts='IPTS-25897'
+    app._powgen_ipts_changed()
+    assert state.live_test_message=='Current one-scan feedback' and state.notice=='Current notice'
+
+
+def test_context_feedback_reset_preserves_unrelated_notice_and_clears_owned_failure():
+    from types import SimpleNamespace
+    from radar_pd_nova.app import RadarPdNovaApp
+    from test_app_selection import _State
+    app=RadarPdNovaApp.__new__(RadarPdNovaApp)
+    old='One-scan test could not start: previous input error'
+    state=_State(live_test_message=old,notice='Current library review',error_message=old)
+    app.server=SimpleNamespace(state=state)
+    app._live_setup_changed()
+    assert state.live_test_message=='' and state.error_message==''
+    assert state.notice=='Current library review'
+
+
 def prepared_existing(live, tmp_path):
     async def start():
         await live.start_powgen_monitoring()

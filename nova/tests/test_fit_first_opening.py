@@ -323,3 +323,32 @@ def test_incomplete_refresh_can_monitor_an_existing_export_but_cannot_submit_one
     checked=app._publish_results_if_requested(row)
     assert checked.publication_status==RunStatus.OK and calls==['existing-export']
     assert checked.published_output_dir=='shared/existing.zip'
+
+
+def test_rapid_missing_data_messages_are_pending_until_full_results_arrive():
+    from ast import literal_eval
+    from html.parser import HTMLParser
+    class Controls(HTMLParser):
+        def __init__(self, html):
+            super().__init__();self.messages=[];self.feed(html)
+        def handle_starttag(self, tag, attributes):
+            attrs=dict(attributes)
+            self.messages.extend(value for key,value in attrs.items()
+                if key.replace('-','').replace('_','').lower()==':nodatatext')
+    app=RadarPdNovaApp()
+    expected={
+        'The coarse-search table is not loaded yet.':'No coarse-search table was published.',
+        'The lattice-nudge table is not loaded yet.':'No lattice-nudge table was published.',
+        'The pattern-scoring table is not loaded yet.':'No pattern-scoring table was published.',
+        'The final-refinement ranking is not loaded yet.':'No final-refinement ranking was published.',
+        'Refined hypotheses are not loaded yet.':'No refined hypotheses are available',
+        'Alternate hypotheses are not loaded yet.':'No alternate hypothesis is available',
+        'Saved GPX checkpoints are not loaded yet.':'No published GPX checkpoint is available',
+    }
+    observed={}
+    for expression in Controls(app.layout.html).messages:
+        condition, choices=expression.split('?',1)
+        assert condition.strip()=='result_actions_pending'
+        pending, ready=choices.split(':',1)
+        observed[literal_eval(pending.strip())]=literal_eval(ready.strip())
+    assert observed==expected

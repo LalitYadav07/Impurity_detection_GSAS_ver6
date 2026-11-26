@@ -3638,11 +3638,11 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     vuetify.VTab("Final Refinement", value="final_refinement")
                     vuetify.VTab("Solution Inspector", value="inspector")
                 with html.Div(v_show="rapid_stage === 'coarse_search'", classes="radar-result-card"):
-                    vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Coarse match',key:'coarse_match'},{title:'Unexplained signal',key:'unexplained_signal'}]",), items=("rapid_coarse_rows",), density="compact", no_data_text="No coarse-search table was published.")
+                    vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Coarse match',key:'coarse_match'},{title:'Unexplained signal',key:'unexplained_signal'}]",), items=("rapid_coarse_rows",), density="compact", no_data_text=("result_actions_pending ? 'The coarse-search table is not loaded yet.' : 'No coarse-search table was published.'",))
                 with html.Div(v_show="rapid_stage === 'lattice_nudge'", classes="radar-result-card"):
-                    vuetify.VDataTable(headers=("[{title:'Phase',key:'phase'},{title:'Space group',key:'space_group'},{title:'Nudge match',key:'nudge_match'},{title:'Cell adjustment',key:'cell_adjustment'},{title:'Best cell',key:'best_cell'},{title:'Time',key:'time'},{title:'Status',key:'status'}]",), items=("rapid_nudge_rows",), density="compact", no_data_text="No lattice-nudge table was published.")
+                    vuetify.VDataTable(headers=("[{title:'Phase',key:'phase'},{title:'Space group',key:'space_group'},{title:'Nudge match',key:'nudge_match'},{title:'Cell adjustment',key:'cell_adjustment'},{title:'Best cell',key:'best_cell'},{title:'Time',key:'time'},{title:'Status',key:'status'}]",), items=("rapid_nudge_rows",), density="compact", no_data_text=("result_actions_pending ? 'The lattice-nudge table is not loaded yet.' : 'No lattice-nudge table was published.'",))
                 with html.Div(v_show="rapid_stage === 'pattern_scoring'", classes="radar-result-card"):
-                    vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Key peak support',key:'key_peak_support'},{title:'Coarse rank',key:'coarse_rank'},{title:'Pattern match',key:'pattern_match'},{title:'Explained signal',key:'explained_signal'},{title:'Unexplained signal',key:'unexplained_signal'}]",), items=("rapid_pattern_rows",), density="compact", no_data_text="No pattern-scoring table was published.")
+                    vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Key peak support',key:'key_peak_support'},{title:'Coarse rank',key:'coarse_rank'},{title:'Pattern match',key:'pattern_match'},{title:'Explained signal',key:'explained_signal'},{title:'Unexplained signal',key:'unexplained_signal'}]",), items=("rapid_pattern_rows",), density="compact", no_data_text=("result_actions_pending ? 'The pattern-scoring table is not loaded yet.' : 'No pattern-scoring table was published.'",))
                 with html.Div(v_show="rapid_stage === 'final_refinement'", classes="radar-stage-content"):
                     with html.Div(classes="radar-refinement-card-grid"):
                         with html.Div(v_for="row in top_refinements", key="row.rank", classes="radar-refinement-card"):
@@ -3652,13 +3652,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                             html.P("{{ row.phase_fractions }}")
                             html.Span("{{ row.status }} / {{ row.time }}")
                     with html.Div(classes="radar-result-card"):
-                        vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Rwp',key:'rwp'},{title:'Phase fractions',key:'phase_fractions'},{title:'Pattern rank',key:'pattern_rank'},{title:'Status',key:'status'},{title:'Time',key:'time'}]",), items=("rapid_final_rows",), density="compact", no_data_text="No final-refinement ranking was published.")
+                        vuetify.VDataTable(headers=("[{title:'Rank',key:'rank'},{title:'Hypothesis',key:'hypothesis'},{title:'Rwp',key:'rwp'},{title:'Phase fractions',key:'phase_fractions'},{title:'Pattern rank',key:'pattern_rank'},{title:'Status',key:'status'},{title:'Time',key:'time'}]",), items=("rapid_final_rows",), density="compact", no_data_text=("result_actions_pending ? 'The final-refinement ranking is not loaded yet.' : 'No final-refinement ranking was published.'",))
                 with html.Div(v_show="rapid_stage === 'inspector'", classes="radar-result-card"):
                     html.H3("Solution Inspector")
                     html.P("Compare published refined hypotheses and carry an existing GSAS-II checkpoint into the downstream handoff workflow.", classes="radar-section-help")
                     with html.Div(classes="radar-field-pair"):
-                        vuetify.VSelect(label="Primary hypothesis", v_model=("selected_hypothesis",), items=("rapid_final_rows",), item_title="hypothesis", item_value="rank", density="compact", variant="outlined", no_data_text="No refined hypotheses are available")
-                        vuetify.VSelect(label="Compare with", v_model=("comparison_hypothesis",), items=("rapid_final_rows",), item_title="hypothesis", item_value="rank", density="compact", variant="outlined", clearable=True, no_data_text="No alternate hypothesis is available")
+                        vuetify.VSelect(label="Primary hypothesis", v_model=("selected_hypothesis",), items=("rapid_final_rows",), item_title="hypothesis", item_value="rank", density="compact", variant="outlined", no_data_text=("result_actions_pending ? 'Refined hypotheses are not loaded yet.' : 'No refined hypotheses are available'",))
+                        vuetify.VSelect(label="Compare with", v_model=("comparison_hypothesis",), items=("rapid_final_rows",), item_title="hypothesis", item_value="rank", density="compact", variant="outlined", clearable=True, no_data_text=("result_actions_pending ? 'Alternate hypotheses are not loaded yet.' : 'No alternate hypothesis is available'",))
                     with html.Div(classes="radar-refinement-card-grid"):
                         with html.Div(v_for="row in rapid_final_rows.filter(item => String(item.rank) === String(selected_hypothesis) || String(item.rank) === String(comparison_hypothesis))", key="'compare-' + row.rank", classes="radar-refinement-card"):
                             html.Div("Published rank {{ row.rank }}", classes="radar-micro-label")
@@ -3666,7 +3666,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                             html.Div("Rwp {{ row.rwp }}%", classes="radar-refinement-rwp")
                             html.P("{{ row.phase_fractions }}")
                             html.Span("{{ row.status }} / {{ row.time }}")
-                    vuetify.VSelect(label="GSAS-II checkpoint", v_model=("selected_checkpoint",), items=("checkpoint_rows",), item_title="name", item_value="id", density="compact", variant="outlined", no_data_text="No published GPX checkpoint is available")
+                    vuetify.VSelect(label="GSAS-II checkpoint", v_model=("selected_checkpoint",), items=("checkpoint_rows",), item_title="name", item_value="id", density="compact", variant="outlined", no_data_text=("result_actions_pending ? 'Saved GPX checkpoints are not loaded yet.' : 'No published GPX checkpoint is available'",))
                     with html.Div(classes="radar-button-row"):
                         vuetify.VBtn("Download selected checkpoint", click=self.download_checkpoint, disabled=("result_actions_pending || !checkpoint_rows.some(item => item.id === selected_checkpoint && item.local_available)",), prepend_icon="mdi-download", color="#15543c", variant="outlined")
 
@@ -5610,6 +5610,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
 
     def _powgen_processing_changed(self, **_: Any) -> None:
         state = self.server.state
+        self._clear_live_test_feedback()
         self._clear_shared_main_on_sample_change()
         self._sync_powgen_dashboard_provenance()
         state.powgen_preflight_ready = False
