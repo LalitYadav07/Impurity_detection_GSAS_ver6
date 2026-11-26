@@ -192,6 +192,25 @@ def test_remote_handoff_reuses_its_published_gpx_and_checkpoints_without_submitt
     assert not app.server.state.sx_recipe_message
 
 
+def test_remote_handoff_can_use_the_checked_original_model_output_without_reupload(selected,tmp_path):
+    workspace,row,_,_,_=selected;app=controller(workspace,row,tmp_path)
+    workspace.runtime.kind='galaxy';backups=[];workspace.checkpoint=lambda:backups.append(True)
+    def unnecessary(*args,**kwargs):pytest.fail('The existing checked GPX was uploaded again')
+    app.service=SimpleNamespace(upload_document=unnecessary)
+    checked=[]
+    def publication(selected_row,path):
+        checked.append((selected_row['id'],Path(path).read_bytes()))
+        return dict(dataset_id='original-model-hda',sha256=file_sha(path),role='reviewable_projects')
+    app._published_symmetry_project=publication
+    app.open_symmetry_refinement();asyncio.run(app.tasks.pop())
+    source=workspace.state['sources'][app.server.state.rf_source]
+    assert source['dataset_id']=='original-model-hda' and len(checked)==len(backups)==1
+    assert source['scientific_status']=='optimization_unresolved'
+    assert source['manual_recipe_input'] and not source.get('live_watch')
+    assert any('scientific review' in warning for warning in source['scientific_warnings'])
+    assert not workspace.state['jobs'] and len(app.inspections)==1
+
+
 def test_failed_checkpoint_can_retry_without_uploading_or_inspecting_again(selected,tmp_path):
     workspace,row,_,_,_=selected;app=controller(workspace,row,tmp_path)
     workspace.runtime.kind='galaxy';uploads=[];backups=[]

@@ -562,6 +562,10 @@ class GalaxyChunkTransport:
         self._attempted_dispatches=set()
         self._collection_metadata=threading.local()
 
+    def published_project(self,trial_id,protocol_sha256,captured):
+        from .model_publication import published_project
+        return published_project(self,trial_id,protocol_sha256,captured)
+
     @contextmanager
     def collection_pass(self):
         """Scope metadata snapshots to one owner-thread collection pass.

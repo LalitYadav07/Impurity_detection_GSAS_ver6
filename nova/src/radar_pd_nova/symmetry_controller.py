@@ -678,6 +678,18 @@ class SymmetryMixin(KSearchMixin):
             else:raise ValueError('Unknown native artifact')
         except Exception as exc:s.sx_error=str(exc);s.flush()
 
+    def _published_symmetry_project(self,row,path):
+        """Reuse an exact published GPX without another data-upload job."""
+        if self._model_remote() is None:return None
+        directory=Path(row['directory']).resolve();root=directory.parent.parent
+        if (root.parent!=self._symmetry_root() or directory.parent!=root/'trials'
+                or not (root/'campaign.sqlite').is_file()):
+            raise ValueError('Selected project is outside its displayed model campaign')
+        campaign=self._symmetry_campaign(root)
+        transport=self._symmetry_transport(campaign)
+        method=getattr(transport,'published_project',None)
+        return method(row['id'],row['protocol'],path) if method else None
+
     def open_symmetry_in_gsasii(self):
         """Open the exact audited trial selected at click time, never a collection preference."""
         s=self.server.state
@@ -694,7 +706,9 @@ class SymmetryMixin(KSearchMixin):
                     from .model_recipe_handoff import capture_gpx
                     return capture_gpx(row,self._symmetry_root()/'desktop-inputs')[0]
                 path=await asyncio.to_thread(capture)
-                dataset=await asyncio.to_thread(self.service.upload_document,path,label='Audited model '+row['id'])
+                published=await asyncio.to_thread(self._published_symmetry_project,row,path)
+                dataset=published['dataset_id'] if published else await asyncio.to_thread(
+                    self.service.upload_document,path,label='Audited model '+row['id'])
                 from .galaxy_service import GSASII_INTERACTIVE_TOOL_ID
                 action=await self._submit_utility_action(tool_id=GSASII_INTERACTIVE_TOOL_ID,
                     name='Inspect audited model '+row['name']+' · '+row['id'],
@@ -730,9 +744,13 @@ class SymmetryMixin(KSearchMixin):
                 if not current():raise ValueError('Selection changed; no recipe input was selected.')
                 dataset=previous.get('dataset_id') if previous.get('source_sha256')==checksum else None
                 if workspace.runtime.kind=='galaxy' and not dataset:
-                    s.sx_recipe_message='Saving this exact structural GPX to Galaxy for recipe refinement. No refinement has started.';s.flush()
-                    dataset=await asyncio.to_thread(self.service.upload_document,path,
-                        label='Structural model checkpoint '+row['id'])
+                    s.sx_recipe_message='Checking the published structural GPX for reuse. No refinement has started.';s.flush()
+                    published=await asyncio.to_thread(self._published_symmetry_project,row,path)
+                    if published:dataset=published['dataset_id']
+                    else:
+                        s.sx_recipe_message='Saving this exact structural GPX to Galaxy for recipe refinement. No refinement has started.';s.flush()
+                        dataset=await asyncio.to_thread(self.service.upload_document,path,
+                            label='Structural model checkpoint '+row['id'])
                 if not current():raise ValueError('Selection changed; no recipe input was selected.')
                 # The original input may have been superseded while the exact
                 # output was being published. Recheck its provenance first.

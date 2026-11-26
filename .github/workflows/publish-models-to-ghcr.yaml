@@ -256,8 +256,9 @@ jobs:
             /validation/tests/gpx_recipe/test_structural_parallel_starts.py \
             /validation/tests/gpx_recipe/test_structural_parallel_starts_native.py \
             /validation/tests/gpx_recipe/test_structural_parallel_snapshot_native.py \
+            /validation/tests/gpx_recipe/test_model_project_publication_native.py \
             /validation/tests/gpx_recipe/test_structural_fit_service_native.py &&
-          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/parallel.xml\").findall(\".//testcase\"); assert len(cases)==8 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"All eight structural parallelism, snapshot and export checks must run without skips\"" &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/parallel.xml\").findall(\".//testcase\"); assert len(cases)==9 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"All nine structural parallelism, snapshot and publication checks must run without skips\"" &&
           GALAXY_SLOTS=1 python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/joint-dispatch.xml \
             /validation/tests/gpx_recipe/test_native_joint_profiled_fit.py &&
           python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/joint-dispatch.xml\").findall(\".//testcase\"); assert len(cases)==2 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"The existing joint optimizer dispatch must remain compatible\""'

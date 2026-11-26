@@ -25,6 +25,36 @@ from gpx_recipe.symmetry.resources import allocation
 from gpx_recipe.symmetry.native_protocol import validate_native_payload,validate_native_timeout,STRUCTURAL_SNAPSHOT_OPERATIONS
 
 
+def publish_chunk_projects(result, base, directory):
+    """Publish checked point fits separately from qualified model results."""
+    from gpx_recipe.symmetry.campaign import verify_receipt
+    for row in result['trials']:
+        if row['state']!='finished':continue
+        status=row.get('status')
+        if status not in {'valid','optimization_unresolved'}:continue
+        trial=base/'trials'/row['id']
+        receipt=verify_receipt(trial,dict(id=row['id'],protocol_sha256=result['protocol_sha256']))
+        if receipt['status']!=status:raise ValueError('Published model status differs from its receipt')
+        if status=='valid':
+            folder,prefix='verified_projects','verified_'
+        else:
+            job=json.loads((trial/'job.json').read_text())
+            fit=receipt.get('structural_fit') or {}
+            if (job['protocol']['kind']!='structural' or receipt.get('reviewable_gpx') is not True
+                    or receipt.get('inputs_verified') is not True or receipt.get('effects_verified') is not True
+                    or receipt.get('audit',{}).get('passed') is not True
+                    or fit.get('all_physical_modes_retained') is not True
+                    or fit.get('native_active_set_verified') is not True
+                    or fit.get('optimization_qualified') is not False):
+                continue
+            folder,prefix='reviewable_projects','reviewable_'
+        relative='results/'+str(receipt.get('gpx') or '')
+        if relative not in receipt.get('files',{}):
+            raise ValueError('A published project is absent from its audited artifact list')
+        target=directory/folder/(prefix+row['id']+'.gpx')
+        target.parent.mkdir(exist_ok=True);shutil.copyfile(confined(trial,relative),target)
+
+
 def native(request,inputs,root,cancel,*,admission=False):
     if set(request)!={'schema','operation','payload','implementation_sha256','expected_source_sha256','dispatch_key','timeout','input_hashes'} or request['schema']!='radar-model-native/v1':
         raise ValueError('Invalid native model request')
@@ -123,15 +153,7 @@ def _work(action,source,assets,request_file,directory,archive,*,asset_parts=()):
             paths=['response.json','progress.json']+[str(p.relative_to(base)) for p in (base/'trials').rglob('*')
                 if p.is_file() and p.suffix.lower() in {'.gpx','.json','.log','.npz'} and p.name!='job.json']
             paths += [row['path'] for row in result.get('profiled_cache',{}).get('entries',[])]
-            from gpx_recipe.symmetry.campaign import verify_receipt
-            for row in result['trials']:
-                if row['state']!='finished' or row.get('status')!='valid':continue
-                trial=base/'trials'/row['id']
-                receipt=verify_receipt(trial,dict(id=row['id'],protocol_sha256=result['protocol_sha256']))
-                relative='results/'+receipt['gpx']
-                if relative not in receipt['files']:raise ValueError('A qualified project is absent from its audited artifact list')
-                target=directory/'verified_projects'/('verified_'+row['id']+'.gpx')
-                target.parent.mkdir(exist_ok=True);shutil.copyfile(confined(trial,relative),target)
+            publish_chunk_projects(result,base,directory)
         elif action in {'native','admission'}:
             root=directory/'native';root.mkdir()
             if action=='admission':
