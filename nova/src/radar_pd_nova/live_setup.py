@@ -293,7 +293,7 @@ class LiveSetupMixin:
                 disabled=(locked,),
                 clearable=True,
                 no_data_text="No reusable configurations are in this Galaxy History",
-                hint="Reuses analysis settings. Scans, instrument profile, candidate library and main phase come from this Live setup.",
+                hint="Reuses analysis settings and any sample model assignments. This Live setup supplies scans and profile; without assignments it also supplies the library and main CIF.",
                 persistent_hint=True,
                 update_modelValue=(self._powgen_configuration_changed, "[$event]"),
             )
@@ -460,6 +460,7 @@ class LiveSetupMixin:
         with html.Details(classes="radar-soft-panel mb-2"):
             html.Summary("Sample model assignments")
             html.P("Assign each sample its allowed candidate library and optional known main CIF. An empty main keeps blind discovery within that library. Sample names and a low Rwp do not establish chemical identity. Assignments use datasets already saved in this History.", classes="radar-help-copy")
+            html.P("Assign models to sample updates this Live draft. The reviewed configuration, including its assignments, is saved when Test latest scan or Start monitoring proceeds.", classes="radar-help-copy")
             vuetify.VAutocomplete(label="Sample to assign", v_model=("live_model_sample_id",),
                 items=("powgen_discovered_sample_options",), item_title="title", item_value="value",
                 density="compact", variant="outlined", disabled=(locked,),
@@ -493,7 +494,7 @@ class LiveSetupMixin:
                         html.Td("{{ (assignment.acquisition_ids || []).join(', ') || 'Matching sample ID' }}")
                         html.Td("{{ assignment.candidate_library_dataset_id || 'Built-in catalog' }}")
                         html.Td("{{ assignment.known_main_cif_dataset_id || 'Blind discovery' }}")
-            html.P("Without assignments, select exactly one sample; the shared library and main CIF apply only to it. With assignments, shared model inputs are ignored and unassigned samples stop for review.", classes="radar-help-copy")
+            html.P("Without assignments, the shared library and main CIF apply to one verified sample. All samples is also allowed when the checked cohort contains only that sample. With assignments, shared model inputs are ignored and unassigned samples stop for review.", classes="radar-help-copy")
 
     def _apply_live_configuration(self, config):
         if config.radiation.value != "neutron" or config.instrument_mode not in {'auto', self._live_adapter().instrument_mode}:

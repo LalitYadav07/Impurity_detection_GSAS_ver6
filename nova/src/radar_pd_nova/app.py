@@ -5857,7 +5857,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.powgen_sample_message = (
                 (f"Found {len(result['options'])} experiment-scoped sample labels across {result['scan_count']} reduced acquisitions. "
                     if self._live_adapter().instrument=='HB2A' else f"Found {len(result['options'])} sample IDs across {result['scan_count']} completed scans. ")
-                + (f"{unknown} scans have no readable sample ID; All samples includes them." if unknown else "")
+                + (f"{unknown} scans have no readable sample ID and require review before Live submission." if unknown else "")
                 + (" Sample list uses catalog metadata; selected runs are verified from source files before analysis."
                    if result.get("catalog_preview_count") else "")
             )
@@ -5874,7 +5874,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             return result
         except Exception as exc:
             if self._powgen_sample_request is token:
-                state.powgen_sample_message = f"Sample discovery failed: {exc}. You can still check All samples."
+                state.powgen_sample_message = f"Sample discovery failed: {exc}. You can still check All samples; unresolved identities block Live submission."
                 state.powgen_discovered_sample_options = []
         finally:
             if self._powgen_sample_request is token:
