@@ -140,7 +140,10 @@ class Service:
 @pytest.mark.parametrize('missing_profile',[False,True])
 def test_completed_cw_watch_recovers_profile_and_keeps_receipt_checks(archive,profile,missing_profile):
     from radar_pd_nova.transition_coordinate_mapping import mapped_calibration
-    add(archive)
+    _, raw = add(archive)
+    # This recovery fixture has an explicit source ID; name-only model
+    # authorization is exercised separately by acquisition-binding tests.
+    raw.write_text(raw.read_text() + '# sample_id = synthetic-recovery\n')
     service=Service(profile);first=Hb2aWatchController(service,settings())
     run=first.discover()[0];first.submit(run)
     first.state.mark_completed(run.run_id,['final-gpx'],galaxy_job_id='job-1');first.persist_state()
@@ -460,7 +463,9 @@ def test_live_arrivals_restart_scan_numbers_and_restore_new_only_cursor(archive,
 
 
 def test_partial_pattern_retries_and_completed_revisions_are_not_relabelled(archive,profile):
-    data,_=add(archive);complete=data.read_bytes();data.write_bytes(complete[:100])
+    data,raw=add(archive)
+    raw.write_text(raw.read_text() + '# sample_id = synthetic-revision\n')
+    complete=data.read_bytes();data.write_bytes(complete[:100])
     service=Service(profile);controller=Hb2aWatchController(service,settings())
     broken=controller.discover()[0];assert 'setup_error' in broken.scan_metadata and not controller.due_submissions()
     data.write_bytes(complete)
