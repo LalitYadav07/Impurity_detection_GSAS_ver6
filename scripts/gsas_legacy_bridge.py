@@ -893,7 +893,7 @@ def stage0_bootstrap_no_cif(
 
     # 3) Arrays via GSASDataExtractor
     from gsas_main_phase_refiner import GSASDataExtractor
-    data = GSASDataExtractor.get_all_arrays(hist)
+    data = GSASDataExtractor.get_fitted_arrays(hist)
     Q         = data.get('Q', np.array([]))
     yobs      = data.get('yobs', np.array([]))
     x_native  = data.get('x_native', np.array([]))

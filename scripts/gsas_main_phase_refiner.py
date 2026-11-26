@@ -430,12 +430,44 @@ class GSASDataExtractor:
         return data
 
     @staticmethod
+    def get_fitted_arrays(histogram) -> Dict[str, np.ndarray]:
+        """Read only valid observations in the native least-squares fit domain.
+
+        ``getdata`` exposes the complete stored grid, including bins outside
+        Limits, and converting its masked arrays with ``asarray`` loses masks.
+        Reuse the explicit native-domain contract used by published fit plots.
+        Invalid calculated values inside that domain fail closed in that reader.
+        """
+        from plot_payload import histogram_plot_arrays
+
+        native = histogram_plot_arrays(histogram)
+        fitted = native["fit_valid"]
+        data = {
+            "x_native": native["x"][fitted],
+            "yobs": native["yobs"][fitted],
+            "ycalc": native["ycalc"][fitted],
+            "ywt": native["weights"][fitted],
+            "residual": native["resid"][fitted],
+        }
+        # Keep the original grid until applying the same fit mask to the
+        # derived coordinates. Independent compression would misalign bins.
+        for key in ("Q", "d"):
+            coordinates = np.ma.asarray(histogram.getdata(key), dtype=float)
+            if coordinates.shape != fitted.shape:
+                raise ValueError("Native screening coordinates do not share the histogram grid")
+            values = np.asarray(np.ma.getdata(coordinates))
+            if np.any(fitted & ~np.isfinite(values)):
+                raise ValueError("Native screening coordinates are invalid in the fitted domain")
+            data[key] = values[fitted]
+        return data
+
+    @staticmethod
     def get_residual_both_spaces(histogram) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Get residual in both native and Q coordinates.
         Returns: (x_native, residual_native, Q, residual_Q)
         """
-        data = GSASDataExtractor.get_all_arrays(histogram)
+        data = GSASDataExtractor.get_fitted_arrays(histogram)
         x_native = data.get('x_native', np.array([]))
         Q = data.get('Q', np.array([]))
         residual = data.get('residual', np.array([]))
@@ -1550,7 +1582,7 @@ def compute_gsas_ycalc_pearson(project_manager) -> float:
     except Exception:
         pass
 
-    data = GSASDataExtractor.get_all_arrays(hist)
+    data = GSASDataExtractor.get_fitted_arrays(hist)
     yobs = data.get('yobs', np.array([]))
     ycalc = data.get('ycalc', np.array([]))
     if yobs.size == 0 or ycalc.size == 0:
@@ -1754,6 +1786,8 @@ def compute_gsas_pearson_for_cif(
         except Exception:
             pass
 
+    fit_point_counts: Dict[str, int] = {}
+
     def _run_and_r(cycles: int, label: str) -> Tuple[float, float]:
         try:
             pm.project.data['Controls']['data']['max cyc'] = int(max(0, cycles))
@@ -1774,15 +1808,11 @@ def compute_gsas_pearson_for_cif(
                 raise RuntimeError("GSAS-II reported a failed screening refinement")
         except Exception as exc:
             raise RuntimeError(f"Pearson refinement failed for {ph_name}: {exc}") from exc
-        try:
-            Yo = np.asarray(hist.getdata('yobs'), float)
-            Yc = np.asarray(hist.getdata('ycalc'), float)
-        except Exception:
-            _, Yo, _, Yc = hist.getdata()
-            Yo = np.asarray(Yo, float); Yc = np.asarray(Yc, float)
-        r = _safe_pearson(Yo, Yc)
+        data = GSASDataExtractor.get_fitted_arrays(hist)
+        r = _safe_pearson(data["yobs"], data["ycalc"])
+        fit_point_counts[label] = int(data["yobs"].size)
         dt = perf_counter() - t_refine
-        logger.info(f"[PEARSON] {ph_name} {label}: r={r:.6f} dt={dt:.3f}s")
+        logger.info(f"[PEARSON] {ph_name} {label}: r={r:.6f} dt={dt:.3f}s fitted_points={fit_point_counts[label]}")
         return r, dt
 
     # Screening must observe the same physical TOF variance limits as refinement.
@@ -1873,6 +1903,7 @@ def compute_gsas_pearson_for_cif(
             "cell_refined": bool(used_cell_refinement),
             "cell_skip_reason": cell_skip_reason,
             "cell_refine_min_r": float(min_r_for_cell),
+            "fit_point_counts": fit_point_counts,
             "refined_cif_path": target_write,
             "export_refined_cif": bool(export_refined_cif),
             "timings": timings,
@@ -2013,7 +2044,7 @@ def extract_residual_from_gpx(gpx_path: str):
         raise RuntimeError(f"No histograms in {gpx_path}")
 
     hist = hists[0]
-    data = GSASDataExtractor.get_all_arrays(hist)
+    data = GSASDataExtractor.get_fitted_arrays(hist)
 
     # Fallbacks ensure np.array([]) rather than None
     x_native = np.asarray(data.get('x_native', np.array([])), float)
