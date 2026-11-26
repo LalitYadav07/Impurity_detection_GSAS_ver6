@@ -49,3 +49,14 @@ def test_internal_build_dispatch_retains_full_native_reference(monkeypatch,tmp_p
     source=object();path=tmp_path/'bank.npz'
     assert bank.build(source,path,reuse_fixed_cell_profiles=True)=={'accelerated':True}
     assert calls==[(source,path,'multiscale_v1')]
+
+
+def test_parallel_build_dispatch_preserves_the_requested_native_renderer(monkeypatch,tmp_path):
+    from gpx_recipe.structural_live.optimization import offline_native_start_bank as bank
+    renderer=object();calls=[]
+    def reuse(source,path,policy,*,batch_renderer):
+        calls.append((source,path,policy,batch_renderer));return {'accelerated':True}
+    monkeypatch.setattr(module,'build_reusing_profiles',reuse)
+    source=object();path=tmp_path/'bank.npz'
+    assert bank.build(source,path,reuse_fixed_cell_profiles=True,batch_renderer=renderer)=={'accelerated':True}
+    assert calls==[(source,path,'multiscale_v1',renderer)]

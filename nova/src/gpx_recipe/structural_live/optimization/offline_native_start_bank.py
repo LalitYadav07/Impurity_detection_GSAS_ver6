@@ -77,7 +77,8 @@ def build(source,path,policy='multiscale_v1',*,reuse_fixed_cell_profiles=False,b
     if type(reuse_fixed_cell_profiles) is not bool:raise TypeError('Fixed-cell reuse must be an explicit boolean')
     if reuse_fixed_cell_profiles:
         from .native_bank_reuse import build_reusing_profiles
-        return build_reusing_profiles(source,path,policy=policy,batch_renderer=batch_renderer)
+        options={} if batch_renderer is None else dict(batch_renderer=batch_renderer)
+        return build_reusing_profiles(source,path,policy=policy,**options)
     return _construct(source,path,policy=policy,batch_renderer=batch_renderer)
 
 
