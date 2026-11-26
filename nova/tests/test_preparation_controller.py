@@ -426,6 +426,22 @@ def test_resuming_preparation_confirms_completion_instead_of_leaving_action_titl
     assert s.prep_message=='Preparation resumed. Completed results are retained; unfinished entries will continue.'
 
 
+def test_pause_and_resume_refresh_controls_without_reselecting_the_library(app):
+    application,store,key,_=app;s=application.server.state;s.prep_library=key
+    store.start(key,maximum_jobs=1);application._prep_refresh()
+    assert s.prep_can_pause and not s.prep_can_resume
+    async def pause():
+        application.pause_preparation()
+        await asyncio.gather(*tuple(application._prep_tasks))
+    asyncio.run(pause())
+    assert s.prep_can_resume and not s.prep_can_pause
+    async def resume():
+        application.resume_preparation()
+        await asyncio.gather(*tuple(application._prep_tasks))
+    asyncio.run(resume())
+    assert s.prep_can_pause and not s.prep_can_resume
+
+
 @pytest.mark.parametrize('action',['inspect','resume'])
 def test_pending_initial_checkpoint_keeps_its_existing_queue_monitored(app,monkeypatch,action):
     from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending

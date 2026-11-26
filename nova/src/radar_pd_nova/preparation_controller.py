@@ -420,6 +420,7 @@ class PreparationMixin:
             message=('Galaxy is still saving the preparation checkpoint. The same checkpoint '
                      'and queue are being monitored. No replacement upload or calculation is being started.')
         if self.server.state.prep_library==key:self.server.state.prep_message=message
+        self._prep_refresh()
         self._prep_start_driver()
         return ready
 
@@ -757,7 +758,8 @@ class PreparationMixin:
 
     def pause_preparation(self,**_):
         async def pause():
-            await asyncio.to_thread(self._preparation_store().pause,self.server.state.prep_library)
+            try:await asyncio.to_thread(self._preparation_store().pause,self.server.state.prep_library)
+            finally:self._prep_refresh()
             self.server.state.prep_message='Preparation paused. Acknowledged Galaxy jobs may finish; no new batches will be submitted.'
         return self._prep_action(pause(),'Pausing new preparation work')
 
