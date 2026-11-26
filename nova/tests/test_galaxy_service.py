@@ -776,7 +776,9 @@ def test_flat_collection_reads_ready_plot_pair_without_archive_builder(tmp_path,
             collection_type='list', populated_state='ok', element_count=2, elements=elements))
     monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.get', get)
     service = GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
-    def download(identifier, target):target.write_bytes(bodies[identifier])
+    def download(identifier, target, *, metadata=None):
+        assert metadata['id'] == identifier
+        target.write_bytes(bodies[identifier])
     service._download_dataset = download
     service._download_collection('plots-id', tmp_path/'plots')
     view = build_result_view(dict(analysis_mode='full', final_rwp=6.25, phases=[]), tmp_path, submitted_mode='full')
@@ -794,7 +796,7 @@ def test_flat_binary_gpx_keeps_publication_filename_and_checks_size(tmp_path, mo
     monkeypatch.setattr('radar_pd_nova.galaxy_service.requests.get', lambda *a,**k:SimpleNamespace(
         raise_for_status=lambda:None, json=lambda:payload))
     service = GalaxyService('https://galaxy.example','key','history',output_root=tmp_path)
-    service._download_dataset = lambda identifier,target:target.write_bytes(b'gpx!')
+    service._download_dataset = lambda identifier,target,**kwargs:target.write_bytes(b'gpx!')
     destination = tmp_path/'gpx_projects'
     service._download_collection('projects', destination)
     assert (destination/'03_Final_accepted_model.gpx').read_bytes() == b'gpx!'

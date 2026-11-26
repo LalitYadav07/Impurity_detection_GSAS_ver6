@@ -1253,7 +1253,7 @@ class GalaxyService:
             payload = yaml.safe_load(response.text)
         return payload if isinstance(payload, dict) else None
 
-    def _dataset_download_url(self, dataset_id: str) -> str:
+    def _dataset_download_url(self, dataset_id: str, *, metadata: Mapping[str, Any] | None = None) -> str:
         """Use Galaxy's file route, without forwarding credentials off-origin.
 
         The generic dataset display endpoint can stall for binary content.
@@ -1262,11 +1262,19 @@ class GalaxyService:
         identifier = str(dataset_id)
         if not re.fullmatch(r'[A-Za-z0-9_-]+', identifier):
             raise ValueError('Invalid Galaxy dataset identifier')
-        metadata = self._dataset_metadata(identifier)
+        metadata = self._dataset_metadata(identifier) if metadata is None else metadata
         if metadata.get('id', identifier) != identifier:
             raise ValueError('Galaxy download metadata identifies a different dataset')
         advertised = metadata.get('download_url')
         if not advertised:
+            # Completed collection elements already include their HDA and
+            # History identities. Reuse that response rather than issuing a
+            # second metadata GET per member merely to discover this route.
+            history_id = metadata.get('history_id')
+            if history_id is not None:
+                if not isinstance(history_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', history_id):
+                    raise ValueError('Invalid Galaxy dataset History identifier')
+                return f'{self.galaxy_url}/api/histories/{history_id}/contents/{identifier}/display'
             return f'{self.galaxy_url}/api/datasets/{identifier}/display'
         if not isinstance(advertised, str):
             raise ValueError('Invalid Galaxy dataset download route')
@@ -1284,13 +1292,14 @@ class GalaxyService:
             raise ValueError('Galaxy download route does not identify the requested dataset')
         return urlunsplit((base.scheme, base.netloc, route.path, '', ''))
 
-    def _download_dataset(self, dataset_id: str, destination: Path, *, maximum_bytes: int | None = None) -> None:
+    def _download_dataset(self, dataset_id: str, destination: Path, *, maximum_bytes: int | None = None,
+                          metadata: Mapping[str, Any] | None = None) -> None:
         """Download a durable Galaxy dataset without relying on a live Tool object."""
 
         if maximum_bytes is not None and (type(maximum_bytes) is not int or maximum_bytes < 1):
             raise ValueError('A download byte budget must be a positive integer')
         response = requests.get(
-            self._dataset_download_url(dataset_id),
+            self._dataset_download_url(dataset_id, metadata=metadata),
             headers=self._headers,
             params={"raw": "true"},
             timeout=120,
@@ -1378,10 +1387,11 @@ class GalaxyService:
                 if filename.casefold() in names:
                     raise ValueError('Galaxy output collection has colliding filenames')
                 names.add(filename.casefold())
-                downloads.append((identifier, destination / filename, item.get('file_size')))
+                downloads.append((identifier, destination / filename, item))
             destination.mkdir(parents=True, exist_ok=True)
-            for identifier, target, expected_size in downloads:
-                self._download_dataset(identifier, target)
+            for identifier, target, metadata in downloads:
+                self._download_dataset(identifier, target, metadata=metadata)
+                expected_size = metadata.get('file_size')
                 if type(expected_size) is int and expected_size >= 0 and target.stat().st_size != expected_size:
                     raise ValueError('Galaxy output collection member size changed during transfer')
             return

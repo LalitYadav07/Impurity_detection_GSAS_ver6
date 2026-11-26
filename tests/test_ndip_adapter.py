@@ -646,6 +646,36 @@ def test_full_archive_plot_manifest_renders_in_scientific_results(tmp_path: Path
     assert len(selected[2].layout.images) == 1
 
 
+def test_complete_archive_preserves_every_diagnostic_and_exposes_it_in_viewer(tmp_path):
+    import hashlib
+    from radar_pd_nova.results import _local_file_groups
+
+    run = tmp_path / 'run'
+    diagnostics = run / 'Diagnostics'
+    diagnostics.mkdir(parents=True)
+    for name, contents in [('ranking.json', b'{"candidate": 1}'),
+                           ('native.lst', b'Native solver details\n'),
+                           ('arrays.npz', b'synthetic array bytes')]:
+        (diagnostics / name).write_bytes(contents)
+    (run / 'pipeline_summary.json').write_text('{"final": {"final_rwp": 8.5}}')
+    portal = tmp_path / 'portal'
+    result = collect_outputs(run, portal, mode='full', run_name='diagnostics-contract')
+    records = result['artifacts']['diagnostics']
+    assert len(records) >= 3
+    extracted = tmp_path / 'extracted'
+    with zipfile.ZipFile(portal / 'results.zip') as archive:
+        for record in records:
+            payload = archive.read('ndip/' + record['path'])
+            assert payload == (portal / record['path']).read_bytes()
+            assert hashlib.sha256(payload).hexdigest() == record['sha256']
+        archive.extractall(extracted)
+    files = [row for group in _local_file_groups(extracted) for row in group['files']]
+    assert all(any(Path(row['path']).read_bytes() == (portal / record['path']).read_bytes()
+                   for row in files) for record in records)
+    report = (extracted / 'ndip/report.html').read_text()
+    assert 'Diagnostics and logs' in report
+
+
 def test_normalized_outputs_fall_back_to_pattern_rank_when_gsas_is_skipped(tmp_path: Path) -> None:
     run = tmp_path / "run"
     rapid = run / "rapid_results"
