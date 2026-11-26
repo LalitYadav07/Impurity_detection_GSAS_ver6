@@ -90,13 +90,92 @@ def test_real_history_save_and_fresh_controller_recovery(tmp_path):
     assert 'Galaxy' in s.plan_save_message
 
 
-def test_other_history_cannot_restore_even_an_accessible_copied_bundle(tmp_path):
+@pytest.mark.parametrize('copied',[False,True])
+def test_history_copy_opens_as_portable_data_without_foreign_native_authority(tmp_path,monkeypatch,copied):
+    service=History(tmp_path);service.output_root=tmp_path/'one'
+    instance,s=planner(tmp_path/'one',service);root=result(instance)
+    s.plan_mass=3.25;s.plan_can_promote_parent=True;s.plan_promoted_parent=True
+    original=instance._planning_request()
+    instance._planning_native_artifacts={str(path):dict(sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        handle={'source_history':'history'},relative='result/'+path.name)
+        for path in (root/'curves.npz',root/'forward.gpx')}
+    document,files=instance._planning_build_bundle()
+    document['backend']['_planning_prepared']={'gpx':{'$path':'results/output/forward.gpx'}}
+    document['backend']['_planning_prepared_kind']='magnetic'
+    raw=bundle.archive(document,files)
+    identifier=service._put(raw,'RADAR-PD Planner bundle Test '+hashlib.sha256(raw).hexdigest()+' | plan.zip')
+    selected='history:'+identifier
+    if copied:service.history_id='other-history'
+    service.output_root=tmp_path/'other'
+    fresh,t=planner(tmp_path/'other',service);fresh.refresh_planning_plans()
+    assert selected in {row['value'] for row in t.plan_saved_options}
+    verified=[];verified_results=[]
+    def verify_artifacts(values,_):verified.append(values);return values
+    def verify_result(*args):verified_results.append(args);return original,root
+    fresh._planning_runtime_cache=SimpleNamespace(verify_artifacts=verify_artifacts,verify_result=verify_result)
+    before=copy.deepcopy((service.data,service.requests,service.jobs,service.submissions))
+    monkeypatch.setattr(pickle,'load',lambda *a,**k:pytest.fail('Never unpickle saved native data'))
+    monkeypatch.setattr(pickle,'loads',lambda *a,**k:pytest.fail('Never unpickle saved native data'))
+    t.plan_saved_id=selected;fresh.restore_planning_plan()
+    assert not t.plan_error and t.plan_mass==3.25 and t.plan_current and t.plan_result_ready
+    assert t.plan_figure['data'] and fresh._planning_output!=root
+    assert len(verified)==len(verified_results)==(0 if copied else 1)
+    assert before==(service.data,service.requests,service.jobs,service.submissions)
+    assert not list(fresh._planning_root().glob('download-*.zip'))
+    if copied:
+        assert 'portable import' in t.plan_save_message and 'provenance unverified' in t.plan_qualification
+        assert not fresh._planning_native_artifacts and fresh._planning_prepared is None
+        assert fresh._planning_prepared_kind is None and not t.plan_can_promote_parent and not t.plan_promoted_parent
+        with pytest.raises(ValueError,match='Uploaded GPX'):
+            fresh._planning_native_input(fresh._planning_output/'forward.gpx')
+    else:
+        assert 'portable import' not in t.plan_save_message
+        assert fresh._planning_native_input(fresh._planning_output/'forward.gpx').is_file()
+        assert fresh._planning_prepared_kind=='magnetic' and t.plan_can_promote_parent and t.plan_promoted_parent
+
+
+@pytest.mark.parametrize('metadata_history', ['foreign-history',None])
+def test_portable_history_open_requires_explicit_current_dataset_membership(tmp_path,monkeypatch,metadata_history):
     service=History(tmp_path);service.output_root=tmp_path/'one'
     instance,s=planner(tmp_path/'one',service);instance.save_planning_plan();selected=s.plan_saved_id
     service.history_id='other-history';service.output_root=tmp_path/'other'
     fresh,t=planner(tmp_path/'other',service);fresh.refresh_planning_plans()
+    monkeypatch.setattr(service,'_dataset_metadata',lambda key:dict(id=key,state='ok',history_id=metadata_history))
     t.plan_saved_id=selected;fresh.restore_planning_plan()
     assert 'another History' in t.plan_error and not t.plan_current
+    assert not list(fresh._planning_root().glob('restored/*'))
+    assert not list(fresh._planning_root().glob('download-*.zip'))
+
+
+@pytest.mark.parametrize('copied',[False,True])
+def test_planner_job_recovery_retains_history_and_checksum_binding(tmp_path,copied):
+    service=History(tmp_path);service.output_root=tmp_path/'one'
+    instance,s=planner(tmp_path/'one',service);s.plan_mass=3.25;instance.save_planning_plan()
+    identifier=s.plan_saved_id.removeprefix('history:')
+    if copied:service.history_id='other-history'
+    service.output_root=tmp_path/'other'
+    fresh,t=planner(tmp_path/'other',service);recovered=[]
+    initial_mass=t.plan_mass
+    handle={'request':{'operation':'planning-discover'}}
+    fresh._planning_recoverable={'saved-job':{'document':dict(bundle_id=identifier,
+        bundle_sha256=hashlib.sha256(service.data[identifier]).hexdigest(),handle=handle)}}
+    fresh._planning_runtime_cache=SimpleNamespace(artifacts={},
+        recover=lambda *args:recovered.append(args) or {})
+    t.plan_recover_job_id='saved-job'
+    async def check():
+        tasks=[]
+        fresh._refinement_schedule=lambda coroutine,name:tasks.append(asyncio.create_task(coroutine,name=name))
+        fresh.recover_planning_job();await tasks[-1]
+    asyncio.run(check())
+    assert len(recovered)==(0 if copied else 1) and not service.submissions
+    if copied:
+        assert 'another History' in t.plan_error and t.plan_mass==initial_mass
+        assert not list(fresh._planning_root().glob('restored/*'))
+    else:
+        assert not t.plan_error and t.plan_mass==3.25 and recovered[0][0]==handle
+        assert 'No new calculation was submitted' in t.plan_message
+    with pytest.raises(ValueError,match='bundle changed'):
+        fresh._planning_read_history(identifier,expected='0'*64,allow_portable=True)
 
 
 def test_history_selector_distinguishes_named_plans_with_same_archive_filename(tmp_path,monkeypatch):
@@ -196,11 +275,13 @@ def test_export_delivers_real_nova_download_on_owner_loop_with_exact_bundle_byte
     asyncio.run(check())
 
 
-def test_history_restore_publishes_values_and_callbacks_on_owner_loop_before_clearing_guard(tmp_path,monkeypatch):
+@pytest.mark.parametrize('copied',[False,True])
+def test_history_restore_publishes_values_and_callbacks_on_owner_loop_before_clearing_guard(tmp_path,monkeypatch,copied):
     service=History(tmp_path);service.output_root=tmp_path/'original'
     original,source=planner(tmp_path/'original',service);result(original)
     source.plan_name='Restored silicon';source.plan_mass=3.25
     original.save_planning_plan();selected=source.plan_saved_id
+    if copied:service.history_id='other-history'
     async def check():
         owner=threading.get_ident();service.output_root=tmp_path/'fresh'
         instance,s,tasks,frames,commits,_=connected_planner(tmp_path/'fresh',service)
@@ -217,6 +298,7 @@ def test_history_restore_publishes_values_and_callbacks_on_owner_loop_before_cle
         assert not s.plan_error and s.plan_mass==3.25 and s.plan_name=='Restored silicon'
         assert s.plan_current and s.plan_result_ready and s.plan_figure['data']
         assert s.plan_save_message.startswith('Opened Restored silicon.')
+        assert ('portable import' in s.plan_save_message)==copied
         assert callbacks and all(thread==owner and guarded for thread,guarded in callbacks)
         assert downloads and all(thread!=owner for thread in downloads)
         published={key:value for _,topic,data in frames if 'trame.state.topic' in topic for key,value in data.items()}

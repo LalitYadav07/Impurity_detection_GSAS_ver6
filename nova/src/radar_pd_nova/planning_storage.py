@@ -288,7 +288,8 @@ class PlanningStorageMixin:
         self._planning_storage_action(self._planning_refresh_history,'Reading saved plans from Galaxy History…',
             completed=completed,failed=failed)
 
-    def _planning_read_history(self, identifier, *, expected=None):
+    def _planning_read_history(self, identifier, *, expected=None, allow_portable=False):
+        """Read a current History dataset; recovery keeps its original History binding."""
         service=self._planning_history_service()
         if not service or not re.fullmatch('[A-Za-z0-9_-]{1,128}',identifier):raise ValueError('Select a saved plan in the current Galaxy History')
         metadata=service._dataset_metadata(identifier)
@@ -300,7 +301,9 @@ class PlanningStorageMixin:
             raw=path.read_bytes()
             if expected and hashlib.sha256(raw).hexdigest()!=expected:raise ValueError('The saved Galaxy bundle changed')
             document,files=bundle.read_archive(raw)
-            if document['history_id']!=service.history_id:raise ValueError('The saved plan belongs to another History')
+            if (document['history_id']!=service.history_id
+                    and not (allow_portable and metadata.get('history_id')==service.history_id)):
+                raise ValueError('The saved plan belongs to another History')
             return document,files
         finally:path.unlink(missing_ok=True)
 
@@ -312,7 +315,10 @@ class PlanningStorageMixin:
                 if uid.startswith('history:'):
                     identifier=uid.removeprefix('history:')
                     if identifier not in getattr(self,'_planning_history_ids',set()):raise ValueError('Select a saved plan from the current History list')
-                    document,files=self._planning_read_history(identifier);trusted=True
+                    document,files=self._planning_read_history(identifier,allow_portable=True)
+                    # Galaxy copies preserve the archive's source History. Open
+                    # those as portable data, never as authority for native jobs.
+                    trusted=document['history_id']==self._planning_history_service().history_id
                 else:
                     if not re.fullmatch('[0-9a-f]{32}',uid):raise ValueError('Select a saved plan from this workspace.')
                     root=self._planning_root()/'saved'/uid
@@ -320,10 +326,14 @@ class PlanningStorageMixin:
                         raise ValueError('The saved plan is outside this workspace')
                     document,files=bundle.read_directory(root)
                 self._planning_apply_bundle(document,files,trusted=trusted)
+                return uid.startswith('history:') and not trusted
             except Exception:
                 self._planning_on_owner(self._planning_edited)
                 raise
-        self._planning_storage_action(restore,'Opening and validating the saved plan…')
+        def completed(portable):
+            if portable:
+                self.server.state.plan_save_message+=' Opened a copied plan as a portable import; prepare transitions again before simulation.'
+        self._planning_storage_action(restore,'Opening and validating the saved plan…',completed=completed)
 
     def _planning_apply_bundle(self, document, files, *, trusted=False):
         from .planning_controller import FIELDS
