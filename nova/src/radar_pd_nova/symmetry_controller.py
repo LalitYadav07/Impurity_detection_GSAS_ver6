@@ -630,12 +630,18 @@ class SymmetryMixin(KSearchMixin):
                     detail=f"{usage['wall_seconds']:.2f} s native wall time"
                     if isinstance(usage.get('cpu_seconds'),(int,float)):detail+=f" · {usage['cpu_seconds']:.2f} s CPU"
                     if isinstance(usage.get('peak_rss_bytes'),(int,float)):
-                        scope='shared worker peak RAM' if usage.get('peak_rss_scope')=='shared_group_worker' else 'peak RAM'
+                        scope=('shared worker peak RAM' if usage.get('peak_rss_scope')=='shared_group_worker' else
+                               'parent process peak RAM' if str(usage.get('peak_rss_scope','')).startswith('parent worker') else 'peak RAM')
                         detail+=f" · {usage['peak_rss_bytes']/1024**2:.0f} MiB {scope}"
                     s.sx_details.append(dict(label='Measured resources',value=detail+' · excludes Galaxy queue and transfer'))
                 structural=row.get('structural_fit') if row.get('kind')=='structural' else None
                 timing=structural_timing_summary(structural.get('workflow_timings') if isinstance(structural,dict) else None)
                 if timing:s.sx_details.append(dict(label='Structural service stages',value=timing))
+                parallel=structural.get('parallel_execution') if isinstance(structural,dict) else None
+                if isinstance(parallel,dict) and isinstance(parallel.get('peak_active_workers'),int):
+                    s.sx_details.append(dict(label='Native execution',value=
+                        f"{parallel['peak_active_workers']} starting guesses ran concurrently · "
+                        f"{parallel.get('workers',1)} available workers"))
                 preparation=structural_preparation_summary(structural)
                 if preparation:s.sx_details.append(dict(label='Prepared starting curves',value=preparation))
                 if row.get('sites'):s.sx_details.append(dict(label='Magnetic sites',value='; '.join(site['label']+'='+site['form_factor']+' (g='+str(site['lande_g'])+')' for site in row['sites'])))
