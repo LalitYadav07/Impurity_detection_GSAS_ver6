@@ -664,13 +664,47 @@ def test_ranking_caption_reports_native_curve_contents(ranking_kind,with_curves)
     kinds=[ranking_kind]+(['structural'] if with_curves else [])
     app._preparation_workspace=SimpleNamespace(registry=SimpleNamespace(
         selected_key=lambda:'selected',summaries=lambda:[dict(id='selected',available=True,
-            name='Retained finite library',kinds=kinds,prepared=7,total=7)]))
+            name='Retained finite library',kinds=kinds,prepared=7,total=7)],
+        get=lambda _:SimpleNamespace(document={'entries':[dict(model={'kind':ranking_kind},state='prepared')]})))
     caption=app._prepared_selection_caption()
     assert 'complete stored candidate scope' in caption
     if with_curves:
         assert 'also contains native starting-curve entries' in caption
         assert 'no prepared native starting curves' not in caption
     else:assert 'no prepared native starting curves' in caption
+
+
+@pytest.mark.parametrize('states,ready',[(['pending'],0),(['failed'],0),(['prepared','pending'],1)])
+def test_unfinished_structural_library_is_not_presented_as_a_trained_model(states,ready):
+    application=PreparationMixin()
+    entries=[dict(model={'kind':'structural-training'},state=state) for state in states]
+    registry=SimpleNamespace(selected_key=lambda:'selected',
+        summaries=lambda:[dict(id='selected',available=True,name='Running preparation',
+            kinds=['structural','structural-training'],prepared=ready,total=len(states)+6)],
+        get=lambda _:SimpleNamespace(document={'entries':entries}))
+    application._preparation_workspace=SimpleNamespace(registry=registry)
+    caption=application._prepared_selection_caption()
+    assert f'{ready} / {len(states)} ranking models ready' in caption
+    assert 'Trained structural model:' not in caption
+    assert 'Experiment preparation' in caption
+
+
+def test_progress_refresh_updates_model_and_live_readiness_without_reselection(monkeypatch):
+    application=PreparationMixin();entries=[dict(model={'kind':'structural-training'},state='pending')]
+    row=dict(id='selected',available=True,name='Running preparation',
+        kinds=['structural','structural-training'],prepared=0,total=7)
+    registry=SimpleNamespace(selected_key=lambda:'selected',summaries=lambda:[row],
+        get=lambda _:SimpleNamespace(document={'entries':entries}))
+    application._preparation_workspace=SimpleNamespace(registry=registry)
+    application.server=SimpleNamespace(state=State(prep_library='selected',sx_preparation_notice='',webmon_preparation_notice=''))
+    monkeypatch.setattr(application,'_preparation_table_changed',lambda:None)
+    application._prep_refresh()
+    assert '0 / 1 ranking models ready' in application.server.state.sx_preparation_notice
+    assert application.server.state.sx_preparation_notice==application.server.state.webmon_preparation_notice
+    entries[0]['state']='prepared';row['prepared']=1
+    application._prep_refresh()
+    assert application.server.state.sx_preparation_notice.startswith('Trained structural model:')
+    assert application.server.state.sx_preparation_notice==application.server.state.webmon_preparation_notice
 
 
 @pytest.mark.parametrize('original',['highest-symmetry-per-irrep','all'])

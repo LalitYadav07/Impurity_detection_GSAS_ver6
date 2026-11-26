@@ -160,6 +160,10 @@ class PreparationMixin:
             selected=store.registry.selected_key()
             if selected in {row['id'] for row in rows}:s.prep_library=selected
         if s.prep_library:self._preparation_table_changed()
+        if hasattr(s,'sx_preparation_notice') or hasattr(s,'webmon_preparation_notice'):
+            caption=self._prepared_selection_caption()
+            if hasattr(s,'sx_preparation_notice'):s.sx_preparation_notice=caption
+            if hasattr(s,'webmon_preparation_notice'):s.webmon_preparation_notice=caption
 
     def _preparation_inputs_changed(self,**_):
         self._prep_input_revision+=1
@@ -622,6 +626,14 @@ class PreparationMixin:
             row=next(row for row in registry.summaries() if row['id']==selected)
             if not row['available']:raise ValueError('Selected preparation needs review')
             if {'structural-training','structural-ranking-model'}&set(row['kinds']):
+                ranking=[entry for entry in registry.get(selected).document['entries']
+                    if entry['model']['kind'] in {'structural-training','structural-ranking-model'}]
+                ready=sum(entry['state']=='prepared' for entry in ranking)
+                if ready<len(ranking):
+                    failed=sum(entry['state'] in {'failed','cancelled','unsupported'} for entry in ranking)
+                    return (f"Structural preparation: {row['name']} · {ready} / {len(ranking)} ranking models ready. "
+                        +('Some models need attention. ' if failed else 'Training is not complete for every bank. ')
+                        +'Open Experiment preparation to review progress. Only a completed model can support its bank’s discovery.')
                 draft=getattr(self,'_symmetry_draft',None) or {}
                 marker=draft.get('catalog',{}).get('provenance',{}).get('prepared_library')
                 if (marker and marker['library_id']==row['library_id']
