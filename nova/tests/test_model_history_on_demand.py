@@ -191,3 +191,49 @@ def test_interface_exposes_explicit_recovery_alongside_new_search():
     html = RadarPdNovaApp().layout.html
     assert 'Load saved campaigns' in html
     assert 'this recovers prior work without submitting new refinements' in html
+
+
+def admission_app(kind='structural'):
+    state=State(rf_experiment='IPTS-1',sx_kind=kind,sx_parent='Parent',sx_histogram='bank-1',
+        sx_k='0,0,0',sx_start_source='source',sx_opd_policy='all',sx_construct_limit=100,
+        sx_parent_reference='reference',sx_discovered=True,sx_candidates=['candidate'],
+        sx_candidate_options=[{'value':'candidate'}],sx_modes=['mode'],sx_mode_options=[{'value':'mode'}],
+        sx_preparation_notice='Native context checks passed',sx_approved=True,sx_plan_ready=True)
+    app=controller.SymmetryMixin();app.server=SimpleNamespace(state=state)
+    app._symmetry_draft={'root':'/tmp/old-inspection','discovery_identity':app._discovery_identity()}
+    app._prepared_selection_caption=lambda: ('Native context checks passed' if app._symmetry_draft and
+        app._symmetry_draft.get('discovery_identity')==app._discovery_identity() else 'Current input needs compatibility checks')
+    app._model_active_campaigns={'existing':object()}
+    return app,state
+
+
+@pytest.mark.parametrize('kind',['magnetic','structural'])
+def test_changing_histogram_retires_discovery_for_the_previous_bank(kind):
+    app,state=admission_app(kind);active=app._model_active_campaigns.copy()
+    state.sx_histogram='bank-2';app._symmetry_unapprove()
+    assert not state.sx_discovered and not state.sx_candidates and not state.sx_candidate_options
+    assert not state.sx_modes and not state.sx_mode_options
+    assert state.sx_preparation_notice=='Current input needs compatibility checks'
+    assert app._model_active_campaigns==active
+
+
+@pytest.mark.parametrize('field,value',[('sx_start_source','another'),('sx_parent','another'),
+    ('sx_parent_reference','another'),('sx_k','0,0,1/2')])
+def test_changed_prepared_input_refreshes_the_old_admission_caption(field,value):
+    app,state=admission_app();setattr(state,field,value);app._symmetry_unapprove()
+    assert state.sx_preparation_notice=='Current input needs compatibility checks'
+
+
+def test_new_search_removes_admission_caption_even_for_the_same_source():
+    app,state=admission_app();app._clear_symmetry_setup_details=lambda:None
+    app._symmetry_scan_choices=lambda:None
+    app._symmetry_start_changed()
+    assert app._symmetry_draft is None
+    assert state.sx_preparation_notice=='Current input needs compatibility checks'
+
+
+def test_unapproving_only_fit_options_keeps_valid_discovery_caption():
+    app,state=admission_app();app._symmetry_unapprove()
+    assert state.sx_discovered and state.sx_candidates==['candidate']
+    assert state.sx_preparation_notice=='Native context checks passed'
+    assert not state.sx_approved and not state.sx_plan_ready

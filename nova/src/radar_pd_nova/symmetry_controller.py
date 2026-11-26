@@ -160,6 +160,11 @@ class SymmetryMixin(KSearchMixin):
         if d and d.get('discovery_identity') and d['discovery_identity']!=self._discovery_identity():
             s=self.server.state;s.sx_discovered=False;s.sx_candidates=[];s.sx_candidate_options=[];s.sx_modes=[];s.sx_mode_options=[]
             s.sx_discovery_scope='';s.sx_discovery_rows=[]
+        self._refresh_symmetry_preparation_notice()
+
+    def _refresh_symmetry_preparation_notice(self):
+        caption=getattr(self,'_prepared_selection_caption',None)
+        if callable(caption):self.server.state.sx_preparation_notice=caption()
 
     def _symmetry_parent_changed(self,**_):
         d=self._symmetry_draft;s=self.server.state
@@ -177,6 +182,7 @@ class SymmetryMixin(KSearchMixin):
         s.sx_discovery_scope='';s.sx_discovery_rows=[]
         s.sx_sites=[];s.sx_form_factors='';s.sx_lande=''
         self._symmetry_scan_choices()
+        self._refresh_symmetry_preparation_notice()
 
     def _symmetry_scan_choices(self,choices=None):
         s=self.server.state;w=getattr(self,'_refinement_store',lambda:None)()
@@ -991,7 +997,8 @@ class SymmetryMixin(KSearchMixin):
 
     def _discovery_identity(self):
         s=self.server.state
-        identity=(getattr(s,'rf_experiment',''),s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source)
+        identity=(getattr(s,'rf_experiment',''),s.sx_kind,s.sx_parent,s.sx_k,s.sx_start_source,
+                  getattr(s,'sx_histogram',''))
         workspace=getattr(self,'_preparation_workspace',None)
         selected=workspace.registry.selected_key() if workspace is not None else ''
         return identity+(s.sx_opd_policy,int(s.sx_construct_limit),getattr(s,'sx_parent_reference',''),'prepared_nonlinear',selected) if s.sx_kind=='structural' else identity

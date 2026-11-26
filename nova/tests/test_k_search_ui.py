@@ -68,7 +68,7 @@ def test_selected_k_reuses_catalog_but_requires_a_new_refinement_plan(tmp_path):
     assert not s.sx_approved and not s.sx_plan_ready and app._symmetry_approved==''
     assert 'protocol' not in app._symmetry_draft
     assert app._symmetry_draft['catalog']==result['catalogs']['0,0,1/2']
-    assert app._symmetry_draft['discovery_identity']==('IPTS-1','magnetic','parent','0, 0, 1/2','original')
+    assert app._symmetry_draft['discovery_identity']==('IPTS-1','magnetic','parent','0, 0, 1/2','original','bank')
     assert 'sampled only a subset' in s.sx_discovery_scope
 
 
