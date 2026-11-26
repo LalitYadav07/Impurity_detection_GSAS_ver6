@@ -112,7 +112,7 @@ TASKS = [
          ],
          expected="You can identify which scan and model produced the fit, where discrepancies remain, and whether a verified refinement is available.",
          details=[("The fit appears while files are still loading",
-                   "You can inspect a verified fit before all saved files have arrived. The loading message distinguishes this preview from the complete result. Downloads and native-project actions from this view become available after their files are verified. If the remaining files fail to load, keep the visible qualification notices and reopen the result to retry; do not launch the analysis again."),
+                   "You can inspect the published fit before all saved files have arrived. The loading message distinguishes this preview from the complete result. Downloads and native-project actions from this view become available after their files are verified. If the remaining files fail to load, keep the visible qualification notices and reopen the result to retry; do not launch the analysis again."),
                   ("Reading Rwp and phase fractions",
                    "A smaller Rwp is useful only for a comparable data domain and weighting. It does not establish a unique structure. Fractions describe the fitted crystalline model; missing phases, amorphous material, texture or calibration errors can affect interpretation. A completed job can still need scientific review.")]),
     dict(id="trends", group="Read the results", title="Plot phases, lattice changes and error bars",
