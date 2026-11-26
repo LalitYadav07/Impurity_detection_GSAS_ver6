@@ -961,7 +961,10 @@ class GalaxyChunkTransport:
                     if row['state']=='finished':
                         source=received/'trials'/uid;target=self.campaign.root/'trials'/uid
                         for p in source.rglob('*'):
-                            if p.is_file() and p.name!='result.json':
+                            # Only the trial's publication receipt is deferred.
+                            # Nested native-start receipts are verified artifacts
+                            # and must be present before that receipt is visible.
+                            if p.is_file() and p != source/'result.json':
                                 relative=str(p.relative_to(source));destination=confined(target,relative,exists=False)
                                 destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(p,destination)
                         commits.append((source,target,json.loads((source/'result.json').read_text()).get('status')))

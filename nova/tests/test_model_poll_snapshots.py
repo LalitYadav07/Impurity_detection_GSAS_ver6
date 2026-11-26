@@ -139,6 +139,42 @@ def test_partial_result_download_can_retry_without_an_extra_metadata_read(tmp_pa
     assert len(downloads)==2 and service.calls==['chunk-0','chunk-0']
 
 
+@pytest.mark.parametrize('recovered',[False,True])
+def test_nested_native_receipts_arrive_before_trial_publication(tmp_path,monkeypatch,recovered):
+    t,service,handles=transport(tmp_path)
+    service.states['chunk-0']=RunStatus.OK
+    directory=reply(tmp_path,t,'chunk-0')
+    nested={}
+    for handle in handles:
+        uid=handle['key'];nested[uid]={}
+        for index in range(4):
+            relative=Path('results/structural/fit/parallel-starts')/f'start-{index:02d}'/'result.json'
+            content=json.dumps(dict(start=index,verified=True)).encode()
+            path=directory/'trials'/uid/relative
+            path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+            nested[uid][relative]=content
+    t.runtime.result=lambda *args:directory
+    if recovered:
+        t.save();original_job=t._job
+        t=GalaxyChunkTransport(t.runtime,t.campaign)
+        t._job=original_job;t.checkpoint=lambda **kwargs:None
+    publications=[];original_replace=Path.replace
+    def replace(path,target):
+        target=Path(target)
+        for uid,files in nested.items():
+            root=t.campaign.root/'trials'/uid
+            if target==root/'result.json':
+                assert not target.exists()
+                for relative,content in files.items():
+                    assert (root/relative).read_bytes()==content
+                publications.append(uid)
+        return original_replace(path,target)
+    monkeypatch.setattr(Path,'replace',replace)
+    with t.collection_pass():
+        assert all(t.poll(handle,tmp_path)['state']=='finished' for handle in handles)
+    assert sorted(publications)==sorted(nested)
+
+
 def test_cached_metadata_does_not_bypass_archive_identity_or_member_dispositions(tmp_path):
     t,service,handles=transport(tmp_path);service.states['chunk-0']=RunStatus.OK
     directory=reply(tmp_path,t,'chunk-0',pending=[handles[1]['key']]);t.runtime.result=lambda *a:directory
