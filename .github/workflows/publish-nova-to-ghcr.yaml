@@ -205,6 +205,41 @@ jobs:
             /scientific-test-support/test_effects.py \
             /scientific-test-support/test_stage_recovery.py'
 
+      - name: Verify packaged fit previews and result ownership
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/nova-result-checks"
+          docker run --rm --cpus=2 --memory=4g --entrypoint sh \
+            -v "$PWD/nova/tests:/validation-tests:ro" \
+            -v "$PWD/tests/gpx_recipe:/scientific-test-support:ro" \
+            -v "$PWD/schemas/ndip/radar-pd-config-v1.schema.json:/validation-config-schema.json:ro" \
+            -v "${RUNNER_TEMP}/nova-result-checks:/receipts" \
+            -e RADAR_CONFIG_SCHEMA_PATH=/validation-config-schema.json \
+            -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
+            "${IMAGE_NAME}:nova-${NOVA_VERSION}" -c '
+          set -eu
+          python -m pip install --quiet pytest==8.4.2
+          cd /tmp
+          for test_file in \
+            test_result_preview.py \
+            test_fit_first_opening.py \
+            test_result_preview_native_authority.py \
+            test_result_transactions.py \
+            test_history_result_opening.py \
+            test_result_opening.py; do
+            PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
+              -o cache_dir=/tmp/pytest-cache --junitxml="/receipts/${test_file%.py}.xml" \
+              "/validation-tests/$test_file"
+          done'
+
+      - name: Retain packaged fit preview test receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-result-checks
+          path: ${{ runner.temp }}/nova-result-checks/*.xml
+          if-no-files-found: ignore
+
       - name: Verify candidate-library diagnostics and source ownership
         shell: bash
         run: |

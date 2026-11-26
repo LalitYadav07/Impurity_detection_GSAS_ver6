@@ -31,6 +31,7 @@ def test_reselected_run_shares_inflight_publication():
 
     def collect(row):
         row.output_dir = "/tmp/mock-result-" + row.uid
+        row.result_status = ResultStatus.READY
         return row
 
     def publish(row, **_):
@@ -431,6 +432,7 @@ def test_clear_then_recover_same_source_does_not_revive_previous_transaction():
             entered.set()
             assert release.wait(5)
         row.output_dir = "/tmp/read-" + str(len(calls))
+        row.result_status = ResultStatus.READY
         return row
 
     def publish(row, **_):
@@ -464,6 +466,7 @@ def test_clear_then_recover_same_source_does_not_revive_previous_transaction():
 @pytest.mark.parametrize("first_fails", [False, True])
 def test_publication_copies_share_acknowledged_export_and_allow_failed_retry(first_fails):
     app, (a, _), _ = _app()
+    a.result_status = ResultStatus.READY
     a.output_dataset_ids["results_archive"] = "archive-A"
     a.inputs = InputSelection(data_path="pattern", use_builtin_cuka=True,
                               instrument="PG3", ipts="IPTS-1", publish_directory="shared",

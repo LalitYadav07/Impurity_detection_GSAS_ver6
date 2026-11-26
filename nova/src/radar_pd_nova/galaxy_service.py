@@ -469,6 +469,7 @@ class GalaxyService:
         self._active_submission_tokens: set[str] = set()
         self._lock = threading.RLock()
         self._result_download_slots = threading.BoundedSemaphore(4)
+        self._result_prefetch_context = threading.local()
         self._checkpoint_uploads = None
         self._library_review_lock = threading.RLock()
         self._library_review_cache: dict[str,dict[str,Any]] = {}
@@ -1335,7 +1336,8 @@ class GalaxyService:
                 else:
                     self._download_dataset(identifier, destination)
         outcomes: dict[str, Exception | None] = {}
-        with ThreadPoolExecutor(max_workers=min(4, len(items)), thread_name_prefix="radar-results") as pool:
+        limit = getattr(self._result_prefetch_context, "limit", 4)
+        with ThreadPoolExecutor(max_workers=min(limit, len(items)), thread_name_prefix="radar-results") as pool:
             futures = {pool.submit(download, *item): name for name, item in items.items()}
             for future in as_completed(futures):
                 try:
@@ -2912,6 +2914,15 @@ class GalaxyService:
             return self.collect_results(record)
         self._ensure_plot_observation(record, root)
         return record
+
+    def collect_results_for_display(self, record: RunRecord, *, force: bool = False) -> RunRecord:
+        """Leave transfer capacity for a foreground fit while enriching its cache."""
+        previous = getattr(self._result_prefetch_context, "limit", 4)
+        self._result_prefetch_context.limit = 2
+        try:
+            return self.collect_results(record, force=force)
+        finally:
+            self._result_prefetch_context.limit = previous
 
     def collect_results(self, record: RunRecord, *, force: bool = False) -> RunRecord:
         """Collect the canonical archive without changing scientific job state on failure."""

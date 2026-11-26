@@ -284,7 +284,8 @@ def _attach_plot_observation_mask(path: Path, payload: dict[str, Any]) -> dict[s
         return payload
     result = dict(payload)
     result["_observation_validity"] = {"status": "unavailable"}
-    root = next((p for p in list(path.resolve().parents)[:6] if (p / ".radar-pd-cache.json").is_file()), None)
+    root = next((p for p in list(path.resolve().parents)[:6]
+                 if (p / ".radar-pd-cache.json").is_file() or (p / ".radar-pd-preview.json").is_file()), None)
     if root is None:
         return result
     try:
@@ -292,6 +293,10 @@ def _attach_plot_observation_mask(path: Path, payload: dict[str, Any]) -> dict[s
 
         binding = read_json(root / "plot_observation_binding.json")
         cache = read_json(root / ".radar-pd-cache.json")
+        if not cache:
+            cache = read_json(root / ".radar-pd-preview.json")
+            if cache.get("schema") != "radar-pd-result-preview/v1":
+                return result
         if (binding.get("schema") != "radar-pd-plot-observation-binding/v1"
                 or binding.get("status") != "verified"
                 or not binding.get("job_id") or binding["job_id"] != cache.get("job_id")):

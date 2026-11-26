@@ -346,6 +346,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         self._powgen_sample_indexes: dict[str, PowgenSampleIndex] = {}
         self._opening_run_uid: str | None = None
         self._result_context = object()
+        self._result_preview_sources: dict[str, tuple] = {}
         self._result_publications: dict[tuple, tuple[threading.Lock, dict[str, Any]]] = {}
         self._plot_widget: Any | None = None
         self._primary_plot_widget: Any | None = None
@@ -580,6 +581,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.monitor_stages = []
         state.summary_cards = []
         state.result_owner_uid = ""
+        state.result_preview = False
+        state.result_actions_pending = False
+        state.result_readiness_message = ""
         state.result_metrics = []
         state.result_review_status = ""
         state.result_warnings = []
@@ -1278,6 +1282,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.webmon_connection = "Not connected"
         state.webmon_message = "Start or restore a saved Live watch, then refresh to select a stored or current WebMON scan."
         self._result_publications = {}
+        self._result_preview_sources = {}
         self._opening_run_uid = None
         getattr(self, "_history_result_requests", {}).clear()
         getattr(self, "_history_result_request_options", {}).clear()
@@ -3052,6 +3057,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 with html.Div(v_show="workspace_view === 'monitor'", classes="radar-workspace-view"):
                     self._run_monitor_view()
                 vuetify.VAlert(
+                    v_if="['results', 'plots', 'files'].includes(workspace_view) && !!result_readiness_message && !selected_run_loading",
+                    text=("result_readiness_message",), type="info", variant="tonal", classes="mb-3",
+                )
+                vuetify.VAlert(
                     v_if="['results', 'plots', 'files'].includes(workspace_view) && result_owner_uid !== selected_run_uid",
                     text="Results for this run are not loaded yet. Follow its status in Run Monitor; results from other runs remain hidden.",
                     type="info", variant="tonal", classes="mb-3",
@@ -3504,7 +3513,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     variant="outlined",
                     size="small",
                     loading=("gsasii_session_status === 'starting'",),
-                    disabled=("!selected_checkpoint || gsasii_session_status === 'starting'",),
+                    disabled=("result_actions_pending || !selected_checkpoint || gsasii_session_status === 'starting'",),
                     v_if="checkpoint_rows.length > 0 && gsasii_session_status !== 'ready'",
                 )
                 with html.A(
@@ -3522,6 +3531,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     prepend_icon="mdi-open-in-new",
                     variant="outlined",
                     size="small",
+                    disabled=("result_actions_pending",),
                     v_if="result_explorer_available",
                 )
                 vuetify.VBtn("Back to monitor", click="workspace_view = 'monitor'", prepend_icon="mdi-arrow-left", variant="text", size="small")
@@ -3658,7 +3668,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                             html.Span("{{ row.status }} / {{ row.time }}")
                     vuetify.VSelect(label="GSAS-II checkpoint", v_model=("selected_checkpoint",), items=("checkpoint_rows",), item_title="name", item_value="id", density="compact", variant="outlined", no_data_text="No published GPX checkpoint is available")
                     with html.Div(classes="radar-button-row"):
-                        vuetify.VBtn("Download selected checkpoint", click=self.download_checkpoint, disabled=("!checkpoint_rows.some(item => item.id === selected_checkpoint && item.local_available)",), prepend_icon="mdi-download", color="#15543c", variant="outlined")
+                        vuetify.VBtn("Download selected checkpoint", click=self.download_checkpoint, disabled=("result_actions_pending || !checkpoint_rows.some(item => item.id === selected_checkpoint && item.local_available)",), prepend_icon="mdi-download", color="#15543c", variant="outlined")
 
             with html.Section(v_show="viewed_run_mode === 'full'", classes="radar-full-results"):
                 html.H3("Full refinement progression")
@@ -3713,7 +3723,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             vuetify.VBtn(
                 "Open GPX in GSAS-II",
                 click=self.open_selected_checkpoint_in_gsasii,
-                disabled=("!selected_checkpoint || gsasii_session_status === 'starting'",),
+                disabled=("result_actions_pending || !selected_checkpoint || gsasii_session_status === 'starting'",),
                 loading=("gsasii_session_status === 'starting'",),
                 prepend_icon="mdi-tune-vertical",
                 variant="outlined",
@@ -3746,7 +3756,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             classes="radar-section-help mb-3",
         )
         html.P(
-            "No GPX checkpoint was published for this run. The GSAS-II action appears only when the analysis produced a usable checkpoint.",
+            "{{ result_preview ? 'Saved projects are still loading; downloads and handoffs from this view will be available when loading finishes.' : 'No GPX checkpoint was published for this run. The GSAS-II action appears only when the analysis produced a usable checkpoint.' }}",
             v_if="!checkpoint_rows.length",
             classes="radar-section-help mb-3",
         )
@@ -3803,8 +3813,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         with html.Div(classes="radar-file-copy"):
                             html.Strong("{{ file.name }}")
                             html.Span("{{ file.filename }} / {{ file.size }}")
-                        vuetify.VBtn(icon="mdi-download", title="Download", size="small", variant="text", color="#15543c", click=(self.download_artifact, "[file.path]"))
-        html.Div("No downloadable files are available for this run.", v_if="!file_groups.length", classes="radar-empty-compact")
+                        vuetify.VBtn(icon="mdi-download", title="Download", size="small", variant="text", color="#15543c", disabled=("result_actions_pending",), click=(self.download_artifact, "[file.path]"))
+        html.Div("{{ result_preview ? 'Complete files are still loading.' : 'No downloadable files are available for this run.' }}", v_if="!file_groups.length", classes="radar-empty-compact")
         html.Div(
             "No published files match these filters.",
             v_if=f"file_groups.length && !file_groups.some(group => group.files.some(item => {visible_file_filter}))",
@@ -5317,6 +5327,15 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         identity = self._result_source_identity(record)
         def owns_selection():
             return self._result_open_current(owner, expected, service, identity, controller, run_id, context=context)
+        preview_shown = False
+        def preview_ready(preview):
+            nonlocal preview_shown
+            if owns_selection() and state.workspace_view == 'experiment':
+                preview_shown = self._display_result_preview(expected, preview, service, identity, context)
+                if preview_shown:
+                    state.active_page = 'results'
+                    state.workspace_view = 'results'
+                    state.flush()
         try:
             if record.status != RunStatus.OK or not record.output_dataset_ids:
                 record = await asyncio.to_thread(service.refresh, record.model_copy(deep=True))
@@ -5338,7 +5357,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.workspace_view = 'experiment'
             state.selected_result_load_message = f'Opening {record.name}: downloading fit plots and saved projects…'
             state.flush()
-            async with self._shared_result_read(record, record.model_copy(deep=True), service, context=context) as loaded:
+            async with self._shared_result_read(record, record.model_copy(deep=True), service,
+                                                context=context, preview_ready=preview_ready) as loaded:
                 if loaded is not None:
                     identity = self._completed_result_identity(expected, loaded, service, identity, context)
                 if loaded is None or not owns_selection():
@@ -5349,19 +5369,27 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 self.records[loaded.uid] = expected = loaded
                 identity = self._result_source_identity(loaded)
                 self._sync_runs()
-                if state.workspace_view != 'experiment':
+                if state.workspace_view != 'experiment' and not (
+                        preview_shown and state.workspace_view in {'results', 'plots', 'files'}):
                     return
                 self._select_record(loaded)
+                if preview_shown and loaded.result_status != ResultStatus.READY:
+                    self._result_preview_enrichment_failed(loaded.message)
+                    return
                 self._load_results(loaded)
                 state.active_page = 'results'
-                state.workspace_view = 'results'
+                if not preview_shown:
+                    state.workspace_view = 'results'
                 state.flush()
                 scroll = getattr(self, '_scroll_workspace_top', None)
                 if callable(scroll):
                     scroll()
         except Exception as exc:
-            if owns_selection() and state.workspace_view == 'experiment':
-                state.selected_result_load_error = f'Could not open {record.name}: {exc}'
+            if owns_selection():
+                if preview_shown and state.result_preview:
+                    self._result_preview_enrichment_failed(str(exc))
+                elif state.workspace_view == 'experiment':
+                    state.selected_result_load_error = f'Could not open {record.name}: {exc}'
         finally:
             self._finish_result_open(owner, record.uid)
 
@@ -7053,6 +7081,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                                       context: object | None = None,
                                       source_identity: tuple | None = None) -> RunRecord:
         """Serialize exports across copied records and retain acknowledged job IDs."""
+        if record.result_status != ResultStatus.READY and not record.publication_job_id:
+            return record
         service = self.service if service is None else service
         inputs = record.inputs
         if (
@@ -8083,6 +8113,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             return None
         result = self._copy_result_cache(self.records[original.uid], loaded)
         self.records[result.uid] = result
+        if result.result_status == ResultStatus.READY:
+            getattr(self, "_result_preview_sources", {}).pop(result.uid, None)
+        elif result.result_status in {ResultStatus.STALE, ResultStatus.ERROR, ResultStatus.COLLECTING}:
+            self._remember_incomplete_result(result, service, context, self._result_source_identity(result))
         controller = self._powgen_controller
         if controller is not None:
             for run_id, watched in tuple(controller.records.items()):
@@ -8111,9 +8145,58 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             self._result_open_owner = None
             state.flush()
 
+    def _display_result_preview(self, record: RunRecord, preview: Any, service: Any,
+                                identity: tuple, context: object) -> bool:
+        """Render an immutable partial view without publishing a canonical cache."""
+        published = dict(preview.output_dataset_ids)
+        source = (record.history_id, record.galaxy_job_id, published)
+        if (not self._result_sources_compatible(identity, source)
+                or not self._result_source_current(record, service, source, context=context)):
+            return False
+        private = record.model_copy(deep=True, update={
+            "output_dir": str(preview.root), "output_dataset_ids": published,
+            "cache_manifest": None, "result_status": ResultStatus.COLLECTING})
+        self._remember_incomplete_result(record, service, context, source)
+        self._load_results(private, local_only=True, preview=True)
+        self.server.state.selected_result_load_message = self.server.state.result_readiness_message
+        self.server.state.flush()
+        return True
+
+    def _remember_incomplete_result(self, record: RunRecord, service: Any, context: object, source: tuple) -> None:
+        pending = getattr(self, "_result_preview_sources", None)
+        if pending is None:
+            pending = self._result_preview_sources = {}
+        pending[record.uid] = (service, context, source)
+
+    def _result_preview_pending(self, uid: str) -> bool:
+        pending = getattr(self, "_result_preview_sources", {}).get(uid)
+        record = self.records.get(uid)
+        if record is not None and record.result_status in {ResultStatus.STALE, ResultStatus.ERROR, ResultStatus.COLLECTING}:
+            return True
+        # An HDA replacement invalidates the pending view; it cannot grant
+        # native authority. Only a current, verified canonical read clears it.
+        return bool(pending is not None and record is not None
+                    and pending[0] is self.service and pending[1] is self._result_context)
+
+    def _result_actions_ready(self, uid: str | None = None) -> bool:
+        """Partial display files never authorize native handoff or exports."""
+        state = self.server.state
+        if self._result_preview_pending(uid or state.selected_run_uid):
+            state.error_message = "Complete result files are not ready for downloads or handoffs from this view."
+            state.flush()
+            return False
+        return True
+
+    def _result_preview_enrichment_failed(self, message: str) -> None:
+        state = self.server.state
+        state.result_readiness_message = "Fit preview available; complete result loading is incomplete. Reopen results to retry."
+        state.selected_result_load_error = str(message)
+        state.flush()
+
     @asynccontextmanager
     async def _shared_result_read(self, original: RunRecord, captured: RunRecord,
-                                  service: Any, *, context: object, force: bool = False):
+                                  service: Any, *, context: object, force: bool = False,
+                                  preview_ready: Any = None):
         """Share a private archive/publication transaction across every waiter."""
         identity = self._result_source_identity(captured)
         read_entry = None
@@ -8145,10 +8228,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         private = self.records[original.uid].model_copy(deep=True)
                         if prior is not None:
                             private = self._copy_result_cache(private, prior)
+                        collect_results = service.collect_results
+                        if not force and not private.output_dir:
+                            collect_results = getattr(service, "collect_results_for_display", collect_results)
                         if force:
-                            private = await asyncio.to_thread(service.collect_results, private, force=True)
+                            private = await asyncio.to_thread(collect_results, private, force=True)
                         elif not private.output_dir:
-                            private = await asyncio.to_thread(service.collect_results, private)
+                            private = await asyncio.to_thread(collect_results, private)
                         else:
                             repair = getattr(service, "repair_result_cache", None)
                             if callable(repair):
@@ -8159,9 +8245,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         return None
                     if not self._result_sources_compatible(source, self._result_source_identity(private)):
                         return None
-                    private = await asyncio.to_thread(
-                        self._publish_results_if_requested, private, service=service,
-                        context=context, source_identity=source)
+                    if private.result_status == ResultStatus.READY:
+                        private = await asyncio.to_thread(
+                            self._publish_results_if_requested, private, service=service,
+                            context=context, source_identity=source)
                     entry[4]["identities"].append(self._result_source_identity(private))
                     return private
                 entry = downloads[original.uid] = (
@@ -8170,6 +8257,36 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 entry[2].add_done_callback(lambda done: self._prune_history_result_download(original.uid, entry))
             read_entry = entry
             entry[4]["waiters"] += 1
+            if preview_ready is not None and not force and not captured.output_dir:
+                if self._result_source_current(original, service, identity, context=context):
+                    self._remember_incomplete_result(original, service, context, identity)
+                preview = entry[4].get("preview")
+                if preview is None:
+                    async def read_preview():
+                        from .result_preview import collect_result_preview
+                        if not self._result_source_current(original, service, identity, context=context):
+                            return None
+                        return await asyncio.to_thread(collect_result_preview, service, captured.model_copy(deep=True))
+                    preview = entry[4]["preview"] = asyncio.create_task(read_preview())
+                    # Preview failure falls back to the canonical collector;
+                    # it is never a failure of the scientific job.
+                    preview.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+                done, _ = await asyncio.wait((entry[2], preview), return_when=asyncio.FIRST_COMPLETED)
+                full_succeeded = (entry[2] in done and not entry[2].cancelled()
+                                  and entry[2].exception() is None and entry[2].result() is not None
+                                  and entry[2].result().result_status == ResultStatus.READY)
+                if not full_succeeded:
+                    try:
+                        prepared = await asyncio.shield(preview)
+                    except Exception:
+                        prepared = None
+                    if prepared is not None:
+                        try:
+                            preview_ready(prepared)
+                        except Exception:
+                            # A partial renderer must not abandon the already
+                            # running canonical result transaction.
+                            pass
             record = await asyncio.shield(entry[2])
             yield record
         finally:
@@ -8185,6 +8302,11 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         identity = self._result_source_identity(captured)
         def owns_selection():
             return self._result_open_current(owner, expected, service, identity, context=context)
+        preview_shown = False
+        def preview_ready(preview):
+            nonlocal preview_shown
+            if owns_selection() and state.workspace_view in {'results', 'plots', 'files'}:
+                preview_shown = self._display_result_preview(expected, preview, service, identity, context)
         try:
             if refresh:
                 record = await asyncio.to_thread(service.refresh, captured)
@@ -8207,7 +8329,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         state.workspace_view = "monitor"
                     return
                 captured = record.model_copy(deep=True)
-            async with self._shared_result_read(expected, captured, service, context=context, force=force) as record:
+            async with self._shared_result_read(expected, captured, service, context=context,
+                                                force=force, preview_ready=preview_ready) as record:
                 if record is not None:
                     identity = self._completed_result_identity(expected, record, service, identity, context)
                 if record is None or not owns_selection():
@@ -8222,13 +8345,18 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 if state.workspace_view not in {"results", "plots", "files"}:
                     return
                 self._select_record(record)
+                if preview_shown and record.result_status != ResultStatus.READY:
+                    self._result_preview_enrichment_failed(record.message)
+                    return
                 self._load_results(record)
                 state.active_page = "results"
                 state.notice = (record.message if record.result_status == ResultStatus.STALE else
                                 f"Reloaded the canonical result archive for {record.name}." if force else
                                 f"Showing results for {record.name}.")
         except Exception as exc:
-            if owns_selection() and state.workspace_view == "results":
+            if owns_selection() and preview_shown and state.result_preview:
+                self._result_preview_enrichment_failed(str(exc))
+            elif owns_selection() and state.workspace_view == "results":
                 message = f"Could not load results for {original.name}: {exc}"
                 state.active_page = "runs"
                 state.workspace_view = "monitor"
@@ -8250,7 +8378,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 and binding[1] is getattr(self, "_result_context", None)
                 and binding[2:] == self._result_display_state(record))
 
-    def _load_results(self, record: RunRecord, *, local_only: bool = False) -> None:
+    def _load_results(self, record: RunRecord, *, local_only: bool = False, preview: bool = False) -> None:
         state = self.server.state
         selected_uid = str(getattr(state, "selected_run_uid", "") or "")
         if selected_uid and selected_uid != record.uid:
@@ -8260,7 +8388,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         # declared collections are repaired by the shared background read.
         reader = getattr(self.service, "cached_result_payload", None)
         payload = (reader if callable(reader) else GalaxyService.cached_result_payload)(record)
-        if not local_only:
+        if not local_only and not preview:
             self._refinement_maybe_refresh()
         result_document = payload.get("summary") or {}
         self._activate_post_analysis_scope(
@@ -8287,8 +8415,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.plot_options = view["plots"]
         state.primary_plot_path = view["primary_plot_path"]
         state.file_groups = view["file_groups"]
-        state.checkpoint_rows = self._launchable_checkpoint_rows(record, view["checkpoints"])
-        state.gpx_rows = view["checkpoints"]
+        state.checkpoint_rows = [] if preview else self._launchable_checkpoint_rows(record, view["checkpoints"])
+        state.gpx_rows = [] if preview else view["checkpoints"]
         state.rapid_coarse_rows = view["rapid_stages"]["coarse_search"]
         state.rapid_nudge_rows = view["rapid_stages"]["lattice_nudge"]
         state.rapid_pattern_rows = view["rapid_stages"]["pattern_scoring"]
@@ -8308,6 +8436,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             for group in view["file_groups"]
             for item in group["files"]
         ]
+        if preview:
+            state.file_groups = []
+            state.artifact_options = []
+            state.table_options = []
         counts: dict[str, int] = {}
         for item in state.plot_options:
             counts[item["category"]] = counts.get(item["category"], 0) + 1
@@ -8343,6 +8475,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             )
         self._sync_workspace_options(view["mode"])
         state.result_owner_uid = record.uid
+        state.result_preview = preview
+        state.result_actions_pending = preview or self._result_preview_pending(record.uid) or record.result_status in {
+            ResultStatus.STALE, ResultStatus.ERROR, ResultStatus.COLLECTING}
+        state.result_readiness_message = (
+            "Fit ready; loading the complete archive and saved projects. Downloads and handoffs from this view will be available when loading finishes."
+            if preview else "Complete result loading is incomplete. Reopen results to retry downloads and handoffs from this view."
+            if state.result_actions_pending else "")
         self._sync_selected_run_badge()
         self._result_display_binding = (self.service, getattr(self, "_result_context", None),
                                         *self._result_display_state(record))
@@ -8354,6 +8493,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         checkpoints: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Expose a GSAS-II action only when a real GPX source is reachable."""
+
+        if (self._result_preview_pending(record.uid)
+                or record.result_status in {ResultStatus.STALE, ResultStatus.ERROR, ResultStatus.COLLECTING}):
+            return []
 
         rows = list(checkpoints or [])
         if not rows:
@@ -8383,6 +8526,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state = self.server.state
         self._result_display_binding = None
         state.result_owner_uid = ""
+        state.result_preview = False
+        state.result_actions_pending = False
+        state.result_readiness_message = ""
         state.summary_cards = []
         state.result_metrics = []
         state.result_review_status = ""
@@ -8477,6 +8623,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         self._primary_plot_changed(path)
 
     def download_artifact(self, path: str | None = None, **_: Any) -> None:
+        if not self._result_actions_ready():
+            return
         path = Path(str(path or self.server.state.selected_artifact or ""))
         if not path.is_file():
             self.server.state.error_message = "The selected artifact is no longer available in this NOVA session."
@@ -8497,6 +8645,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         self.download_file(path.name, mime, path.read_bytes())
 
     def download_checkpoint(self, **_: Any) -> None:
+        if not self._result_actions_ready():
+            return
         selected = str(self.server.state.selected_checkpoint or "")
         checkpoint = next(
             (
@@ -9046,6 +9196,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
 
     def launch_result_explorer(self, **_: Any) -> None:
         record = self.records.get(self.server.state.selected_run_uid)
+        if not self._result_actions_ready(record.uid if record else None):
+            return
         archive_id = record.output_dataset_ids.get("results_archive") if record else None
         if record is None or not archive_id:
             self.server.state.error_message = "This run does not expose a Complete Results Archive dataset."
@@ -9069,6 +9221,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         selected: str,
         checkpoint_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
+        if not self._result_actions_ready(record.uid):
+            return None
         checkpoint = next(
             (
                 item
@@ -9152,6 +9306,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
     def open_selected_checkpoint_in_gsasii(self, **_: Any) -> None:
         state = self.server.state
         record = self.records.get(state.selected_run_uid)
+        if not self._result_actions_ready(record.uid if record else None):
+            return
         selected = str(state.selected_checkpoint or "")
         checkpoint_rows = list(state.checkpoint_rows or [])
         if record is None or not selected:
@@ -9218,6 +9374,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
 
     def handoff_selected_checkpoint(self, **_: Any) -> None:
         record = self.records.get(self.server.state.selected_run_uid)
+        if not self._result_actions_ready(record.uid if record else None):
+            return
         selected = str(self.server.state.selected_checkpoint or "")
         if record is None or not selected:
             return
