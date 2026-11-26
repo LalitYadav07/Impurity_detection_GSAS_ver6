@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from radar_pd_nova.refinement_controller import RefinementMixin
+from radar_pd_nova.refinement_controller import RefinementMixin, refinement_activity_label
 from radar_pd_nova.checkpoint_uploads import CheckpointUploadPending
 from radar_pd_nova.refinement_sources import RefinementScope
 from test_refinement_integration import create, source, approved
@@ -66,6 +66,42 @@ def test_completion_is_in_next_claim_checkpoint_with_only_one_final_backup(tmp_p
     assert len(posts) == 3 and len(set(posts)) == 3
     assert len(snapshots) == 7  # three claims, three acknowledgments, one final completion
     assert all(j['status'] == 'completed' for j in snapshots[-1]['jobs'].values())
+
+
+@pytest.mark.parametrize('hold_at,phase,label', [
+    (1, 'saving_dispatch', 'Saving dispatch checkpoint'),
+    (2, 'saving_acknowledgement', 'Saving submitted job recovery state'),
+])
+def test_checkpoint_wait_is_not_misreported_as_native_queue_time(tmp_path, hold_at, phase, label):
+    from concurrent.futures import ThreadPoolExecutor
+    w, rt, snapshots, posts = queued(tmp_path, count=1)
+    save = rt.save_workspace
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def hold(document):
+        calls.append(document)
+        if len(calls) == hold_at:
+            entered.set()
+            assert release.wait(3)
+        return save(document)
+
+    rt.save_workspace = hold
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(w.run_next)
+        try:
+            assert entered.wait(3)
+            with w.lock:
+                job = deepcopy(next(iter(w.state['jobs'].values())))
+            assert job['status'] == 'running' and job['transport_phase'] == phase
+            assert refinement_activity_label(job, 'galaxy') == label
+            assert 'checkpoint' in job['message'].lower()
+            assert len(posts) == hold_at - 1
+        finally:
+            release.set()
+        result = future.result(timeout=3)
+    assert result['status'] == 'completed' and not result.get('transport_phase')
+    assert len(posts) == 1  # No duplicate submission to bypass the checkpoint wait.
 
 
 @pytest.mark.parametrize('stop', ['pause', 'cancel', 'view_error'])

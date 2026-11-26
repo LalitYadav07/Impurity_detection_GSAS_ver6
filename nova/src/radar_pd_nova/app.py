@@ -11,6 +11,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import asdict, replace
 from copy import deepcopy
@@ -1096,18 +1097,27 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         return ""
 
     async def _stop_session_enrollment(self) -> None:
-        def report(message):
+        component = None
+        component_started = time.monotonic()
+
+        def report(message, next_component=None):
+            nonlocal component, component_started
+            now = time.monotonic()
+            if component is not None:
+                self._session_timing('checkpoint_component_saved', component=component,
+                                     elapsed_seconds=round(now - component_started, 3))
+            component, component_started = next_component, now
             self.server.state.session_save_message = message
             self.server.state.flush()
 
-        report("Saving experiment-preparation recovery state.")
+        report("Saving experiment-preparation recovery state.", 'experiment_preparation')
         shutdown=getattr(self,'_preparation_shutdown',None)
         if callable(shutdown):await shutdown()
-        report("Saving live-acquisition recovery state.")
+        report("Saving live-acquisition recovery state.", 'live_acquisition')
         await self.webmon_shutdown()
-        report("Saving model-comparison results and pending work.")
+        report("Saving model-comparison results and pending work.", 'model_comparison')
         await self._pause_model_campaigns()
-        report("Saving the scan-monitor recovery state.")
+        report("Saving the scan-monitor recovery state.", 'scan_monitor')
         monitor_task = self._powgen_monitor_task
         was_draining_monitor = monitor_task is not None and not monitor_task.done()
         if self.server.state.powgen_monitoring:
@@ -1127,7 +1137,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             self._powgen_checkpoint_error = None
         workspace = getattr(self, "_refinement_workspace", None)
         if workspace is not None:
-            report("Saving refinement recipes and their completed results.")
+            report("Saving refinement recipes and their completed results.", 'refinement')
             pending_experiments = {
                 recipe["experiment"] for recipe in workspace.state["recipes"].values()
                 if recipe.get("armed")
@@ -1145,6 +1155,15 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             if checkpoint_task is not None and not checkpoint_task.done():
                 await checkpoint_task
         report("Recovery checkpoints saved.")
+
+    @staticmethod
+    def _session_timing(event: str, **values: Any) -> None:
+        # Emit only fixed stage labels and timings, never checkpoint contents,
+        # dataset paths or credentials. Supervisor's exit timestamps then
+        # separate durable saving/navigation from later Galaxy publication.
+        print('[RADAR-PD SESSION] ' + json.dumps(dict(
+            schema='radar-pd-session-timing/v1',
+            utc=datetime.now(timezone.utc).isoformat(), event=event, **values)), flush=True)
 
     def _acknowledge_session_navigation(self, nonce: str) -> bool:
         event = getattr(self, "_session_navigation_ack", None)
@@ -1171,30 +1190,42 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.session_closing = True
         state.session_exit_ready = False
         state.flush()
+        close_started = time.monotonic()
+        self._session_timing('close_started')
         try:
             await self._stop_session_enrollment()
         except Exception as exc:
+            self._session_timing('checkpoint_save_failed', error_type=type(exc).__name__,
+                                 elapsed_seconds=round(time.monotonic() - close_started, 3))
             state.session_closing = False
             state.end_session_dialog = False
             state.workspace_notice = f"The session is still open because its recovery state could not be saved: {exc}"
             state.workspace_notice_kind = "warning"
             state.flush()
             return
+        self._session_timing('checkpoints_saved', elapsed_seconds=round(time.monotonic() - close_started, 3))
         state.nova_kill_jobs_on_exit = False
         state.session_exit_ready = True
         state.flush()
         nonce = self._session_navigation_nonce = uuid.uuid4().hex
         event = self._session_navigation_ack = asyncio.Event()
+        navigation_started = time.monotonic()
         try:
             self._leave_session_page(nonce)
             # A timer alone cannot prove the queued JS action reached the
             # browser. Its callback acknowledges after dispatching navigation.
             await asyncio.wait_for(event.wait(), timeout=SESSION_NAVIGATION_TIMEOUT)
+            self._session_timing('navigation_acknowledged',
+                                 elapsed_seconds=round(time.monotonic() - navigation_started, 3))
         except asyncio.TimeoutError:
+            self._session_timing('navigation_timeout',
+                                 elapsed_seconds=round(time.monotonic() - navigation_started, 3))
             pass  # The native Return to Galaxy link remains available.
         finally:
             self._session_navigation_nonce = None
             self._session_navigation_ack = None
+            self._session_timing('exit_callback_started',
+                                 elapsed_seconds=round(time.monotonic() - close_started, 3))
             await self.exit_callback()
 
     async def clear_workspace(self, **_: Any) -> None:

@@ -1,6 +1,7 @@
 """Session cleanup must not erase Galaxy work or silently resume old IPTS data."""
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -198,6 +199,44 @@ def test_shutdown_reports_which_recovery_component_is_being_saved():
         'Saving refinement recipes and their completed results.',
     ]
     assert app.server.state.session_save_message == 'Recovery checkpoints saved.'
+
+
+def test_close_timings_separate_checkpoint_components_navigation_and_exit(capsys):
+    app = RadarPdNovaApp()
+    app._refinement_workspace = _Workspace()
+    _navigation(app)
+
+    async def exit_callback():
+        pass
+
+    app.exit_callback = exit_callback
+    asyncio.run(app.end_session())
+    prefix = '[RADAR-PD SESSION] '
+    events = [json.loads(line[len(prefix):]) for line in capsys.readouterr().out.splitlines()
+              if line.startswith(prefix)]
+    assert [row['event'] for row in events] == [
+        'close_started', *['checkpoint_component_saved'] * 5,
+        'checkpoints_saved', 'navigation_acknowledged', 'exit_callback_started',
+    ]
+    assert [row['component'] for row in events if 'component' in row] == [
+        'experiment_preparation', 'live_acquisition', 'model_comparison', 'scan_monitor', 'refinement',
+    ]
+    assert all(row['schema'] == 'radar-pd-session-timing/v1' and row['utc'] for row in events)
+    assert all(row.get('elapsed_seconds', 0) >= 0 for row in events)
+
+
+def test_close_failure_timing_does_not_include_checkpoint_error_contents(capsys):
+    app = RadarPdNovaApp()
+
+    async def failing_save():
+        raise RuntimeError('sensitive checkpoint diagnostic')
+
+    app._stop_session_enrollment = failing_save
+    asyncio.run(app.end_session())
+    output = capsys.readouterr().out
+    assert 'checkpoint_save_failed' in output and 'RuntimeError' in output
+    assert 'sensitive checkpoint diagnostic' not in output
+    assert 'exit_callback_started' not in output
 
 
 def test_recovery_respects_clear_cutoff_until_user_restores_old_runs():

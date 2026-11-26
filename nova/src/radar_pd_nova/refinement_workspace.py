@@ -524,15 +524,24 @@ class RefinementWorkspace:
             if job is None:return None
             self._inflight.add(job['id']);job.update(status='running',attempts=job['attempts']+1,
                 message='Saving the dispatch checkpoint before submission' if self.runtime.kind=='galaxy' else 'Refining the approved stages')
+            if self.runtime.kind=='galaxy':job['transport_phase']='saving_dispatch'
             cancel_event=threading.Event();self._submission_cancels[job['id']]=cancel_event
             recipe=copy.deepcopy(self.state['recipes'][job['recipe_id']]);source=copy.deepcopy(job['source'])
             directory=self.root/'jobs'/job['id']/('attempt-'+str(job['attempts']));job['directory']=str(directory);self.save()
         def submitted(action):
             with self.lock:
                 job['remote_action']=action
-                job['message']='Submitted to Galaxy; waiting for the verified result'
+                if self.runtime.kind=='galaxy':
+                    job['transport_phase']='saving_acknowledgement'
+                    job['message']='Saving the submitted job recovery checkpoint. The scientific job continues independently.'
+                else:job['message']='Submitted to Galaxy; waiting for the verified result'
                 self.save()
-            if self.runtime.kind=='galaxy':self.checkpoint()
+            if self.runtime.kind=='galaxy':
+                self.checkpoint()
+                with self.lock:
+                    job.pop('transport_phase',None)
+                    job['message']='Checking the submitted Galaxy job state'
+                    self.save()
         def progress(action):
             # Polling already occurs in the scientific runtime. Persist the
             # observed phase locally without another History upload/poll.
@@ -540,6 +549,7 @@ class RefinementWorkspace:
                 if not job.get('remote_action') or action.get('galaxy_job_id')!=job['remote_action'].get('galaxy_job_id'):
                     raise ValueError('Refinement progress belongs to a different Galaxy job')
                 job['remote_action']=action
+                job.pop('transport_phase',None)
                 job['message']=galaxy_refinement_activity(action)
                 self.save()
         try:
@@ -547,6 +557,7 @@ class RefinementWorkspace:
             # A restored interrupted claim searches/reuses that dispatch.
             if self.runtime.kind=='galaxy':self.checkpoint()
             with self.lock:
+                job.pop('transport_phase',None)
                 job['message']='Preparing the approved refinement for Galaxy' if self.runtime.kind=='galaxy' else 'Refining the approved stages'
                 self.save()
             result=self.runtime.call('run',source,directory,plan=recipe['plan'],approval=recipe['approval'],

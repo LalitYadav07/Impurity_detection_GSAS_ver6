@@ -52,6 +52,9 @@ def refinement_activity_label(job, runtime_kind):
     status = job['status']
     if runtime_kind == 'galaxy':
         if status == 'running':
+            phase=job.get('transport_phase')
+            if phase=='saving_dispatch':return 'Saving dispatch checkpoint'
+            if phase=='saving_acknowledgement':return 'Saving submitted job recovery state'
             return galaxy_refinement_activity(job['remote_action']) if job.get('remote_action') else 'Preparing submission'
         if status == 'recovering':
             return 'Recovering Galaxy job' if job.get('remote_action') else 'Checking prior submission'
