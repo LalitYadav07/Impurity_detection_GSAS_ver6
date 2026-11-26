@@ -71,6 +71,7 @@ def run(source_gpx,ctx,protocol,candidate,seed):
             origin_gauges=metadata['inventory']['gauge_rank'],covariance_available=False,
             timings=result['timings'],workflow_timings=stages,
             optimization_qualified=False,optimization_progress=progress,
+            parallel_execution=result['result'].get('parallel_execution'),
             portable_preparation=result['portable_preparation'],preparation_attachment=preparation,
             initialization_execution=result['initialization_execution'],
             native_active_set_verified=result['continuation']['native_active_set_verified']),

@@ -145,7 +145,7 @@ class StructuralLiveMixin:
                 reviewed_scope=scope_of(row),forecast_enabled=False))
             s.webmon_structural_ready=True
             s.webmon_structural_summary=(f"{len(p['candidates'])} reviewed models · all physical modes and independent cell coordinates · "
-                f"{p['policy']['structural_starts']} starts per model · {p['policy']['structural_seconds']} s optimization per model. "
+                f"{p['policy']['structural_starts']} starts per model · {p['policy']['structural_seconds']} s total optimization per model. "
                 'The instrument, occupancies and ADPs stay fixed. Every snapshot replaces the likelihood.')
             s.webmon_structural_message='Ready. Fit the current snapshot once or follow new snapshots for this run. Original RADAR-PD results remain in Results.'
         except Exception as exc:

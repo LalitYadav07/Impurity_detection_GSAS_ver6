@@ -81,10 +81,41 @@ def prepare_model(source_gpx, child_cif, transform, origin, output, *, settings=
     source=make_source(output,output/'bank-construction',settings)
     from ..preparation.tof_profile_hints import bind as bind_profiles
     profile_preparation=bind_profiles(source,prepared_profiles)
-    bank,qualification=prepare_starting_bank(source,output/'starting-curves.npz',prepared_banks)
+    from .optimization.parallel_bank import NativeBankProcessMap
+    parallel=NativeBankProcessMap(source,output/'bank-processes')
+    options=dict(batch_renderer=parallel) if parallel.workers>1 else {}
+    bank,qualification=prepare_starting_bank(source,output/'starting-curves.npz',prepared_banks,**options)
     qualification['profile_table']=profile_preparation
     write_json(output/'starting-curve-contract.json',dict(bank,portable_preparation=qualification))
     return metadata
+
+
+def make_fit_context(prepared, work, settings, observation=None):
+    """Construct one process-private native objective with the exact masks."""
+    from .optimization.native_background_context import fit_table
+    if observation is not None and not isinstance(observation,ReducedObservation):
+        raise TypeError('A supplied-variance ReducedObservation is required')
+    if observation is not None and observation.protocol_sha256!=sha(Path(prepared)/'prepared.json'):
+        raise ValueError('Observation does not bind this prepared structural context')
+    source=make_source(prepared,work,settings)
+    arrays=source.fast.slow.hist.data['data'][1]
+    if observation is None:
+        observation=from_arrays(arrays,source.fast.slow.hist.data['Limits'],
+            acquisition=source.fast.meta['source_gpx_sha256'],
+            protocol_sha256=sha(Path(prepared)/'prepared.json'))
+    if observation.protocol_sha256!=sha(Path(prepared)/'prepared.json'):
+        raise ValueError('Observation does not bind this prepared structural context')
+    if not np.array_equal(observation.x,source.fast.x):
+        raise ValueError('Observation grid differs from this prepared native context')
+    native_limits(observation,source.fast.slow.hist.data['Limits'])
+    if np.any(observation.mask&np.ma.getmaskarray(arrays[0])):
+        raise ValueError('Observation enables bins masked in the reviewed native grid')
+    background=source.fast.slow.background0
+    if not np.isfinite(background):raise ValueError('Nonfinite native background coefficient')
+    background_scale=settings.background_scale if settings.background_scale is not None else max(abs(background),1.)
+    table=fit_table(source,background_scale)
+    table.fixed_background=table.renderer.background-background_scale*table.background_response
+    return source,observation,table,background_scale
 
 
 def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_starts=()):
@@ -95,7 +126,6 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     The supplied covariance is diagonal and conditional on fixed instrument,
     occupancy, ADPs, secondary phases and all higher background coefficients.
     """
-    from .optimization.native_background_context import fit_table
     from .optimization.starting_proposals import load_current_bank
     from ..preparation.structural_consume import prepare_starting_bank
     from .optimization.profiled_native_fit import fit
@@ -103,32 +133,10 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     from .optimization.refinable_gpx import export_refinable
     settings = settings or SearchSettings()
     if not isinstance(settings,SearchSettings): raise TypeError('Explicit SearchSettings required')
-    if observation is not None and not isinstance(observation,ReducedObservation):
-        raise TypeError('A supplied-variance ReducedObservation is required')
-    if observation is not None and observation.protocol_sha256!=sha(Path(prepared)/'prepared.json'):
-        raise ValueError('Observation does not bind this prepared structural context')
     output=Path(output);output.mkdir(parents=True,exist_ok=False)
     started=time.monotonic();timings={}
-    source=make_source(prepared,output/'context',settings)
-    arrays=source.fast.slow.hist.data['data'][1]
-    if observation is None:
-        observation=from_arrays(arrays,source.fast.slow.hist.data['Limits'],
-            acquisition=source.meta['source_gpx_sha256'] if hasattr(source,'meta') else source.fast.meta['source_gpx_sha256'],
-            protocol_sha256=sha(Path(prepared)/'prepared.json'))
-    if observation.protocol_sha256!=sha(Path(prepared)/'prepared.json'):
-        raise ValueError('Observation does not bind this prepared structural context')
-    if not np.array_equal(observation.x,source.fast.x):
-        raise ValueError('Observation grid differs from this prepared native context')
-    native_limits(observation,source.fast.slow.hist.data['Limits'])
-    if np.any(observation.mask&np.ma.getmaskarray(arrays[0])):
-        raise ValueError('Observation enables bins masked in the reviewed native grid')
+    source,observation,table,background_scale=make_fit_context(prepared,output/'context',settings,observation)
     background=source.fast.slow.background0
-    if not np.isfinite(background): raise ValueError('Nonfinite native background coefficient')
-    background_scale=settings.background_scale if settings.background_scale is not None else max(abs(background),1.)
-    table=fit_table(source,background_scale)
-    # Center the positive auxiliary coefficient on the saved signed Back;0.
-    # This is an additive correction, not a requirement that Back;0 be positive.
-    table.fixed_background=table.renderer.background-background_scale*table.background_response
     timings['context_seconds']=time.monotonic()-started
     checkpoint=time.monotonic();bank_path=Path(prepared)/'starting-curves.npz'
     bank_reused=bank_path.is_file()
@@ -146,8 +154,9 @@ def fit_snapshot(prepared, output, *, settings=None, observation=None, warm_star
     timings['start_bank_seconds']=time.monotonic()-checkpoint
     checkpoint=time.monotonic()
     evaluator=CapturedCellDerivative(source,max_cells=2)
-    fitted,prediction=fit(source,table,observation,bank,seconds=settings.seconds,
-        starts=settings.starts,warm_pool=list(warm_starts) or None,evaluator=evaluator)
+    from .optimization.parallel_starts import fit_allocated
+    fitted,prediction=fit_allocated(prepared,output/'parallel-starts',settings,
+        source,table,observation,bank,warm_starts=warm_starts,evaluator=evaluator)
     if settings.recovery_seconds:
         from .optimization.automatic_fit_recovery import improve, RecoveryPolicy
         budget=settings.recovery_seconds/3

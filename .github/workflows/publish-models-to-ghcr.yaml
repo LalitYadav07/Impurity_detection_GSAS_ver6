@@ -246,6 +246,17 @@ jobs:
             /validation/tests/gpx_recipe/test_prepared_structural_acceptance_native.py \
             /validation/tests/gpx_recipe/test_structural_block_damping.py &&
           python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/structural.xml\").findall(\".//testcase\"); assert len(cases)>=15 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"Structural native acceptance must run without skips\""'
+      - name: Verify allocated structural CPU parallelism and native exports
+        run: |
+          docker run --rm --cpus=4 --memory=8g --entrypoint sh -v "$PWD:/validation:ro" -e GALAXY_SLOTS=4 -e GALAXY_MEMORY_MB=8192 "$IMAGE" -c '
+          python -m pip install --quiet pytest &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/parallel.xml \
+            /validation/tests/gpx_recipe/test_structural_parallel_starts.py \
+            /validation/tests/gpx_recipe/test_structural_parallel_starts_native.py \
+            /validation/tests/gpx_recipe/test_structural_fit_service_native.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/parallel.xml\").findall(\".//testcase\"); assert len(cases)==6 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"All six structural parallelism and export checks must run without skips\""'
       - name: Require portable preparation and structural acquisition handoffs
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '

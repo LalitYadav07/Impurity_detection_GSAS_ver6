@@ -109,7 +109,7 @@ class _Hybrid:
             native_origin_authority=False,original_native_objective_required=True)
 
 
-def build_if_useful(source,path):
+def build_if_useful(source,path,*,batch_renderer=None):
     """Automatic execution policy, not a user scientific-accuracy option."""
     if getattr(getattr(source,'fast',None),'native',None) is None:
         return None,dict(status='original_native',reason='No supported native context')
@@ -123,7 +123,7 @@ def build_if_useful(source,path):
     if proposals is None:
         return None,dict(status='original_native',reason='Current profile is below the measured proposal-compilation work threshold')
     hybrid=_Hybrid(source,exact,proposals)
-    receipt=banks._construct(source,path,policy='joint_cell_v1',proposal_renderer=hybrid.evaluate)
+    receipt=banks._construct(source,path,policy='joint_cell_v1',proposal_renderer=hybrid.evaluate,batch_renderer=batch_renderer)
     receipt['construction_execution']=hybrid.diagnostics()
     write_json(Path(path).with_suffix('.json'),receipt)
     _remember(source,path)

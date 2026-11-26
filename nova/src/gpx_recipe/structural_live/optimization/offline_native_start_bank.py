@@ -73,15 +73,15 @@ def policy_points(source,policy):
     raise ValueError('Unknown prepared starting-point policy')
 
 
-def build(source,path,policy='multiscale_v1',*,reuse_fixed_cell_profiles=False):
+def build(source,path,policy='multiscale_v1',*,reuse_fixed_cell_profiles=False,batch_renderer=None):
     if type(reuse_fixed_cell_profiles) is not bool:raise TypeError('Fixed-cell reuse must be an explicit boolean')
     if reuse_fixed_cell_profiles:
         from .native_bank_reuse import build_reusing_profiles
-        return build_reusing_profiles(source,path,policy=policy)
-    return _construct(source,path,policy=policy)
+        return build_reusing_profiles(source,path,policy=policy,batch_renderer=batch_renderer)
+    return _construct(source,path,policy=policy,batch_renderer=batch_renderer)
 
 
-def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None):
+def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None,batch_renderer=None):
     """Shared complete portfolio; proposal rendering cannot grant native origin."""
     path=Path(path)
     if path.exists() or path.with_suffix('.json').exists():raise ValueError('Start-bank artifacts are immutable; use a new path')
@@ -91,8 +91,17 @@ def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None):
     for index,point in enumerate(points):
         allowed=bool(np.isfinite(source.chemistry.log_kernel((point*source.radii)[None,:])[0]));feasible.append(allowed)
         if not allowed:continue
-        curves.append(evaluate(point*source.radii));selected.append(index)
-    if not curves:raise ValueError('No chemically feasible native starting curves')
+        selected.append(index)
+        if batch_renderer is None:curves.append(evaluate(point*source.radii))
+    parallel=None
+    if len(selected)==1 and batch_renderer is not None:
+        curves=[evaluate(points[selected[0]]*source.radii)]
+    elif selected and batch_renderer is not None:
+        curves,parallel=batch_renderer(points[selected]*source.radii,native=proposal_renderer is None)
+        curves=np.asarray(curves,float)
+        if curves.shape!=(len(selected),len(source.fast.x)) or not np.isfinite(curves).all():
+            raise ValueError('Parallel starting curves changed the declared grid or portfolio')
+    if not len(curves):raise ValueError('No chemically feasible native starting curves')
     # Proposal scales can be chosen before data exist. Their native finite
     # differences remain proposals, not a surrogate likelihood or covariance.
     from .reference_secants import select_secant_steps
@@ -122,6 +131,7 @@ def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None):
         starting_curves=len(curves),shared_across_candidates=False,
         scope='Optimizer starts and optional proposal step sizes; all allowed continuous parameters remain free; fitted objectives remain original native calculations')
     if normalization is not None:receipt['affine_nuisance']=normalization[0]
+    if parallel is not None:receipt['parallel_execution']=parallel
     path.with_suffix('.json').write_text(json.dumps(receipt,indent=2)+'\n')
     if native:_remember_native(source,path)
     return receipt

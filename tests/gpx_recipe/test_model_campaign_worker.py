@@ -176,6 +176,21 @@ def test_soft_deadline_and_cancel_keep_unstarted_work_pending(model,tmp_path,mon
     assert not result['trials'] and len(result['pending'])==8
 
 
+@pytest.mark.parametrize('count,inner,memory',[(1,4,8192),(2,2,4096),(4,1,2048)])
+def test_nested_model_workers_share_the_container_grant(model,tmp_path,monkeypatch,count,inner,memory):
+    source,p=model;seen=[]
+    monkeypatch.setattr(chunks,'allocation',lambda *a,**k:dict(workers=4,memory_mb=8192,
+        reserve_mb=512,minimum_worker_mb=1024,blas_threads=1))
+    def runner(directory,*,cancel,workers,memory_mb):
+        seen.append((workers,memory_mb));return dict(state='finished',status='test')
+    monkeypatch.setattr(chunks,'run_trial',runner)
+    value=request(p);value['trials']=value['trials'][:count]
+    result=chunks.execute_chunk(value,source,tmp_path/'partitioned',runner=runner)
+    assert seen==[(inner,memory)]*count
+    assert result['allocation']['concurrent_model_workers']*inner==4
+    assert result['allocation']['workers_per_model']==inner
+
+
 def grouped_protocol(source,p,count=2):
     p=copy.deepcopy(p)
     p['policy'].update(moment_model='symmetry_allowed',magnetic_optimizer='profiled_quadratic',

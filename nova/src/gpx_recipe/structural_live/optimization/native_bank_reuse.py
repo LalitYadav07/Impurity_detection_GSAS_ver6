@@ -35,8 +35,8 @@ class NativeBankSource:
             return self.forward.evaluate(point)
         self.direct_calls+=1;return self.source.native(point)
 
-def build_reusing_profiles(source,path,policy='multiscale_v1'):
-    proxy=NativeBankSource(source);receipt=build(proxy,path,policy=policy)
+def build_reusing_profiles(source,path,policy='multiscale_v1',*,batch_renderer=None):
+    proxy=NativeBankSource(source);receipt=build(proxy,path,policy=policy,batch_renderer=batch_renderer)
     receipt['construction_execution']=dict(method='GSAS-II required-pass fixed-cell profile reuse',cached_calls=proxy.cached_calls,direct_calls=proxy.direct_calls,
         native_forward_requests=proxy.native_forward_requests,
         native_forward=proxy.forward.diagnostics() if proxy.forward is not None else None,

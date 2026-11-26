@@ -1022,7 +1022,7 @@ class SymmetryMixin(KSearchMixin):
             if s.sx_kind=='magnetic':free+=('; all fitted d spacings' if settings['magnetic_d_min']==0 else f"; magnetic d ≥ {settings['magnetic_d_min']} Å")
             if settings.get('structural_optimizer')=='prepared_nonlinear':
                 free=(f"Joint structural fit: all physical modes, with only origin gauges removed; {settings['structural_starts']} starting guesses per model; "
-                    f"{settings['structural_seconds']} s optimization plus {settings['structural_recovery_seconds']} s recovery per model. "
+                    f"{settings['structural_seconds']} s total optimization plus {settings['structural_recovery_seconds']} s recovery per model. "
                     f"Each independent displacement coordinate is bounded to ±{settings['structural_mode_radius']} Å RMS; reciprocal-metric coordinates to ±{settings['structural_cell_radius']}. "
                     "Common scale and a bounded additive Back;0 correction vary; higher background coefficients and other phases stay fixed. Verified point estimates require optimization review; no model probabilities or automatic structure assignment")
             s.sx_plan_summary=f"{len(p['candidates'])} embeddings · {sum(1 for _ in iter_trials(p))} finite trials. {optimizer_budget_label(p['policy'])} {free}. Instrument, occupancy and displacement parameters fixed. Adequacy: Rwp ≤ {s.sx_adequate}%."

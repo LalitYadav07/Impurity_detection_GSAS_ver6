@@ -27,7 +27,7 @@ class CellDirectionUnavailable(RuntimeError):
 def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=None,warm_pool=None,
         mode_iterations=1,cell_iterations=1,kicks=False,evaluator=None,force_native_mode_derivatives=False,
         screening_exclusions=None,force_native_cell_directions=False,joint_steps=False,
-        qualification_iterations=None):
+        qualification_iterations=None,selected_starts=None,screening_only=False):
     """Use the same complete native objective for either update schedule.
 
     ``joint_steps`` is an internal qualification control, not a user accuracy
@@ -43,6 +43,9 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
     if type(mode_iterations)is not int or mode_iterations<1 or type(cell_iterations)is not int or cell_iterations<1:
         raise ValueError('Positive block iteration counts required')
     if type(joint_steps)is not bool:raise ValueError('Joint native update selection must be boolean')
+    if type(screening_only)is not bool:raise ValueError('Screening selection must be boolean')
+    if selected_starts is not None and screening_only:
+        raise ValueError('Select starts once before dispatching their independent solves')
     if qualification_iterations is not None and (type(qualification_iterations)is not int
             or not 1<=qualification_iterations<=1000):
         raise ValueError('Qualification iterations must be an integer from one to one thousand')
@@ -231,13 +234,17 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
         z=np.r_[point,0.,0.]
         if allowed(z):score(z);break
     try:
+        if selected_starts is not None:
+            selected=[np.asarray(point,float).copy() for point in selected_starts]
+            if len(selected)!=starts or any(not allowed(point) for point in selected):
+                raise ValueError('Every dispatched native start must match the complete feasible domain')
         retained=[] if warm_pool is None else list(warm_pool)
         if warm is not None:retained.insert(0,warm)
-        for item in retained:
+        for item in retained if selected_starts is None else ():
             point=np.asarray(item,float)
             warm_ranked.append((score(point)[0],point))
         weights=1/np.sqrt(observation.variance[mask])
-        for point,curve in zip(bank.points,bank.curves):
+        for point,curve in zip(bank.points,bank.curves) if selected_starts is None else ():
             check_time();signal=curve-table.renderer.background
             conditional=ConditionalNuisance(observation,signal,fixed,background*response)
             cost,rate,residual,factor=conditional.solve()
@@ -245,10 +252,19 @@ def fit(source,table,observation,bank,*,seconds=120.,starts=4,seed=90231,warm=No
             if not allowed(z):rejected+=1;continue
             if any(np.linalg.norm(z[:d]-previous[:d])<=.2 for previous in exclusions):continue
             prior_ranked.append((cost,z))
-        selected=select_ensemble_starts(warm_ranked,prior_ranked,starts,d,mode_dimensions=m)
+        if selected_starts is None:
+            selected=select_ensemble_starts(warm_ranked,prior_ranked,starts,d,mode_dimensions=m)
         if not selected:raise ValueError('No feasible native starting point')
     except TimeoutError:
         selected=[]
+    if screening_only:
+        if best is None:raise ValueError('Screening requires an independent native incumbent')
+        return dict(best=dict(parameters=best['z'].tolist(),deviance=best['cost']),
+            rwp_percent=observation_rwp_percent(observation,best['rate']),
+            selected_starts=[point.tolist() for point in selected],
+            seconds=time.monotonic()-began,full_native_calls=native_calls,
+            method='native_start_selection',all_allowed_modes_retained=True,
+            model_exclusion_authorized=False),best['rate']
     whole_deadline=deadline
     for index,initial in enumerate(selected):
         remaining=whole_deadline-time.monotonic()

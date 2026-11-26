@@ -12,7 +12,7 @@ from .hints import _copy
 from .structural_hints import MAX_BYTES,MAX_METADATA
 
 
-def prepare_starting_bank(source,destination,choices=()):
+def prepare_starting_bank(source,destination,choices=(),*,batch_renderer=None):
     """Preserve the full joint-cell portfolio and actual observation contract.
 
     A checksum is not native attestation. Cold banks require either a verified
@@ -62,9 +62,9 @@ def prepare_starting_bank(source,destination,choices=()):
             native_origin=authority if authority is not None else 'Same owned process, exact bank/receipt bytes and current physical context')
     else:
         from ..structural_live.optimization.starting_proposals import build_if_useful
-        receipt,execution=build_if_useful(source,destination)
+        receipt,execution=build_if_useful(source,destination,batch_renderer=batch_renderer)
         if receipt is None:
-            receipt=build(source,destination,policy='joint_cell_v1',reuse_fixed_cell_profiles=True)
+            receipt=build(source,destination,policy='joint_cell_v1',reuse_fixed_cell_profiles=True,batch_renderer=batch_renderer)
             qualification=dict(status='native_requalified' if selected is not None else 'rebuilt_current_context' if choices else 'not_selected',
                 curve_bytes_reused=False,native_curves_recomputed=receipt['native_curves'],
                 native_origin='Fresh native curves and proposal-step selection; uploaded values are not used as scientific predictions',

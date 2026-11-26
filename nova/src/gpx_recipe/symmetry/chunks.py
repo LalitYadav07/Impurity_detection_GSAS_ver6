@@ -52,15 +52,21 @@ def validate_request(request):
     return protocol,expected
 
 
-def run_trial(directory, *, cancel):
+def run_trial(directory, *, cancel, workers=1, memory_mb=None):
     directory=Path(directory)
     started=time.monotonic()
     job=json.loads((directory/'job.json').read_text())
     with (directory/'native.log').open('w') as log:
         try:
+            environment=scientific_environment()
+            # The outer chunk owns the allocation. A candidate may use the
+            # remaining slots internally, but sibling candidates must not
+            # each inherit the whole container's CPU grant.
+            environment['GALAXY_SLOTS']=str(workers)
+            if memory_mb is not None:environment['GALAXY_MEMORY_MB']=str(memory_mb)
             process=run_scientific([sys.executable,str(directory/'worker.py')],
                 timeout=job['protocol']['policy']['timeout_seconds'],cancel_event=cancel,
-                cwd=directory,env=scientific_environment(),stdout=log,stderr=subprocess.STDOUT)
+                cwd=directory,env=environment,stdout=log,stderr=subprocess.STDOUT)
         except ScientificCancelled:return dict(state='cancelled')
         except subprocess.TimeoutExpired:
             process=None
@@ -215,10 +221,18 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
         if prepared_scattering is not None:response['prepared_scattering']=prepared_scattering
         write_json(directory/'response.json',response)
         return response
-    with ThreadPoolExecutor(max_workers=budget['workers']) as pool:
+    outer_workers=min(budget['workers'],len(remaining))
+    if budget.get('memory_mb'):
+        outer_workers=min(outer_workers,max(1,budget['memory_mb']//(budget.get('reserve_mb',512)+budget.get('minimum_worker_mb',1024))))
+    inner_workers=max(1,budget['workers']//outer_workers)
+    model_memory=None if budget.get('memory_mb') is None else budget['memory_mb']//outer_workers
+    with ThreadPoolExecutor(max_workers=outer_workers) as pool:
         while remaining or active:
-            while remaining and len(active)<budget['workers'] and clock()<deadline and not cancel.is_set():
-                key=remaining.pop(0);active[pool.submit(runner,directory/'trials'/key,cancel=cancel)]=key
+            while remaining and len(active)<outer_workers and clock()<deadline and not cancel.is_set():
+                key=remaining.pop(0)
+                kwargs=dict(cancel=cancel)
+                if runner is run_trial:kwargs.update(workers=inner_workers,memory_mb=model_memory)
+                active[pool.submit(runner,directory/'trials'/key,**kwargs)]=key
             if not active:break
             ready,_=wait(active,timeout=.1,return_when=FIRST_COMPLETED)
             for future in ready:
@@ -231,7 +245,8 @@ def execute_chunk(request, input_root, directory, *, cancel=None, runner=run_tri
             write_json(directory/'progress.json',dict(completed=len(done),total=len(request['trials']),active=len(active),pending=len(remaining)))
     response=dict(schema='radar-model-chunk-result/v1',dispatch_key=request['dispatch_key'],
         protocol_sha256=digest(protocol),trials=done,pending=remaining,cancelled=cancelled,
-        allocation=budget,wall_seconds=clock()-started,llm_calls=0)
+        allocation=dict(budget,concurrent_model_workers=outer_workers,workers_per_model=inner_workers,
+            memory_mb_per_model=model_memory),wall_seconds=clock()-started,llm_calls=0)
     if protocol.get('policy',{}).get('magnetic_optimizer')=='profiled_quadratic':
         response['profiled_cache']=export(protocol,expected,done,captured,directory)
         response['discarded_cache_candidates']=cache_discarded

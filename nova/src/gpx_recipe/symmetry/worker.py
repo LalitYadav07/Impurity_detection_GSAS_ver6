@@ -53,6 +53,7 @@ def runtime_identity():
 def execute(directory,*,screened=None,isolated=False):
     directory=Path(directory).resolve();started=time.monotonic()
     initial_usage=resource.getrusage(resource.RUSAGE_SELF)
+    initial_children=resource.getrusage(resource.RUSAGE_CHILDREN)
     target=directory/'result.json'
     if target.exists():raise ValueError('A completed trial cannot be silently rerun')
     output=directory/'results';output.mkdir(exist_ok=False)
@@ -119,9 +120,14 @@ def execute(directory,*,screened=None,isolated=False):
         mark('remaining_work_and_final_integrity_seconds')
         response['timings']=timings
         usage=resource.getrusage(resource.RUSAGE_SELF)
+        children=resource.getrusage(resource.RUSAGE_CHILDREN)
+        own_cpu=usage.ru_utime+usage.ru_stime-initial_usage.ru_utime-initial_usage.ru_stime
+        child_cpu=children.ru_utime+children.ru_stime-initial_children.ru_utime-initial_children.ru_stime
         response['resources']=dict(wall_seconds=time.monotonic()-started,
-                                  cpu_seconds=usage.ru_utime+usage.ru_stime-initial_usage.ru_utime-initial_usage.ru_stime,
+                                  cpu_seconds=own_cpu+child_cpu,cpu_self_seconds=own_cpu,cpu_children_seconds=child_cpu,
+                                  cpu_scope='worker and its completed descendant processes',
                                   peak_rss_bytes=int(usage.ru_maxrss*(1024 if sys.platform.startswith('linux') else 1)),
+                                  peak_rss_scope='parent worker; container peak is recorded separately',
                                   process_id=os.getpid())
         if screened is not None:
             response['resources']['peak_rss_scope']='isolated_native_process' if isolated else 'shared_group_worker'
