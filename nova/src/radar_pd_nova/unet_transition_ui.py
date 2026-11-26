@@ -27,12 +27,19 @@ from .unet_transition_engine import (ComparisonSuperseded, FullQTransitionEngine
 
 
 def _display_points(pattern, limit=6000):
-    """Peak-preserving min/max display decimation; inference uses all bins."""
+    """Bounded min/max display; any partially missing bucket stays blank.
+
+    Fully observed buckets retain extrema. A bucket containing missing data
+    contributes only a line break, so unresolved gaps cannot be connected.
+    Native inference and the undecimated data remain unchanged.
+    """
+    if type(limit) is not int or limit < 4:
+        raise ValueError("Display point limit must be an integer of at least four")
     x = pattern.x
     y = np.where(pattern.valid, pattern.intensity, np.nan)
     if len(x) <= limit:
         return x.tolist(), y.tolist()
-    edges = np.linspace(0, len(x), limit // 2 + 1, dtype=int)
+    edges = np.linspace(0, len(x), (limit - 2) // 2 + 1, dtype=int)
     selected = {0, len(x) - 1}
     for left, right in zip(edges[:-1], edges[1:]):
         if right <= left:
@@ -41,7 +48,7 @@ def _display_points(pattern, limit=6000):
         missing = np.flatnonzero(~np.isfinite(values))
         if len(missing):
             selected.add(left + int(missing[0]))
-        if np.isfinite(values).any():
+        else:
             selected.add(left + int(np.nanargmin(values)))
             selected.add(left + int(np.nanargmax(values)))
     index = sorted(selected)
@@ -230,12 +237,13 @@ def _evolution_figure(view_rows, patterns, scans, selected_id, current, earlier,
             hovertemplate=f"{label}<br>x=%{{x:.5g}}<br>Measured intensity=%{{y:.5g}}<extra></extra>"
         ), row=1, col=1)
     fig.add_trace(go.Heatmap(
-        x=centers.tolist(), y=list(range(count)),
+        x=edges.tolist(), y=list(range(count)),
         z=np.where(np.isfinite(color), color, np.nan),
         text=raw_hover,
         zmin=low, zmax=high, colorscale=palette, name="Measured heat map",
-        hoverongaps=False, showscale=True,
-        meta={**identity, "run_ids": [row["run_id"] for row in view_rows]},
+        hoverongaps=False, showscale=True, connectgaps=False, zsmooth=False,
+        meta={**identity, "run_ids": [row["run_id"] for row in view_rows],
+              "display_binning": "maximum of native samples in fully observed cells; partial cells blank"},
         hovertemplate="Sorted row %{y}<br>x=%{x:.5g}<br>Measured intensity=%{text}<extra></extra>",
         colorbar={"orientation": "v", "x": 1.01,
                   "y": row_heights[1] * (1 - .045) / 2,

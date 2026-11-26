@@ -167,6 +167,15 @@ and [legacy ICONS interpretation](https://github.com/AdvancedPhotonSource/GSAS-I
 Missing profiles leave calibrated axes unavailable instead of using nominal
 export DIFC. Intensity retains its original measurement units.
 
+Heat-map colors show the maximum native intensity within each fully observed
+display cell. A cell that overlaps missing data, an unavailable local baseline,
+or the edge of a cropped scan stays blank, even if part of that cell is valid.
+The exact cell boundaries are retained on irregular grids. For long curves,
+display downsampling keeps extrema from fully observed buckets; any bucket
+containing a missing interval becomes a line break. These conservative display
+rules may hide detail beside a gap. The original native arrays, inference,
+refinement and magnetic screening remain unchanged.
+
 Width changes assume fixed instrumental/sample broadening within the compatible
 bank and setup. Native-grid local profile fits give conditional FWHM/position
 measurements. Default width evidence requires 3% change, an error ratio of 3 and

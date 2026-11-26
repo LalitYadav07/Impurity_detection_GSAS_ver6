@@ -105,14 +105,34 @@ def display_grid(pattern, columns, region=None):
 
 
 def binned_intensity(pattern, boundaries, background=None):
+    """Peak maxima only in fully observed display cells.
+
+    Native sample support ends at adjacent-coordinate midpoints. Any positive
+    overlap with an invalid/nonfinite sample cell, or with the area outside a
+    cropped pattern, blanks the whole display cell. This conservative display
+    policy can hide valid detail beside a gap; it never fills that gap.
+    """
+    boundaries = np.asarray(boundaries, dtype=float)
     output = np.full(len(boundaries) - 1, -np.inf)
     indices = np.searchsorted(boundaries, pattern.x, side="right") - 1
-    valid = pattern.valid & (indices >= 0) & (indices < len(output))
     measured = (
         pattern.intensity if background is None else pattern.intensity - background
     )
-    valid &= np.isfinite(measured)
+    observed = pattern.valid & np.isfinite(measured)
+    valid = observed & (indices >= 0) & (indices < len(output))
     np.maximum.at(output, indices[valid], measured[valid])
+    native_edges = np.r_[pattern.x[0],
+                         (pattern.x[:-1] + pattern.x[1:]) / 2,
+                         np.nextafter(pattern.x[-1], np.inf)]
+    first = np.clip(np.searchsorted(native_edges, boundaries[:-1], side="right") - 1,
+                    0, len(observed) - 1)
+    last = np.clip(np.searchsorted(native_edges, boundaries[1:], side="left") - 1,
+                   0, len(observed) - 1)
+    missing = np.r_[0, np.cumsum(~observed)]
+    complete = ((boundaries[:-1] >= native_edges[0]) &
+                (boundaries[1:] <= native_edges[-1]) &
+                (missing[last + 1] == missing[first]))
+    output[~complete] = np.nan
     output[~np.isfinite(output)] = np.nan
     return output
 
@@ -236,13 +256,15 @@ def heatmap_figure(
     if palette not in {"Turbo","Cividis"}:
         raise ValueError("Unsupported diffraction map palette")
     heat = go.Heatmap(
-            x=x.tolist(),
+            x=edges.tolist(),
             y=run_ids,
             z=clean(z),
             customdata=clean(raw),
             zmin=float(zlow),
             zmax=float(zhigh),
             colorscale=palette,
+            connectgaps=False,
+            zsmooth=False,
             hoverongaps=False,
             colorbar={
                 "title": {"text": "Intensity above local background" if any(b is not None for b in backgrounds) else "Measured intensity", "side": "top"},
@@ -282,7 +304,8 @@ def heatmap_figure(
         uirevision="tracking-map:" + str(patterns[0].scope) + ":view:" + str(view_revision),
         meta={
             "run_ids": run_ids,
-            "display_binning": "maximum of valid native samples per cell",
+            "display_binning": "maximum of native samples in fully observed cells; partial cells blank",
+            "display_missing_policy": "any invalid native sample-cell overlap blanks the display cell",
             "limits_locked_to": limits["source"],
             "scale": scale,
             "palette":palette,

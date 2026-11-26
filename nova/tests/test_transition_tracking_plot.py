@@ -4,6 +4,7 @@ from radar_pd_nova.transition_tracking_plot import (
     locked_limits,
     transform,
     boundary_figure,
+    display_grid,
 )
 from test_pattern_transition import observed
 
@@ -53,8 +54,8 @@ def test_missing_local_baseline_does_not_poison_color_limits_or_neighboring_peak
     assert all(np.isfinite(limits[k]) for k in ("low", "high", "soft"))
     boundaries = np.array([p.x[99], p.x[106], p.x[110]])
     binned = binned_intensity(p, boundaries, background=baseline)
-    expected = p.intensity[99:106] - baseline[99:106]
-    assert binned[0] == np.max(expected[np.isfinite(expected)])
+    assert np.isnan(binned[0])  # Mixed observed/unavailable background stays blank.
+    assert binned[1] == np.max(p.intensity[106:110] - baseline[106:110])
     trace = ribbon_trace(p, baseline, limits, "asinh", 50, "test")
     assert trace["y"][100:105] == [None] * 5
     assert trace["customdata"][100:105] == [None] * 5
@@ -84,7 +85,9 @@ def test_zoom_uses_native_samples_for_narrow_regions_instead_of_full_range_bins(
     native=(a.x>=3950)&(a.x<=4050)
     assert len([x for x in full.data[0].x if 3950<=x<=4050])<native.sum()
     assert native.sum()+2<len(zoom.data[0].x)<=1025
-    pairs=[(x,y) for x,y in zip(zoom.data[0].x,zoom.data[0].customdata[0]) if 3950<=x<=4050]
+    centers,edges=display_grid(a,512,region=[3950,4050])
+    np.testing.assert_array_equal(zoom.data[0].x,edges)
+    pairs=[(x,y) for x,y in zip(centers,zoom.data[0].customdata[0]) if 3950<=x<=4050]
     np.testing.assert_allclose([x for x,y in pairs],a.x[native])
     np.testing.assert_allclose([y for x,y in pairs],a.intensity[native])
     assert not stats["reference_range_exceeded"]
