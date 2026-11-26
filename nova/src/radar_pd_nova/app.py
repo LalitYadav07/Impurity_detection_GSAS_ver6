@@ -1949,11 +1949,12 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     v_show="powgen_processing_scope === 'selected'",
                     label=("live_beamline === 'HB2A' ? 'Experiment-scoped sample labels' : 'Sample IDs and names'",), v_model=("powgen_processing_sample_ids",),
                     items=("powgen_discovered_sample_options",), item_title="title", item_value="value",
+                    item_props="props",
                     multiple=True, chips=True, closable_chips=True, clearable=True,
                     density="compact", variant="outlined",
                     disabled=("powgen_monitoring || powgen_sample_loading",),
                     no_data_text="No sample IDs found. Refresh sample IDs after entering the IPTS.",
-                    hint=("live_beamline === 'HB2A' ? 'Labels are scoped to their SPICE experiment. Review titles when names are reused for different specimens.' : 'Only source-verified matching samples are processed. Multiple samples require explicit model assignments below.'",),
+                    hint=("live_beamline === 'HB2A' ? 'Labels are scoped to their SPICE experiment. Review titles when names are reused for different specimens.' : 'Reused names show recorded run-title examples in the menu; these labels do not confirm chemistry. Only source-verified matching IDs are processed. Multiple samples need model assignments below.'",),
                     persistent_hint=True,
                 )
                 vuetify.VSelect(

@@ -12,6 +12,7 @@ from .powgen_metadata import powgen_nexus_path, read_powgen_sample_identity
 from .powgen_watch import WatchedRun
 from .facility_metadata import ExperimentMetadataIndex, title_role, metadata_actions
 from .sample_catalog import catalog_created_at, load_sample_catalog, TTL_SECONDS
+from .sample_labels import with_recorded_run_context
 
 MAX_CATALOG_NAME_REPRESENTATIVES = 128
 
@@ -218,7 +219,7 @@ class PowgenSampleIndex:
         for sample_id, group in sorted(grouped.items(), key=lambda item: item[0].casefold()):
             names = " / ".join(sorted(group["names"])) or "Name not reported"
             options.append({"value": sample_id, "title": f"{sample_id} — {names} ({group['count']} scans)",
-                            "scan_count": group["count"]})
+                            "scan_count": group["count"], "sample_names": sorted(group["names"])})
             if groups:
                 scope = ("source-checked representatives" if group["previews"] and group["name_runs"] else
                          "source files" if group["name_runs"] else "catalog metadata" if group["names"] else "not reported")
@@ -235,10 +236,12 @@ class PowgenSampleIndex:
             else:
                 role = run_role(run)
             title = role["run_title"] or "Title unavailable in preview"
-            run_options.append({"value": run.run_number, "sample_id": metadata.get("sample_id", ""),
+            run_options.append({"value": run.run_number, "run_id": run.run_id,
+                                "sample_id": metadata.get("sample_id", ""),
                                 "title": f"{run.run_id} — {role['run_role']}: {title}",
                                 "identity_status": metadata.get('identity_status','unidentified'),
                                 "metadata_actions": metadata.get('metadata_actions',[]), **role})
+        options = with_recorded_run_context(options, run_options)
         notices = [*self.metadata_index.notices, *([catalog_notice] if catalog_notice else [])]
         if groups:
             notices.append("Up to two representative runs per ID are checked; cached checked names are retained. Other scan names may differ. Every selected run is source-checked before analysis.")

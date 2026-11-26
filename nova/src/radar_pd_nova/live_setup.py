@@ -488,6 +488,7 @@ class LiveSetupMixin:
             html.P("Assign models to sample updates this Live draft. The reviewed configuration, including its assignments, is saved when Test latest scan or Start monitoring proceeds.", classes="radar-help-copy")
             vuetify.VAutocomplete(label="Sample to assign", v_model=("live_model_sample_id",),
                 items=("powgen_discovered_sample_options",), item_title="title", item_value="value",
+                item_props="props",
                 density="compact", variant="outlined", disabled=(locked,),
                 update_modelValue=(self.select_live_model_sample, "[$event]"))
             vuetify.VAutocomplete(label="Allowed candidate library (empty = built-in catalog)",

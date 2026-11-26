@@ -137,6 +137,7 @@ class LiveAssistantUi:
             vuetify.VAutocomplete(v_show="powgen_processing_scope === 'selected'", label="Sample IDs and names",
                                   v_model=("powgen_processing_sample_ids",), items=("powgen_discovered_sample_options",),
                                   item_title="title", item_value="value", multiple=True, chips=True,
+                                  item_props="props",
                                   closable_chips=True, clearable=True, density="compact", variant="outlined", disabled=(LOCK,))
             vuetify.VBtn("Refresh banks for these samples", click=self.start_live_assistant_inventory,
                          variant="outlined", size="small", disabled=(LOCK,), classes="mb-3")
