@@ -12,6 +12,9 @@ from gpx_recipe.symmetry.compiler import file_sha
 
 @pytest.mark.parametrize('kind',['PNT','PNC'])
 def test_joint_native_fit_publishes_the_same_observation_and_refinable_scope(tmp_path,monkeypatch,kind):
+    # This control selects the internal joint-update schedule in this process.
+    # Allocated parallel starts use fresh processes and their production schedule.
+    monkeypatch.setenv('GALAXY_SLOTS','1')
     original,_=native_source(tmp_path/'inputs',kind);before=file_sha(original)
     monkeypatch.setattr(profiled_native_fit,'fit',partial(profiled_native_fit.fit,joint_steps=True))
     result=fit_snapshot(tmp_path/'inputs/prepared',tmp_path/'fit',

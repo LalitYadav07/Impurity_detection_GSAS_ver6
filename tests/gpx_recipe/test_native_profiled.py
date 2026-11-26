@@ -61,6 +61,39 @@ def test_new_native_context_or_stronger_probe_count_requires_complete_checks(tmp
     assert proof['qualification_reuse']['current_native_probes']==4
 
 
+@pytest.mark.parametrize('background_free',[False,True])
+def test_fixed_scale_qualification_uses_source_not_temporary_probe(tmp_path,background_free):
+    from gpx_recipe.symmetry import profiled_qualification
+    project,path=artificial_project(tmp_path,scale_free=False,background_free=background_free)
+    cache=tmp_path/'fixed-scale-objective.npz'
+    first=NativeMagneticStartingPoint(path,refine_scale=False,
+        refine_background=background_free,maximum_moment=6.)
+    model,_=first.build(cache_path=cache,cache_identity='same-fixed-scale-protocol')
+    source_key=profiled_qualification.identity(first,model)
+    assert source_key is not None
+    # Native compilation and verification deliberately evaluate other scales.
+    # They must not change the identity of the reviewed source objective.
+    first.residual(first.initial[first.moment_indices],first.source_scale*.43,
+                   first.initial[first.background_indices])
+    assert profiled_qualification.identity(first,model)==source_key
+    fresh=NativeMagneticStartingPoint(path,refine_scale=False,
+        refine_background=background_free,maximum_moment=6.)
+    _,proof=fresh.build(cache_path=cache,cache_identity='same-fixed-scale-protocol')
+    assert proof['cache_hit'] and proof['qualification_reuse']['owned_process']
+    assert proof['native_calls']==2
+    assert proof['qualification_reuse']['current_native_probes']==1
+    assert max(proof['heldout_relative_errors'])<1e-8
+    # A real edit to the source scale is still a different native objective.
+    project.histograms()[0].data['Sample Parameters']['Scale'][0]*=1.1
+    project.save()
+    changed=NativeMagneticStartingPoint(path,refine_scale=False,
+        refine_background=background_free,maximum_moment=6.)
+    changed_model,proof=changed.build(cache_path=cache,cache_identity='same-fixed-scale-protocol')
+    assert profiled_qualification.identity(changed,changed_model)!=source_key
+    assert not proof['qualification_reuse']['owned_process']
+    assert proof['qualification_reuse']['current_native_probes']==4
+
+
 def test_imported_cache_never_inherits_process_qualification(tmp_path):
     import json
     import subprocess

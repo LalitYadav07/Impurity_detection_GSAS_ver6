@@ -57,6 +57,10 @@ def identity(context, model):
             return None
         parms = context.parms.copy()
         parms.update(zip(context.vary, context.initial))
+        # errRefine leaves probe scales in the mutable parameter dictionary,
+        # including when Scale is fixed. Bind the reviewed source value, as
+        # for varied parameters above, rather than the last probe's value.
+        parms[context.scale_name] = context.source_scale
         context.maps.Dict2Map(parms)
         represented = set(context.vary)
         represented.update(key for _, _, keys in context.atoms for key in keys)
