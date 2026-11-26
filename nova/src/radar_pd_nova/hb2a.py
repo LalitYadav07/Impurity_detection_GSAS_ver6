@@ -215,13 +215,20 @@ def read_spice(path, *, ipts, experiment, scan, condition_bindings=None,
     if setup_errors and not identity_only:
         raise ValueError('; '.join(setup_errors))
     name = headers.get('samplename', '').strip()
-    if name.casefold() in {'', 'none', 'unknown', 'sample', 'null'}:
+    from .facility_metadata import sample_identifier
+    reported_ids = {value for key in ('sample_id', 'sampleid')
+                    if (value := sample_identifier(headers.get(key)))}
+    if len(reported_ids) > 1:
+        raise ValueError('Conflicting SPICE sample ID aliases; review the source acquisition')
+    reported = next(iter(reported_ids), '')
+    if reported:
+        sample_id = f'EXP{experiment}:ID:{reported}'
+        basis = 'SPICE sample ID scoped to experiment'
+    elif name.casefold() in {'', 'none', 'unknown', 'sample', 'null'}:
         sample_id, basis = '', 'unidentified'
     else:
-        reported = headers.get('sample_id') or headers.get('sampleid')
-        sample_id = (f'EXP{experiment}:ID:{reported}' if reported else
-                     f'EXP{experiment}:NAME:{sha256(name.encode()).hexdigest()[:12]}')
-        basis = 'SPICE sample ID scoped to experiment' if reported else 'SPICE sample name scoped to experiment; no sample ID recorded'
+        sample_id = f'EXP{experiment}:NAME:{sha256(name.encode()).hexdigest()[:12]}'
+        basis = 'SPICE sample name scoped to experiment; no sample ID recorded'
     source = str(Path(path))
     result = {'schema_version': 3, 'instrument': 'HB2A', 'facility': 'HFIR', 'ipts':str(ipts), 'available': True,
         'run_number': scan, 'scan_number': scan, 'experiment_number': experiment,

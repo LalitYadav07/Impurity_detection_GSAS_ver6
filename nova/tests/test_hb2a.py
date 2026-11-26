@@ -68,6 +68,43 @@ def add(archive,*,exp=1000,scan=1,normalization='time',**kwargs):
     return data,raw
 
 
+@pytest.mark.parametrize('name', ['', 'unknown', 'none', 'sample', 'null'])
+@pytest.mark.parametrize('key', ['sample_id', 'sampleid'])
+def test_recorded_sample_id_does_not_require_a_meaningful_name(archive, name, key):
+    _, raw = add(archive, name=name)
+    raw.write_text(raw.read_text().replace('# samplename =', f'# {key} = 00017\n# samplename ='))
+    metadata = hb2a.read_metadata('IPTS-1', 1000, 1, identity_only=True)
+    assert metadata['sample_id'] == 'EXP1000:ID:00017'
+    assert metadata['identity_basis'] == 'SPICE sample ID scoped to experiment'
+    assert metadata['identity_status'] == 'resolved'
+
+
+def test_conflicting_sample_id_aliases_stop_identity_resolution(archive):
+    _, raw = add(archive)
+    raw.write_text(raw.read_text() + '# sample_id = 17\n# sampleid = 18\n')
+    with pytest.raises(ValueError, match='Conflicting SPICE sample ID aliases'):
+        hb2a.read_metadata('IPTS-1', 1000, 1, identity_only=True)
+
+
+@pytest.mark.parametrize('value', ['0', 'unknown', 'parameters: temperature', 'x=y'])
+def test_missing_or_scan_note_sample_id_is_not_promoted_to_identity(archive, value):
+    _, raw = add(archive, name='unknown')
+    raw.write_text(raw.read_text() + '# sample_id = ' + value + '\n')
+    metadata = hb2a.read_metadata('IPTS-1', 1000, 1, identity_only=True)
+    assert metadata['sample_id'] == ''
+    assert metadata['identity_status'] == 'unidentified'
+
+
+def test_matching_id_aliases_preserve_identity_across_experiments(archive):
+    for experiment in (1000, 1001):
+        _, raw = add(archive, exp=experiment, name='unknown')
+        raw.write_text(raw.read_text() + '# sample_id = 00017\n# sampleid = 00017\n')
+    a = hb2a.read_metadata('IPTS-1', 1000, 1, identity_only=True)
+    b = hb2a.read_metadata('IPTS-1', 1001, 1, identity_only=True)
+    assert a['sample_id'] == 'EXP1000:ID:00017'
+    assert b['sample_id'] == 'EXP1001:ID:00017'
+
+
 @pytest.fixture
 def profile(tmp_path):
     p=tmp_path/'reviewed.instprm'
