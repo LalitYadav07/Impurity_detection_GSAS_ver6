@@ -521,6 +521,26 @@ class PreparationMixin:
         self._prep_search_library=key
         s.sx_kind=desired
 
+    def _sync_prepared_reference_requirement(self,library=None):
+        """Refresh a metadata hint without changing the selected reference."""
+        s=self.server.state
+        if not hasattr(s,'sx_reference_required'):return
+        if library is None:
+            self._prep_reference_hint=None
+            s.sx_reference_required=False
+            return
+        rows=[row for row in library.document['entries']
+              if row['model']['kind'] in {'structural-training','structural-ranking-model'}]
+        key=(library.document['id'],tuple((row['id'],row['state'],
+             tuple((item['path'],item['sha256']) for item in row.get('files',[]))) for row in rows))
+        cached=getattr(self,'_prep_reference_hint',None)
+        if cached is None or cached[0]!=key:
+            from .prepared_reference import requires_measured_reference
+            try:required=requires_measured_reference(library)
+            except (OSError,ValueError):required=False  # Native admission remains mandatory.
+            self._prep_reference_hint=(key,required)
+        s.sx_reference_required=self._prep_reference_hint[1]
+
     def _capture_prepared_model_inputs(self,protocol,root):
         """Called off the UI thread before a new immutable source dispatch."""
         enabled=((protocol['kind']=='magnetic' and protocol['policy'].get('magnetic_optimizer')=='profiled_quadratic')
@@ -589,6 +609,7 @@ class PreparationMixin:
         if not s.prep_library:
             self._sync_prepared_structural_scope(())
             self._sync_prepared_search_kind(())
+            self._sync_prepared_reference_requirement()
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
             s.prep_coverage='';s.prep_library_kind='';s.prep_stage_rows=[];s.prep_active_jobs=0;s.prep_job_status=''
             return
@@ -616,6 +637,7 @@ class PreparationMixin:
             kinds={r['model']['kind'] for r in library.document['entries']}
             self._sync_prepared_structural_scope(kinds)
             self._sync_prepared_search_kind(kinds)
+            self._sync_prepared_reference_requirement(library)
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             if kinds=={'structural-ranking-model'}:s.prep_library_kind='Imported trained structural model'
             if library.document.get('storage'):s.prep_library_kind='Compiled model library'
@@ -668,6 +690,7 @@ class PreparationMixin:
             s.prep_entries=visible
         except (OSError,ValueError) as exc:
             self._sync_prepared_structural_scope(())
+            self._sync_prepared_reference_requirement()
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1;s.prep_stage_rows=[]
             s.prep_active_jobs=0;s.prep_job_status=''
             s.prep_error=str(exc)
@@ -803,5 +826,6 @@ class PreparationMixin:
         self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
         self._prep_profile_handoff=None;self._prep_range_axis='native';self._prep_input_revision+=1
         self._prep_search_library=None
+        self._sync_prepared_reference_requirement()
         for key,value in self._prep_reset_values.items():
             setattr(self.server.state,key,copy.deepcopy(value))

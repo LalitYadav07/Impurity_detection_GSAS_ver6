@@ -71,7 +71,7 @@ class SymmetryMixin(KSearchMixin):
             sx_queue_notice='',sx_backend='',sx_batches=[],sx_dispatch_recovery_notice='',sx_dispatch_retry_ready=False,sx_dispatch_retry_ack=False,sx_structural_priority_rows=[],sx_prepared_structural=False,sx_plan_token='',sx_cancel_notice='Cancelling a Galaxy chunk stops all starts in that job.',
             sx_opd_policy='highest-symmetry-per-irrep',sx_construct_limit=100,sx_stored_candidate_scope=False,
             sx_structural_starts=4,sx_structural_seconds=DEFAULT_FIT_SECONDS,
-            sx_structural_radius=.05,sx_structural_cells=DEFAULT_CELL_RADIUS,sx_structural_recovery=0.,sx_parent_reference='')
+            sx_structural_radius=.05,sx_structural_cells=DEFAULT_CELL_RADIUS,sx_structural_recovery=0.,sx_parent_reference='',sx_reference_required=False)
         for key,value in extra.items():setattr(s,key,value)
         s.sx_recipe_busy=bool(getattr(self,'_symmetry_recipe_inflight',False));s.sx_selected_kind=''
         extra.update(sx_recipe_busy=s.sx_recipe_busy,sx_selected_kind='')

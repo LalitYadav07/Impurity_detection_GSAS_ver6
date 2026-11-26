@@ -160,6 +160,12 @@ def discover(app, draft, parent, k, progress):
     binding['adapter_sha256'] = file_sha(model_admission.__file__)
     directory = root/'prepared-library'/digest(binding)
     models = stage_models(library, directory)
+    from gpx_recipe.preparation.structural_attention_weights import FIXED_REFERENCE_KIND
+    if (not draft.get('reference_asset') and models
+            and all(model.get('reference_kind') == FIXED_REFERENCE_KIND for model in models)):
+        raise PreparedLibraryUnavailable(
+            'This trained library requires a before-transition reference GPX. '
+            'Select the reference scan before discovering candidates. No native job was submitted.')
     accepted = []; reasons = []; checked_candidates=[]
     for model in models:
         row = model['row']; files = model['files']
