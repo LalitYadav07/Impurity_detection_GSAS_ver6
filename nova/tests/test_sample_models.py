@@ -88,6 +88,18 @@ def test_related_real_sample_ids_remain_distinct_even_with_shared_metadata():
             single_sample_cohort(rows)
 
 
+def test_unknown_live_source_explains_exact_single_pattern_fallback():
+    unknown=dict(sample_id="",identity_status="unidentified",sample_name="")
+    for action in (lambda:single_sample_cohort([unknown]),
+                   lambda:bind(config(),metadata=unknown)):
+        with pytest.raises(ValueError) as error:
+            action()
+        message=str(error.value)
+        assert "Single pattern" in message and "exact reduced file" in message
+        assert "matching instrument profile" in message
+        assert "Future Live enrollment remains blocked" in message
+
+
 def test_full_contract_yaml_schema_and_form_roundtrip(tmp_path):
     cfg=config()
     wire=cfg.portable_contract()

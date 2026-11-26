@@ -18,6 +18,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .facility_metadata import sample_identifier
 
 
+UNKNOWN_SOURCE_GUIDANCE = (
+    "For a one-off analysis of an unidentified scan, use Single pattern and select "
+    "the exact reduced file and its matching instrument profile. Future Live enrollment remains blocked."
+)
+
+
 class SampleModelAssignment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     instrument: Literal["PG3", "NOM", "HB2A", "SNAP"]
@@ -138,7 +144,7 @@ def single_sample_cohort(metadata):
     if not rows or any((row.get("identity_status") or row.get("status")) != "resolved"
             or not row.get("sample_id") or row.get("identity_verification") == "catalog_preview"
             for row in rows):
-        raise ValueError("The shared model needs a verified sample ID for every selected scan; review unknown or conflicting identities")
+        raise ValueError("The shared model needs a verified sample ID for every selected scan; review unknown or conflicting identities. " + UNKNOWN_SOURCE_GUIDANCE)
     if any(name_only_identity(row) for row in rows):
         raise ValueError("Name-only sample labels require reviewed acquisition-scoped model assignments")
     samples = {row["sample_id"] for row in rows}
@@ -179,7 +185,7 @@ def check_model_selection(config, *, instrument, ipts, selected_sample_ids,
         raise ValueError("Per-scan profile refinement requires a supplied main CIF for every assigned sample; use a fixed profile for blind discovery")
     for row in cohort_metadata:
         if (row.get("identity_status") or row.get("status")) != "resolved" or not row.get("sample_id"):
-            raise ValueError("Review unknown or conflicting source identities before assigning models")
+            raise ValueError("Review unknown or conflicting source identities before assigning models. " + UNKNOWN_SOURCE_GUIDANCE)
         assigned_entry(routing, instrument, ipts, row, row.get("run_id"))
     return f"{len(selected)} explicit sample model assignment(s); unassigned arrivals stop for review"
 
@@ -192,7 +198,7 @@ def bind_sample_models(config, *, instrument, ipts, metadata, selected_sample_id
     sample_id = metadata.get("sample_id")
     if (metadata.get("identity_status") != "resolved" or not isinstance(sample_id, str)
             or not sample_id or metadata.get("identity_verification") == "catalog_preview"):
-        raise ValueError("A verified source-file sample identity is required before choosing its models")
+        raise ValueError("A verified source-file sample identity is required before choosing its models. " + UNKNOWN_SOURCE_GUIDANCE)
     if selected_sample_ids is not None and sample_id not in selected_sample_ids:
         raise ValueError("Verified sample identity no longer matches the selected sample scope")
     if config.sample_models is None:
