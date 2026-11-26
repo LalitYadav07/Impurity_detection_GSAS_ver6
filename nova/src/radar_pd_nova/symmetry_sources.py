@@ -6,6 +6,7 @@ as incoming RADAR-PD sources, preventing recursive recipe enrollment.
 from __future__ import annotations
 
 import copy
+from collections import Counter
 from pathlib import Path
 from math import isfinite
 
@@ -92,6 +93,11 @@ def start_choices(workspace, experiment):
     for source in workspace.sources(experiment):
         label='Structural model' if source.get('model_checkpoint') else 'Candidate checkpoint' if source.get('explicit_checkpoint') else 'RADAR-PD'
         title=label+' · '+_scan_title(source)
+        if source.get('model_checkpoint'):
+            checksum=source.get('source_sha256')
+            if (isinstance(checksum,str) and len(checksum)==64
+                    and all(c in '0123456789abcdef' for c in checksum)):
+                title+=' · GPX '+checksum[:8]
         if source.get('explicit_checkpoint'):title+=' · '+source.get('collection_name',source['id'])
         entries.append(dict(id=source['id'],title=title,source=source))
     for job_id,job in workspace.state.get('jobs',{}).items():
@@ -114,6 +120,13 @@ def start_choices(workspace, experiment):
             entries.append(dict(id=identifier,title=recipe_label+' · '+_scan_title(source)+' · '+label+caution+' · '+result['files'][name][:8],
                                 recipe_label=recipe_label,
                                 job_id=job_id,stage=stage,name=name))
+    # The same bytes may be retained by different trials, and shortened
+    # revisions can collide. Preserve every source and its stable identity;
+    # expand only ambiguous model labels, without reading any GPX files.
+    model_titles=Counter(e['title'] for e in entries if e.get('source',{}).get('model_checkpoint'))
+    for entry in entries:
+        if entry.get('source',{}).get('model_checkpoint') and model_titles[entry['title']]>1:
+            entry['title']+=' · checkpoint '+entry['id'].removeprefix('structural-model:')
     return entries
 
 
