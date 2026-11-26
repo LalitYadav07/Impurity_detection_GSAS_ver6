@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pytest
@@ -23,6 +24,8 @@ from gpx_recipe.preparation.operations import create_library,stage_entry,publish
 from gpx_recipe.symmetry.bundle import pack,unpack
 from gpx_recipe.symmetry.compiler import file_sha,package_signature
 from test_native_profile_capture import native_source
+
+MODEL_TOOL_VERSION=ET.parse(Path(__file__).resolve().parents[2]/'galaxy/radar_pd_model_campaign.xml.in').getroot().attrib['version']
 
 
 CONSUMER='''import json,sys,time
@@ -137,7 +140,7 @@ def test_cold_portable_structural_bank_reuses_native_receipt_without_producer_fi
     assert not list(restored.root.rglob('*.gpx'))
     envelope=tmp_path/'server.json'
     write_json(envelope,dict(schema=authority.SCHEMA,records=[dict(certificate_path=str(certificate),
-        tool_id='neutrons_radar_pd_model_campaign_prototype',tool_version='0.3.4',job_state='ok',dataset_state='ok',
+        tool_id='neutrons_radar_pd_model_campaign_prototype',tool_version=MODEL_TOOL_VERSION,job_state='ok',dataset_state='ok',
         dataset_deleted=False,dataset_purged=False,job_stdout=announced)]))
     consumer=tmp_path/'consumer.py';consumer.write_text(CONSUMER)
     results={}
