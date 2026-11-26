@@ -103,12 +103,17 @@ def test_structural_training_is_visible_and_separately_filterable(app,tmp_path,s
     child.parent.mkdir(parents=True);child.write_text('data_public_scope_control\n')
     record=catalog(PARENT,['0','0','0'],structural=True)
     record['candidates'][0]['child']['sha256']=file_sha(child)
+    s.sx_kind='magnetic'
     selected=store.create_models(key,name='Structural control',kind='structural',
         catalogs=[dict(catalog=record,directory=str(directory))],bank_labels=['bank 1'])
     s.prep_library=selected;application._preparation_table_changed()
+    assert s.sx_kind=='structural'
     stages={row['kind']:row['total'] for row in s.prep_stage_rows}
     assert stages=={'structural':1,'structural-examples':8,'structural-training':1}
+    # Later progress/table refreshes must preserve a deliberate mode change.
+    s.sx_kind='magnetic'
     s.prep_stage_filter='structural-training';application._preparation_table_changed()
+    assert s.sx_kind=='magnetic'
     assert s.prep_table_count==1
     assert s.prep_entries[0]['model']=='Structural family ranking model'
     assert '0 / 8 blocks prepared' in s.prep_entries[0]['reason']
@@ -602,3 +607,35 @@ def test_empty_library_picker_clears_durable_reuse_selection(app):
     state.prep_library='';application._preparation_library_changed()
     assert not store.registry.selected_key()
     assert store.registry.get(key).root.exists()
+
+
+@pytest.mark.parametrize('kinds,original,expected',[
+    ({'structural'},'magnetic','structural'),
+    ({'structural','structural-examples','structural-training'},'magnetic','structural'),
+    ({'structural-ranking-model'},'magnetic','structural'),
+    ({'reference','structural'},'magnetic','structural'),
+    ({'magnetic'},'structural','magnetic'),
+    ({'reference'},'magnetic','magnetic'),
+    ({'magnetic','structural'},'magnetic','magnetic'),
+    ({'unknown','structural'},'magnetic','magnetic'),
+])
+def test_new_single_purpose_library_selects_matching_search(kinds,original,expected):
+    app=PreparationMixin();state=State(prep_library='selected',sx_kind=original)
+    app.server=SimpleNamespace(state=state)
+    app._model_active_campaigns={'running':object()};active=app._model_active_campaigns.copy()
+    app._sync_prepared_search_kind(kinds)
+    assert state.sx_kind==expected and app._model_active_campaigns==active
+
+
+def test_library_progress_and_deselection_preserve_explicit_search_changes():
+    app=PreparationMixin();state=State(prep_library='first',sx_kind='magnetic')
+    app.server=SimpleNamespace(state=state)
+    app._sync_prepared_search_kind({'structural-training'})
+    assert state.sx_kind=='structural'
+    state.sx_kind='magnetic'
+    app._sync_prepared_search_kind({'structural-training'})
+    assert state.sx_kind=='magnetic'
+    state.prep_library='';app._sync_prepared_search_kind(())
+    assert state.sx_kind=='magnetic'
+    state.prep_library='first';app._sync_prepared_search_kind({'structural-training'})
+    assert state.sx_kind=='structural'

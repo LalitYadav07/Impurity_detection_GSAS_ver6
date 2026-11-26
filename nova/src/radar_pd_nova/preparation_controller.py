@@ -58,6 +58,7 @@ class PreparationMixin:
         self._prep_profile_handoff=None
         self._prep_range_axis='native'
         self._prep_structural_scope_previous=None
+        self._prep_search_library=None
         s=self.server.state
         values=dict(prep_busy=False,prep_operation='',prep_error='',prep_message='',prep_tab='new',
             prep_name='Experiment preparation',prep_parent_path='',prep_profile_path='',prep_bank_label='',
@@ -499,6 +500,27 @@ class PreparationMixin:
                 self._prep_structural_scope_previous=None
         s.sx_stored_candidate_scope=enabled
 
+    def _sync_prepared_search_kind(self,kinds):
+        """Match a newly selected, single-purpose library to its search form.
+
+        Progress refreshes never undo a later explicit choice. Mixed libraries
+        and parent-only inspections leave the current search kind unchanged.
+        """
+        s=self.server.state;key=s.prep_library
+        if not key:
+            self._prep_search_library=None
+            return
+        if key==getattr(self,'_prep_search_library',None):return
+        current=getattr(s,'sx_kind',None)
+        if current not in {'magnetic','structural'}:return
+        kinds=set(kinds)-{'reference'}
+        structural={'structural','structural-examples','structural-training','structural-ranking-model'}
+        desired=('structural' if kinds and kinds<=structural else
+                 'magnetic' if kinds=={'magnetic'} else None)
+        if desired is None:return
+        self._prep_search_library=key
+        s.sx_kind=desired
+
     def _capture_prepared_model_inputs(self,protocol,root):
         """Called off the UI thread before a new immutable source dispatch."""
         enabled=((protocol['kind']=='magnetic' and protocol['policy'].get('magnetic_optimizer')=='profiled_quadratic')
@@ -566,6 +588,7 @@ class PreparationMixin:
         s.prep_can_pause=False;s.prep_can_resume=False
         if not s.prep_library:
             self._sync_prepared_structural_scope(())
+            self._sync_prepared_search_kind(())
             s.prep_entries=[];s.prep_table_count=0;s.prep_pages=1
             s.prep_coverage='';s.prep_library_kind='';s.prep_stage_rows=[];s.prep_active_jobs=0;s.prep_job_status=''
             return
@@ -592,6 +615,7 @@ class PreparationMixin:
             s.prep_can_resume=bool(runnable and paused and not (recovery and recovery['remaining']))
             kinds={r['model']['kind'] for r in library.document['entries']}
             self._sync_prepared_structural_scope(kinds)
+            self._sync_prepared_search_kind(kinds)
             s.prep_library_kind='Input inspection' if kinds=={'reference'} else 'Model preparation'
             if kinds=={'structural-ranking-model'}:s.prep_library_kind='Imported trained structural model'
             if library.document.get('storage'):s.prep_library_kind='Compiled model library'
@@ -778,5 +802,6 @@ class PreparationMixin:
         self._prep_context=None;self._prep_catalogs=[];self._prep_discovered_identity=None
         self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
         self._prep_profile_handoff=None;self._prep_range_axis='native';self._prep_input_revision+=1
+        self._prep_search_library=None
         for key,value in self._prep_reset_values.items():
             setattr(self.server.state,key,copy.deepcopy(value))
