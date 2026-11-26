@@ -32,6 +32,11 @@ def isolated_reduced_metadata(monkeypatch):
     monkeypatch.setattr(powgen_controller, "inspect_reduced_setup", inspect)
     monkeypatch.setattr(PowgenWatchController, "_setup", lambda self, run: inspect(run.source_path))
     monkeypatch.setattr(powgen_controller, "stage_bank", lambda source, setup, bank, profile, dest, **kwargs: (source, profile.path))
+    # Lifecycle fixtures represent one verified synthetic sample. Tests for
+    # unknown/conflicting selection supply their own identity reader below.
+    monkeypatch.setattr(powgen_controller.PowgenSampleIndex, "identity", lambda self, run: {
+        "sample_id": str(run.scan_metadata.get("sample_id") or "lifecycle-sample"),
+        "identity_status": "resolved", "identity_verification": "source_file"})
 
 
 class FakeGalaxyService:

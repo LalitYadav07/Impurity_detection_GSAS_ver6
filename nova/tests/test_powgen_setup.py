@@ -165,6 +165,10 @@ def test_all_packaged_profiles_are_hash_verified():
 def local_controller(monkeypatch,tmp_path,**settings):
     monkeypatch.setattr(WatchDefinition,'source_directory',property(lambda _:str(tmp_path)))
     monkeypatch.setattr(powgen_controller,'read_powgen_scan_metadata',lambda *_:{})
+    # Calibration/bank fixtures have no raw NeXus companion. Supply their
+    # explicitly declared synthetic sample through the source-reader boundary.
+    monkeypatch.setattr(powgen_controller.PowgenSampleIndex, 'identity',
+        lambda self, run: {'sample_id':'synthetic-standard', 'identity_status':'resolved'})
     return PowgenWatchController(FakeGalaxyService(),PowgenExperimentSettings('IPTS-2767','history-1','config-hda','',**settings))
 
 

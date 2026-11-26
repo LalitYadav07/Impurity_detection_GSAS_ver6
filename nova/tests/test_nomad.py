@@ -36,7 +36,11 @@ Y:0
 
 
 @pytest.fixture
-def source(tmp_path):
+def source(tmp_path, monkeypatch):
+    # This format/calibration fixture has no facility NeXus companion. Its
+    # synthetic source identity is independent of the display title/formula.
+    monkeypatch.setattr(nomad_metadata.NomadSampleIndex, 'identity',
+        lambda self, run: {'sample_id':'synthetic-Si', 'identity_status':'resolved'})
     path=tmp_path/'NOM_42.gsa'
     text='Sample Run: 42 Wavelength: 1.5 A\n# Synthetic standard\n# 6 Histograms\n# Instrument: Dummy\n# with Y multiplied by the bin widths.\n'
     for i,(difc,angle) in enumerate([(1428.82,15.31),(2861.51,31.2),(5606.56,66.25),(9041.71,118.28),(9910.54,152.57),(836.207,9.17)],1):

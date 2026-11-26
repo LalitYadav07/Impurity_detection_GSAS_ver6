@@ -215,7 +215,7 @@ def test_bad_condition_selection_keeps_available_histograms_for_correction(sourc
         'product_window_reviewed':True,
         'scope_sha256':'a'*64,'schema_sha256':'b'*64}}
     result=preflight_snap_experiment('IPTS-1',selected_banks=(2,),
-        sample_index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded'}),
+        sample_index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded','identity_status':'resolved'}),
         product_family=snap.parse_filename(source).family,profile_path=supplied,profile_bank=7,
         profile_acknowledged=True,allow_exploratory=True,condition_bindings=bindings)
     assert not result['ready'] and result['available_banks']==[2]
@@ -282,7 +282,7 @@ def test_checkpoint_recovery_keeps_profile_scope_and_blocks_future_state_change(
         selected_banks=(2,),subfolder='shared/SNAPRed/export/gsa/bank',
         product_family=snap.parse_filename(source).family,profile_bank=7,
         profile_acknowledged=True,allow_exploratory=True)
-    index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded'})
+    index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded','identity_status':'resolved'})
     first=SnapWatchController(service,settings,sample_index=index)
     record=first.submit(first.discover()[0])
     assert record.provenance['snap_bank']['source_bank']==2
@@ -311,7 +311,7 @@ def test_reprocessed_source_is_flagged_without_replacing_or_resubmitting_results
         selected_banks=(2,),subfolder='shared/SNAPRed/export/gsa/bank',
         product_family=snap.parse_filename(source).family,profile_bank=7,
         profile_acknowledged=True,allow_exploratory=True,initial_backfill_limit=1)
-    index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded'})
+    index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded','identity_status':'resolved'})
     controller=SnapWatchController(service,settings,sample_index=index)
     old=controller.discover()[0]
     controller.state.discovered[old.run_id]=replace(old,scientific_summary={'scientific_status':'ok'})
@@ -342,7 +342,7 @@ def test_completed_watch_recovers_original_profile_bank_and_hash(source,supplied
         selected_banks=(2,),subfolder='shared/SNAPRed/export/gsa/bank',
         product_family=snap.parse_filename(source).family,profile_bank=7,
         profile_acknowledged=True,allow_exploratory=True)
-    index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded'})
+    index=SimpleNamespace(identity=lambda run:{'sample_id':'recorded','identity_status':'resolved'})
     first=SnapWatchController(service,settings,sample_index=index)
     run=first.discover()[0];first.submit(run)
     first.state.mark_completed(run.run_id,['final-gpx'],galaxy_job_id='job');first.persist_state()
