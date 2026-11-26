@@ -9,7 +9,9 @@ import threading
 from . import nomad
 from .acquisition import acquisition_context
 from .models import InputSelection, InputSource
-from .nomad_metadata import NomadSampleIndex, read_nomad_scan_metadata, read_nomad_product_metadata
+from .nomad_metadata import (NomadSampleIndex, read_nomad_scan_metadata, read_nomad_product_metadata,
+                             read_nomad_product_material_metadata)
+from .nomad_corrections import with_material_review
 from .powgen_controller import PowgenExperimentSettings, PowgenWatchController
 from .powgen_samples import identity_readiness, select_runs
 from .powgen_watch import WatchDefinition, discover_from_listing, build_submission_plan
@@ -98,6 +100,9 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
             # the user can still choose a valid alternative. validate_profile
             # below enforces the selected bank's numerical checks.
             setup=nomad.inspect_reduced_setup(run.source_path, inventory_only=True)
+            if (setup.declared_corrections.get('Sample') or {}).get('Material') is not None:
+                setup=with_material_review(setup,
+                    read_nomad_product_material_metadata(ipts,run.run_number,run.source_path))
             if selected_banks is None or len(selected_banks)!=1:
                 raise ValueError('Choose one NOMAD source histogram; each needs its own verified profile mapping')
             if not profile_path or profile_bank is None:
@@ -160,6 +165,8 @@ def preflight_nomad_experiment(ipts, *, selected_sample_ids=None, selected_banks
         'profile_filename':Path(profile_path).name if profile_path else '',
         'profile_source':'Explicit user-supplied physical/profile bank mapping; not automatically validated',
         'profile_error':'; '.join(errors[:5]),'quality_notices':list(dict.fromkeys(notices)),
+        'reduction_material_reviews':[{'run_number':s.run_number, **s.material_comparison}
+                                      for s in setups if s.material_comparison],
         'metadata_resolution':resolution,
         'metadata_notices':metadata.get('metadata_notices',[]),
         'message':('; '.join(errors[:5]) if errors else f'Ready for exploratory analysis: {len(runs)} individual runs, physical bank {selected_banks[0]}. Review reduction and profile notices.')}
@@ -303,6 +310,9 @@ class NomadWatchController(PowgenWatchController):
                 discovered_setup.get('sidecar_sha256') != setup.sidecar_sha256 or
                 discovered_setup.get('product_metadata') != setup.product_metadata):
             raise ValueError('NOMAD source changed after discovery; check a new watch before reprocessing')
+        if (setup.declared_corrections.get('Sample') or {}).get('Material') is not None:
+            setup=with_material_review(setup,
+                read_nomad_product_material_metadata(self.settings.ipts,run.run_number,run.source_path))
         if setup.warnings and not self.settings.allow_exploratory:
             raise ValueError('NOMAD reduction corrections require exploratory-analysis acknowledgement')
         bank=run.bank or self.settings.selected_banks[0]

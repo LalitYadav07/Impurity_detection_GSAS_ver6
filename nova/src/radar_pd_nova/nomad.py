@@ -1,5 +1,5 @@
 """Normalized NOMAD Bragg products with explicit, reviewed profile mappings."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 import json
 import math
@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from .nomad_products import Product,product_from_path,slice_metadata_path,slice_window,member_runs,SLICED_FOLDER,SUMMED_FOLDER
 from .tof_fxye import TofBank as NomadBank, inspect_slog_banks
+from .nomad_corrections import declared_corrections
 
 VERSION = 'nomad-normalized-bragg-products/v2'
 LEGACY_VERSION = 'nomad-individual-bragg/v1'
@@ -105,6 +106,8 @@ class NomadSetup:
     product_id: str | None = None
     member_runs: tuple[int,...] = ()
     product_metadata: dict | None = None
+    declared_corrections: dict = field(default_factory=dict)
+    material_comparison: dict = field(default_factory=dict)
 
     def as_dict(self):
         return asdict(self)
@@ -122,7 +125,7 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
     banks,before,source_hash,prefix=inspect_slog_banks(path,run_number,label='NOMAD',
         selected_bank=selected_bank,inventory_only=inventory_only,
         allowed_run_numbers=product.members or (run_number,))
-    sidecar=reduction_input_path(path);side_sig=None;side_hash='';calibration='';environment='';notices=[]
+    sidecar=reduction_input_path(path);side_sig=None;side_hash='';calibration='';environment='';notices=[];corrections={}
     if sidecar.is_file():
         side_sig=signature(sidecar)
         if side_sig[0]>1048576:raise ValueError('NOMAD reduction input exceeds the metadata limit')
@@ -130,6 +133,7 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
         if not isinstance(config,dict) or not isinstance(config.get('Sample'),dict):
             raise ValueError('Invalid NOMAD reduction input')
         sample=config['Sample']
+        corrections=declared_corrections(config)
         expected=product.members or (run_number,)
         declared_runs = str(sample.get('Runs','')).strip()
         actual = ((int(declared_runs),) if product.kind != 'sum' and re.fullmatch(r'\d+', declared_runs)
@@ -163,7 +167,8 @@ def inspect_reduced_setup(path, *, selected_bank=None, inventory_only=False):
         family='NOMAD normalized Mantid temperature-sliced GSAS/SLOG'
     elif product.kind=='sum':family='NOMAD normalized explicitly summed GSAS/SLOG'
     return NomadSetup(run_number,tuple(banks),before,source_hash,str(sidecar),side_sig,side_hash,
-                      calibration,environment,title,tuple(notices),family,product.kind,product.product_id,product.members,product_metadata)
+                      calibration,environment,title,tuple(notices),family,product.kind,product.product_id,product.members,product_metadata,
+                      corrections)
 
 
 def _profile_blocks(text):
@@ -316,7 +321,9 @@ def stage_bank(source, setup, bank, profile_path, profile_bank, destination, *, 
     geometry_notices=([{'code':'nomad_profile_nominal_geometry_offset','message':receipt['nominal_geometry_notice']}] if receipt['nominal_geometry_notice'] else [])
     input_provenance={'schema':'radar-pd-input-provenance/v1','instrument':'NOM',
         'reduction_family':setup.source_family,
-        'reduction_setup':{'calibration':setup.calibration,'environment':setup.environment},
+        'reduction_setup':{'calibration':setup.calibration,'environment':setup.environment,
+                           'declared_corrections':setup.declared_corrections,
+                           'material_comparison':setup.material_comparison},
         'source_bank':bank,'profile_bank':profile_bank,'calibration':setup.calibration,
         'source_sha256':setup.source_sha256,'reduction_input_sha256':setup.sidecar_sha256,
         'product_kind':setup.product_kind,'product_id':setup.product_id,'member_runs':list(setup.member_runs),

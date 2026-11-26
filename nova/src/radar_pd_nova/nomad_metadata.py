@@ -23,6 +23,78 @@ def read_nomad_sample_identity(ipts: str, run: int, *, nexus_path=None) -> dict[
     return read_powgen_sample_identity(ipts, run, nexus_path=path, instrument='NOM')
 
 
+def read_nomad_material_metadata(ipts: str, run: int, *, nexus_path=None) -> dict[str, Any]:
+    """Read only an explicit formula and its exact run/proposal identity."""
+    path = Path(nexus_path) if nexus_path else nomad_nexus_path(ipts, run)
+    result = {'nexus_path': str(path), 'sample_formula': '', 'formula_source': ''}
+    if not path.is_file():
+        return {**result, 'formula_review_reason': 'Source formula is unavailable'}
+    before = path.stat()
+    import h5py
+    from .nomad_corrections import MAX_FORMULA_LENGTH
+    with h5py.File(path, 'r') as handle:
+        def identity(field, *, numeric=False):
+            dataset = handle.get(field)
+            if not isinstance(dataset, h5py.Dataset) or dataset.size != 1 or dataset.nbytes > 4096:
+                return ''
+            raw = dataset[()]
+            if dataset.shape:
+                raw = raw.reshape(-1)[0]
+            if hasattr(raw, 'item'):
+                raw = raw.item()
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8', errors='strict')
+            if isinstance(raw, str):
+                return raw.strip() if len(raw) <= MAX_FORMULA_LENGTH else ''
+            if numeric and not isinstance(raw, bool) and isinstance(raw, (int, float)):
+                return str(int(raw)) if math.isfinite(raw) and int(raw) == raw else ''
+            return ''
+        stored_run = identity('/entry/run_number', numeric=True)
+        proposal = identity('/entry/experiment_identifier').upper()
+        if stored_run and stored_run != str(run):
+            raise ValueError('NOMAD formula source run differs from the selected run')
+        if proposal and proposal != str(ipts).upper():
+            raise ValueError('NOMAD formula source proposal differs from the selected IPTS')
+        result['formula_source_verified'] = stored_run == str(run) and proposal == str(ipts).upper()
+        if not result['formula_source_verified']:
+            result['formula_review_reason'] = 'Source formula run/proposal identifiers are missing or ambiguous'
+        for field in ('/entry/sample/chemical_formula', '/entry/sample/formula'):
+            dataset = handle.get(field)
+            if not isinstance(dataset, h5py.Dataset):
+                continue
+            result['formula_source'] = field
+            if dataset.size != 1 or dataset.dtype.kind not in {'S', 'O', 'U'}:
+                result['formula_review_reason'] = 'Source formula is not one text value'
+                break
+            if dataset.nbytes > 4 * MAX_FORMULA_LENGTH:
+                raise ValueError('NOMAD source formula exceeds the bounded provenance limit')
+            raw = dataset[()]
+            if dataset.shape:
+                raw = raw.reshape(-1)[0]
+            value = raw.decode('utf-8', errors='strict') if isinstance(raw, bytes) else str(raw)
+            if len(value) > MAX_FORMULA_LENGTH:
+                raise ValueError('NOMAD source formula exceeds the bounded provenance limit')
+            if value.strip():
+                result['sample_formula'] = value
+                break
+    after = path.stat()
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise ValueError('NOMAD formula source changed during inspection')
+    result['source_signature'] = [after.st_size, after.st_mtime_ns]
+    return result
+
+
+def read_nomad_product_material_metadata(ipts, run, source):
+    from .nomad_products import product_from_path
+    product = product_from_path(source)
+    if product is None or product.run_number != run:
+        raise ValueError('NOMAD formula source does not match this reduced product')
+    if product.kind == 'sum':
+        return {'sample_formula': '', 'formula_source': '',
+                'formula_review_reason': 'Summed product requires an independent formula review of every member'}
+    return read_nomad_material_metadata(ipts, run)
+
+
 class NomadSampleIndex(PowgenSampleIndex):
     def __init__(self, ipts: str):
         super().__init__(ipts, nexus_path=nomad_nexus_path, identity_reader=read_nomad_sample_identity, instrument='NOM')
