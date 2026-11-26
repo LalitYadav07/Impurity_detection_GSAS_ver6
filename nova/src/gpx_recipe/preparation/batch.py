@@ -145,15 +145,37 @@ def stage(library, entries, directory, *, workers=4, seconds=480, examples=False
         workers=workers,seconds=seconds))
 
 
+def task_resource_limits(plan, budget, *, examples=False):
+    """Divide one allocation across every potentially concurrent native task.
+
+    Structural banks reserve almost the whole artifact budget, so an all-bank
+    batch can run only one model at once. Its inner curve pool can use the
+    grant. Example reservations shrink at runtime; those tasks keep one slot.
+    The original plan and scientific requests do not acquire resource fields.
+    """
+    capacity=budget['workers']
+    minimum=min(RESERVES[task['kind']] for task in plan['tasks'])
+    simultaneous=min(capacity,len(plan['tasks']))
+    if not examples:simultaneous=min(simultaneous,max(1,RESULT_BUDGET//minimum))
+    workers=1 if examples else max(1,capacity//simultaneous)
+    memory=budget.get('memory_mb')
+    if memory is not None:memory=max(1,(memory-budget['reserve_mb'])//simultaneous)
+    return dict(workers=workers,memory_mb=memory,maximum_simultaneous_tasks=simultaneous)
+
+
 def run_task(task, request, scratch, *, cancel, timeout):
     """Fresh process per model; no scientific implementation is duplicated."""
     scratch=Path(scratch);scratch.mkdir(parents=True,exist_ok=False)
     message=scratch/'request.json';output=scratch/'response.json';write_json(message,request)
+    environment=native_environment()
+    limits=task.get('_resource_limits',dict(workers=1,memory_mb=None))
+    environment['GALAXY_SLOTS']=str(limits['workers'])
+    if limits['memory_mb'] is not None:environment['GALAXY_MEMORY_MB']=str(limits['memory_mb'])
     began=time.monotonic()
     with (scratch/'native.log').open('w') as stream:
         try:
             result=run_scientific([sys.executable,'-m','gpx_recipe.preparation.worker',task['kind'],str(message),str(output)],
-                cwd=scratch,env=native_environment(),cancel_event=cancel,timeout=timeout,
+                cwd=scratch,env=environment,cancel_event=cancel,timeout=timeout,
                 stdout=stream,stderr=subprocess.STDOUT)
         except ScientificCancelled:
             return dict(state='cancelled',reason='Native preparation was cancelled',seconds=time.monotonic()-began)
@@ -222,6 +244,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
     captured={name:file_sha(confined(plan_path.parent,name)) for name in inputs(plan)}
     output=Path(request['destination']).resolve();output.mkdir(parents=True,exist_ok=False)
     budget=allocation(request['workers'],environ=environ);cancel=cancel or threading.Event()
+    task_limits=task_resource_limits(plan,budget,examples=examples)
     began=clock();deadline=began+request['seconds'];remaining=list(plan['tasks']);active={};finished={}
     admission_deadline=began+EXAMPLES_ADMISSION_SECONDS if examples else deadline
     paths=[];used=0;peak=0;peak_reserved=0;stop_reason='';sized=set();invalid_size=set();waited=False
@@ -269,7 +292,8 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
                 payload['destination']=str(confined(output,payload['destination'],exists=False))
                 scratch=output/'.work'/task['entry']/('attempt-'+str(task['attempt']))
                 timeout=float(EXAMPLES_UNIT_SECONDS) if examples else max(1.,deadline-clock())
-                future=pool.submit(runner,task,payload,scratch,cancel=cancel,timeout=timeout)
+                runtime_task=dict(task,_resource_limits=task_limits)
+                future=pool.submit(runner,runtime_task,payload,scratch,cancel=cancel,timeout=timeout)
                 active[future]=dict(task,payload=payload,scratch=scratch,_reserve=RESERVES[task['kind']],
                     _late_admission=waited and not examples)
                 peak=max(peak,len(active));peak_reserved=max(peak_reserved,used+sum(t['_reserve'] for t in active.values()))
@@ -316,6 +340,7 @@ def execute(value, *, cancel=None, runner=run_task, clock=time.monotonic, enviro
     result=dict(schema=RESULT_SCHEMA,plan_sha256=digest(plan),status='partial' if counts['pending'] else 'complete',
         counts=counts,all_prepared=counts['prepared']==len(plan['tasks']),
         entries=[finished[t['entry']] for t in plan['tasks']],allocation=dict(budget,peak_admitted_tasks=peak,
+            per_task_workers=task_limits['workers'],per_task_memory_mb=task_limits['memory_mb'],
             result_byte_budget=RESULT_BUDGET,native_sized_tasks=len(sized),
             native_size_reports_rejected=len(invalid_size),peak_reserved_result_bytes=peak_reserved),
         output=str(output),observations_included=False,scientific_result=False,

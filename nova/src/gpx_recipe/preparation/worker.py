@@ -16,6 +16,22 @@ from ..symmetry.compiler import file_sha, package_signature
 from ..symmetry.contracts import digest, fields, number, validate_candidate, validate_protocol
 from .reference import create_reference, validate_grid
 
+MINIMUM_PARALLEL_STRUCTURAL_MODES = 16
+
+
+def starting_curve_renderer(source, output):
+    """Keep small offline banks serial; share the allocated complex-bank map.
+
+    Native controls show process setup dominates a two-mode bank, whereas a
+    sixteen-mode TOF bank benefits from the process-isolated renderer. Keep
+    the floor conservative; this changes scheduling, never the start set.
+    """
+    if source.mode_dimensions < MINIMUM_PARALLEL_STRUCTURAL_MODES:
+        return None
+    from ..structural_live.optimization.parallel_bank import NativeBankProcessMap
+    renderer = NativeBankProcessMap(source, output)
+    return renderer if renderer.workers > 1 else None
+
 
 def input_roles(kind):
     return ('source','instrument')+(('child',) if kind in {'structural','kernel','structural-examples'} else ())
@@ -219,7 +235,10 @@ def execute(kind, request):
                 specification=spec,cell_index=index,proposal_to_cell=mapping,
                 scope='One native profile component, not a scientific model or a fitted result')
         else:
-            bank = build(source, output/'starts.npz', policy='joint_cell_v1', reuse_fixed_cell_profiles=True)
+            parallel = starting_curve_renderer(source, output/'bank-processes')
+            options = dict(batch_renderer=parallel) if parallel is not None else {}
+            bank = build(source, output/'starts.npz', policy='joint_cell_v1',
+                         reuse_fixed_cell_profiles=True, **options)
             artifacts += ['starts.npz', 'starts.json']
             detail = dict(physics_sha256=bank['context']['physics_sha256'],
                 mode_dimensions=source.mode_dimensions, cell_dimensions=source.cell_dimensions,
