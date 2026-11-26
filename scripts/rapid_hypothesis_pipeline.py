@@ -1301,7 +1301,8 @@ def _extract_q_signal(
                 )
 
             pm.save_project()
-            arrays = GSASDataExtractor.get_all_arrays(pm.main_histogram)
+            arrays = GSASDataExtractor.get_fitted_arrays(pm.main_histogram)
+            dataset["_native_q_fit_intervals"] = GSASDataExtractor.get_q_fit_intervals(pm.main_histogram)
             q = np.asarray(arrays.get("Q", []), dtype=float)
             residual = np.asarray(arrays.get("residual", []), dtype=float)
             if q.size and residual.size:
@@ -1312,7 +1313,8 @@ def _extract_q_signal(
             raise RuntimeError("Main-phase fit did not produce residual arrays")
         except Exception as exc:
             raise RuntimeError(f"Rapid mode could not prepare the supplied main CIF residual: {exc}") from exc
-    arrays = GSASDataExtractor.get_all_arrays(pm.main_histogram)
+    arrays = GSASDataExtractor.get_fitted_arrays(pm.main_histogram)
+    dataset["_native_q_fit_intervals"] = GSASDataExtractor.get_q_fit_intervals(pm.main_histogram)
     q = np.asarray(arrays.get("Q", []), dtype=float)
     y = np.asarray(arrays.get("yobs", []), dtype=float)
     pm.save_project()
@@ -1777,6 +1779,8 @@ def _nudge_unique_phases(
     y: np.ndarray,
     cfg: dict,
     out_dir: Path,
+    *,
+    valid_q_intervals=None,
 ) -> pd.DataFrame:
     stage4 = cfg.get("stage4") or {}
     rapid_cfg = cfg.get("rapid_hypothesis") or {}
@@ -1864,6 +1868,7 @@ def _nudge_unique_phases(
             radiation=str(stage4.get("radiation", "neutron")),
             score_q_max=float(stage4.get("score_q_max", 8.0)),
             xray_doublet_config=doublet_spec.to_dict(),
+            valid_q_intervals=valid_q_intervals,
         )
     except Exception as exc:
         nudger = None
@@ -3507,7 +3512,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     refill_attempt = 0
     while True:
         attempt_label = "initial" if refill_attempt == 0 else f"refill_{refill_attempt}"
-        nudge_df = _nudge_unique_phases(beam64, db_loader, q, signal, cfg, scenario_dir)
+        nudge_df = _nudge_unique_phases(beam64, db_loader, q, signal, cfg, scenario_dir,
+                                      valid_q_intervals=dataset.get("_native_q_fit_intervals"))
         nudge_df.to_csv(scenario_dir / "nudge_results.csv", index=False)
         if refill_attempt:
             nudge_df.to_csv(scenario_dir / f"nudge_results_{attempt_label}.csv", index=False)

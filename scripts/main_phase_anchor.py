@@ -1097,7 +1097,11 @@ def run_main_phase_prenudge_if_needed(
     audit["attempted"] = True
     try:
         from lattice_nudger import LatticeNudger
+        from gsas_main_phase_refiner import GSASDataExtractor
 
+        native_histogram = getattr(main_ref, "histogram", None)
+        valid_q_intervals = (GSASDataExtractor.get_q_fit_intervals(native_histogram)
+                             if native_histogram is not None else None)
         nudger = LatticeNudger(
             db_loader,
             wavelength_ang=float(s4_cfg.get("wavelength", 1.54)),
@@ -1107,6 +1111,7 @@ def run_main_phase_prenudge_if_needed(
             lattice_tiebreak_score_tol=float(s4_cfg.get("lattice_tiebreak_score_tol", 5e-4)),
             xray_doublet_config=xray_doublet_config or {"enabled": False},
             random_seed=int(s4_cfg.get("seed", 0)),
+            valid_q_intervals=valid_q_intervals,
         )
         out_cif_dir = Path(out_cif_dir)
         out_cif_dir.mkdir(parents=True, exist_ok=True)

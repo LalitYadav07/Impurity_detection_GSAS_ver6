@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from scripts import gsas_main_phase_refiner as refiner
+from scripts import lattice_nudger as nudger
 from gpx_recipe.fit_domain import native_powder_fit_mask
 
 
@@ -124,3 +125,87 @@ def test_fitted_observation_count_matches_native_refinement(tmp_path, kind):
     assert counts, listing[-2500:]
     assert len(arrays["yobs"]) == int(counts[-1]) == 130
     assert arrays["x_native"][-1] == x[171]
+    intervals = refiner.GSASDataExtractor.get_q_fit_intervals(hist)
+    assert len(intervals) == 2
+    q = np.asarray(np.ma.getdata(hist.getdata("Q")))
+    assert intervals == sorted([(float(min(q[11:40])), float(max(q[11:40]))),
+                                (float(min(q[71:172])), float(max(q[71:172])))])
+
+
+@pytest.mark.parametrize("gap_kind", ["excluded", "zero_weight", "nonfinite", "masked"])
+@pytest.mark.parametrize("reverse_q", [False, True])
+def test_nudger_cannot_score_observations_in_a_native_gap(gap_kind, reverse_q):
+    x = np.linspace(1, 5, 401)
+    q = x[::-1] if reverse_q else x.copy()
+    residual = np.maximum(0., 1. - np.minimum(abs(q - 2), abs(q - 4)))
+    observed = np.ma.array(residual + 2., mask=False)
+    weights = np.ones(len(x))
+    gap = (x >= 2.1) & (x <= 3.9)
+    exclusions = []
+    if gap_kind == "excluded":
+        exclusions = [[2.1, 3.9]]
+    elif gap_kind == "zero_weight":
+        weights[gap] = 0
+    elif gap_kind == "nonfinite":
+        observed[gap] = np.nan
+    else:
+        observed.mask[gap] = True
+    hist = SimpleNamespace(data={"data": [{}, [x, observed, weights, np.full(len(x), 2.)]],
+                                 "Limits": [[1., 5.], [1., 5.], *exclusions]},
+                           getdata=lambda name: q if name == "Q" else 2 * np.pi / q)
+    fitted = refiner.GSASDataExtractor.get_fitted_arrays(hist)
+    intervals = refiner.GSASDataExtractor.get_q_fit_intervals(hist)
+    grid, target, _ = nudger._build_fixed_grid_and_residual(
+        fitted["Q"], fitted["residual"], valid_q_intervals=intervals)
+    plan = nudger._make_fft_plan(grid, .04)
+    plan["score_mask"] = nudger._q_interval_mask(grid, intervals)
+    gap_grid = (grid > 2.1) & (grid < 3.9)
+    assert not np.any(plan["score_mask"][gap_grid])
+    assert not np.any(target[gap_grid])
+    assert nudger._coslog_score_on_fixed_grid([3.], [1.], plan, target, 50., 1e-12) == 0
+    # Adding any amount of intensity in an unobserved gap may neither help nor
+    # penalize the same candidate's measured reflections.
+    score = nudger._coslog_score_on_fixed_grid([1.8], [1.], plan, target, 50., 1e-12)
+    with_gap = nudger._coslog_score_on_fixed_grid([1.8, 3.], [1., 5.], plan, target, 50., 1e-12)
+    assert with_gap == pytest.approx(score, abs=1e-12)
+
+
+def test_explicit_contiguous_domain_preserves_existing_nudger_score():
+    q = np.linspace(1, 5, 401)
+    residual = 1 + np.sin(q) ** 2
+    before = nudger._build_fixed_grid_and_residual(q, residual)
+    after = nudger._build_fixed_grid_and_residual(q, residual, valid_q_intervals=[(1, 5)])
+    for old, new in zip(before[:2], after[:2]):
+        np.testing.assert_array_equal(old, new)
+    plan = nudger._make_fft_plan(before[0], .04)
+    old_score = nudger._coslog_score_on_fixed_grid([1.8, 3.], [1., 2.], plan, before[1], 50., 1e-12)
+    plan["score_mask"] = nudger._q_interval_mask(after[0], [(1, 5)])
+    assert nudger._coslog_score_on_fixed_grid([1.8, 3.], [1., 2.], plan, after[1], 50., 1e-12) == old_score
+
+
+def test_nudger_retains_explicit_empty_domain_without_filling_observations():
+    grid, target, _ = nudger._build_fixed_grid_and_residual([1, 2], [5, 6], valid_q_intervals=[])
+    plan = nudger._make_fft_plan(grid, .04)
+    plan["score_mask"] = nudger._q_interval_mask(grid, [])
+    assert not np.any(target)
+    assert nudger._coslog_score_on_fixed_grid([.5], [1.], plan, target, 50., 1e-12) == 0
+
+
+def test_lattice_optimization_uses_native_gap_mask(monkeypatch, tmp_path):
+    from pymatgen.core import Lattice, Structure
+
+    q = np.linspace(1, 5, 401)
+    keep = (q < 2.1) | (q > 3.9)
+    residual = np.maximum(0., 1. - np.minimum(abs(q - 2), abs(q - 4)))
+    base = Structure(Lattice.cubic(4), ["Si"], [[0, 0, 0]])
+    engine = nudger.LatticeNudger(None, fast_peak_reposition=False,
+        valid_q_intervals=[(1, q[keep & (q < 3)][-1]), (q[keep & (q > 3)][0], 5)])
+    monkeypatch.setattr(engine, "_structure_for_pid", lambda _: base)
+    monkeypatch.setattr(engine, "_make_candidates_qsignature", lambda *a, **kw: [Lattice.cubic(4), Lattice.cubic(4.01)])
+    monkeypatch.setattr(engine.sim, "simulate_QI", lambda structure, **kw:
+                        (np.array([3. if structure.lattice.a < 4.005 else 1.8]), np.array([1.])))
+    monkeypatch.setattr(engine, "_write_nudged_cif", lambda *a, **kw: str(tmp_path / "synthetic.cif"))
+    result = engine.optimize_one("synthetic", q[keep], residual[keep],
+                                 out_cif_dir=str(tmp_path), allow_inner_parallel=False)
+    assert result.best_params["a"] == pytest.approx(4.01)
+    assert result.best_score > 0

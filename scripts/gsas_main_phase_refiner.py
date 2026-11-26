@@ -462,6 +462,27 @@ class GSASDataExtractor:
         return data
 
     @staticmethod
+    def get_q_fit_intervals(histogram) -> List[Tuple[float, float]]:
+        """Keep contiguous native observation runs distinct in Q-space.
+
+        A compressed coordinate vector alone cannot distinguish an excluded
+        region from ordinary nonuniform sampling. Derive the runs before
+        compression, using exactly the same native fit mask as the arrays.
+        """
+        from plot_payload import histogram_plot_arrays
+
+        native = histogram_plot_arrays(histogram)
+        q = np.asarray(np.ma.getdata(histogram.getdata("Q")), dtype=float)
+        fitted = native["fit_valid"]
+        if q.shape != fitted.shape or np.any(fitted & ~np.isfinite(q)):
+            raise ValueError("Native screening Q coordinates do not match the fitted domain")
+        indices = np.flatnonzero(fitted)
+        if not indices.size:
+            return []
+        runs = np.split(indices, np.flatnonzero(np.diff(indices) > 1) + 1)
+        return sorted((float(np.min(q[run])), float(np.max(q[run]))) for run in runs)
+
+    @staticmethod
     def get_residual_both_spaces(histogram) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Get residual in both native and Q coordinates.

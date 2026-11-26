@@ -1447,6 +1447,7 @@ class UnifiedPipeline:
                     lattice_tiebreak_score_tol=s4_cfg.get("lattice_tiebreak_score_tol", 5e-4),
                     xray_doublet_config=xray_doublet_cfg,
                     random_seed=s4_cfg.get("seed", 0),
+                    valid_q_intervals=s4_cfg.get("valid_q_intervals"),
                 )
                 new_results = nudger.optimize_many(
                     missing,
@@ -2176,6 +2177,10 @@ class UnifiedPipeline:
         anchor_ids: Optional[List[str]] = None,
     ) -> Tuple[List[Any], Dict[str, str], Dict[str, float], Dict[str, Any]]:
 
+        # Retain native gaps when residual samples are resampled by the nudger.
+        s4_cfg = dict(s4_cfg)
+        s4_cfg["valid_q_intervals"] = GSASDataExtractor.get_q_fit_intervals(pm_for_tools.main_histogram)
+
         # Re-derive paths for internal use (or accept from ds_cfg)
         diagnostics_dir = ds_cfg.get("diagnostics_path") or str(Path(work_dir) / "Diagnostics")
         diag_resid_dir = ds_cfg.get("diag_resid_path") or str(Path(diagnostics_dir) / "Residual_Scanning")
@@ -2569,6 +2574,7 @@ class UnifiedPipeline:
                 lattice_tiebreak_score_tol=s4_cfg.get("lattice_tiebreak_score_tol", 5e-4),
                 xray_doublet_config=xray_doublet_cfg,
                 random_seed=s4_cfg.get("seed", 0),
+                valid_q_intervals=s4_cfg.get("valid_q_intervals"),
             )
             stage4_results = nudger.optimize_many(
                 phase_ids, Q, residual_Q,
@@ -3818,6 +3824,7 @@ class UnifiedPipeline:
                                 lattice_tiebreak_score_tol=float(s4_cfg.get("lattice_tiebreak_score_tol", 5e-4)),
                                 xray_doublet_config=main_xray_doublet_cfg,
                                 random_seed=int(s4_cfg.get("seed", 0)),
+                                valid_q_intervals=GSASDataExtractor.get_q_fit_intervals(main_ref.histogram),
                             )
                             nudge_result = nudger.optimize_cif(
                                 main_cif,

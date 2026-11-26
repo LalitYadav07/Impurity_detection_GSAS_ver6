@@ -583,29 +583,64 @@ def _render_with_plan(Q_peaks: np.ndarray, I_peaks: np.ndarray, plan) -> np.ndar
     conv = np.fft.irfft(F_delta * F_kern, nfft)
     return conv[start:start+n]
 
-def _build_fixed_grid_and_residual(Q_res, R_res, ngrid=2048):
+def _q_interval_mask(q, intervals):
+    mask = np.zeros(np.asarray(q).shape, dtype=bool)
+    for lo, hi in intervals:
+        mask |= (q >= lo) & (q <= hi)
+    return mask
+
+
+def _validated_q_intervals(intervals):
+    if intervals is None:
+        return None
+    result = []
+    for pair in intervals:
+        values = np.asarray(pair, dtype=float)
+        if values.shape != (2,) or not np.all(np.isfinite(values)) or values[0] > values[1]:
+            raise ValueError("Scoring intervals must be finite increasing Q pairs")
+        result.append((float(values[0]), float(values[1])))
+    return tuple(sorted(result))
+
+
+def _build_fixed_grid_and_residual(Q_res, R_res, ngrid=2048, valid_q_intervals=None):
     """Optimized grid building with caching"""
     Qr, Rr = _prepare_residual_for_interp(Q_res, R_res)
+    intervals = _validated_q_intervals(valid_q_intervals)
+    if intervals is not None:
+        selected = _q_interval_mask(Qr, intervals)
+        Qr, Rr = Qr[selected], Rr[selected]
     if Qr.size == 0:
         return np.linspace(0.0, 1.0, ngrid), np.zeros(ngrid), "R+"
 
     qmin, qmax = float(np.min(Qr)), float(np.max(Qr))
     q_grid = np.linspace(qmin, qmax, int(ngrid))
-    Rg = np.interp(q_grid, Qr, Rr, left=0.0, right=0.0)
+    if intervals is None:
+        supported = np.ones(q_grid.shape, dtype=bool)
+        Rg = np.interp(q_grid, Qr, Rr, left=0.0, right=0.0)
+    else:
+        supported = _q_interval_mask(q_grid, intervals)
+        Rg = np.zeros(q_grid.shape)
+        for lo, hi in intervals:
+            source = (Qr >= lo) & (Qr <= hi)
+            target = (q_grid >= lo) & (q_grid <= hi)
+            if np.any(source):
+                Rg[target] = np.interp(q_grid[target], Qr[source], Rr[source])
 
     # Vectorized positive/absolute computation
     Rp = np.maximum(Rg, 0.0)
     Ra = np.abs(Rg)
 
-    abs_mass = float(np.sum(Ra))
-    pos_mass = float(np.sum(Rp))
+    abs_mass = float(np.sum(Ra[supported]))
+    pos_mass = float(np.sum(Rp[supported]))
 
     if abs_mass <= 1e-12:
         return q_grid, np.zeros_like(q_grid), "R+"
 
     use_abs = (pos_mass / abs_mass) < _SCORE_POSRATIO_GLOBAL
     Ruse = Ra if use_abs else Rp
-    return q_grid, _minmax(Ruse), ("|R|" if use_abs else "R+")
+    normalized = np.zeros(q_grid.shape)
+    normalized[supported] = _minmax(Ruse[supported])
+    return q_grid, normalized, ("|R|" if use_abs else "R+")
 
 
 def _clip_q_residual_window(
@@ -633,6 +668,22 @@ def _clip_q_residual_window(
 def _coslog_score_on_fixed_grid(Q_sim, I_sim, plan, Rvec, alpha: float, eps: float) -> float:
     """Optimized scoring using numba if available"""
     Is = _render_with_plan(Q_sim, I_sim, plan)
+    score_mask = plan.get("score_mask")
+    if score_mask is not None and not np.all(score_mask):
+        # FFT convolution leaves roundoff outside the finite Gaussian kernel.
+        # Use its exact discrete support, not an intensity cutoff, so an
+        # entirely unobserved reflection cannot normalize numerical noise.
+        support = np.zeros(Is.shape, dtype=bool)
+        peaks = np.asarray(Q_sim, dtype=float)
+        intensities = np.asarray(I_sim, dtype=float)
+        valid = np.isfinite(peaks) & np.isfinite(intensities) & (intensities > 0)
+        indices = np.rint((peaks[valid] - plan["q0"]) / plan["dq"]).astype(np.int64)
+        for index in indices[(indices >= 0) & (indices < plan["n"])]:
+            lo = max(0, int(index) - plan["start"])
+            hi = min(plan["n"], int(index) - plan["start"] + plan["k"])
+            support[lo:hi] = True
+        Is = np.where(support, Is, 0.0)[score_mask]
+        Rvec = np.asarray(Rvec)[score_mask]
 
     if HAS_NUMBA:
         return _coslog_score_core_numba(Is, Rvec, alpha, eps)
@@ -1240,7 +1291,8 @@ class LatticeNudger:
                  fast_peak_reposition: Optional[bool] = None,
                  lattice_tiebreak_score_tol: Optional[float] = DEFAULT_LATTICE_TIEBREAK_SCORE_TOL,
                  xray_doublet_config: Optional[Dict] = None,
-                 random_seed: Optional[int] = DEFAULT_STAGE4_SEED):
+                 random_seed: Optional[int] = DEFAULT_STAGE4_SEED,
+                 valid_q_intervals=None):
         self.db = db_loader
         self.radiation = str(radiation).lower()
         self.sim = NDSticksQ(wavelength_ang, two_theta_range, radiation=radiation)
@@ -1259,6 +1311,7 @@ class LatticeNudger:
         self.fast_peak_reposition = bool(fast_peak_reposition)
         self.lattice_tiebreak_score_tol = max(0.0, float(lattice_tiebreak_score_tol or 0.0))
         self.random_seed = random_seed
+        self.valid_q_intervals = _validated_q_intervals(valid_q_intervals)
         # Add structure caching to avoid repeated database loads
         self._structure_cache = {}
         self._cif_source_cache = {}
@@ -1606,8 +1659,12 @@ class LatticeNudger:
                 f"Stage-4 scoring Q-window: kept {Q_score.size}/{np.asarray(Q_res).size} "
                 f"points up to Q={float(q_limit):.3f} A^-1"
             )
-        q_grid, Rvec, rlabel = _build_fixed_grid_and_residual(Q_score, R_score, ngrid=ngrid_fixed)
+        intervals = getattr(self, "valid_q_intervals", None)
+        q_grid, Rvec, rlabel = _build_fixed_grid_and_residual(
+            Q_score, R_score, ngrid=ngrid_fixed, valid_q_intervals=intervals)
         plan = _make_fft_plan(q_grid, self._fwhm_Q)
+        if intervals is not None:
+            plan["score_mask"] = _q_interval_mask(q_grid, intervals)
         # Q margin to ensure tails of peaks contribute
         sigma = float(self._fwhm_Q) / 2.354820045
         q_margin = float(os.environ.get("STAGE4_Q_MARGIN_SIGMAS", "6.0"))

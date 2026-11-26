@@ -972,6 +972,7 @@ def stage0_bootstrap_no_cif(
         db_loader,
         wavelength_ang=s4_cfg["wavelength"],
         two_theta_range=s4_cfg["two_theta_range"],
+        valid_q_intervals=GSASDataExtractor.get_q_fit_intervals(hist),
     )
     s4_res = nudger.optimize_many(
         phase_ids, Q, residual_Q,
