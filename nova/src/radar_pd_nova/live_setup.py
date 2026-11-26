@@ -77,6 +77,10 @@ class LiveSetupMixin:
         state.live_setup_panels = [0]
         state.live_launch_busy = False
         state.live_saved_configuration_id = ""
+        state.live_model_sample_id = ""
+        state.live_model_library_id = None
+        state.live_model_main_id = None
+        state.live_model_acquisition_ids = []
         state.live_test_bank = None
         state.live_test_bank_options = []
         state.live_test_message = ""
@@ -109,6 +113,7 @@ class LiveSetupMixin:
         ]
         fields += ["live_configuration_source", "powgen_database_dataset_id"]
         self.server.state.change(*fields)(self._live_setup_changed)
+        self._clear_shared_main_on_sample_change()
 
     def _live_setup_changed(self, **_):
         state = self.server.state
@@ -182,6 +187,87 @@ class LiveSetupMixin:
                 f"{self._live_adapter().name} requires neutron {self._live_adapter().instrument_mode} settings"
             )
         return config
+
+    def _clear_shared_main_on_sample_change(self):
+        state = self.server.state
+        selection = (getattr(state, "live_beamline", None), getattr(state, "powgen_ipts", None),
+            getattr(state, "powgen_processing_scope", None),
+            tuple(sorted(getattr(state, "powgen_processing_sample_ids", []) or [])))
+        previous = getattr(self, "_shared_main_sample_selection", None)
+        self._shared_main_sample_selection = selection
+        main_present = bool(getattr(state, "powgen_main_cif_path", None) or getattr(state, "powgen_main_cif_dataset_id", None))
+        if ((previous is None and main_present) or (previous is not None and selection != previous)) and not getattr(state, "powgen_monitoring", False):
+            state.powgen_main_cif_source = "none"
+            state.powgen_main_cif_path = ""
+            state.powgen_main_cif_dataset_id = ""
+            state.live_model_sample_id = ""
+            state.live_model_main_id = None
+
+    def assign_live_sample_models(self, **_):
+        """Record an explicit reviewed assignment from existing History inputs."""
+        state = self.server.state
+        if state.powgen_monitoring or state.live_launch_busy:
+            return
+        try:
+            from .sample_models import SampleModelAssignment, SampleModelAssignments
+            sample = str(state.live_model_sample_id or "")
+            if sample not in {str(row["value"]) for row in state.powgen_discovered_sample_options}:
+                raise ValueError("Choose a discovered sample ID before assigning its models")
+            library = state.live_model_library_id or None
+            main = state.live_model_main_id or None
+            if library and library not in {str(row["id"]) for row in state.history_archive_datasets}:
+                raise ValueError("Choose an allowed candidate library from the current History")
+            if main and main not in {str(row["id"]) for row in state.history_cif_datasets}:
+                raise ValueError("Choose a known main CIF from the current History")
+            if state.live_configuration_source == "history":
+                self._apply_live_configuration(self.service.load_configuration_dataset(state.powgen_configuration_dataset_id))
+            entry = SampleModelAssignment(instrument=self._live_adapter().instrument,
+                ipts=self._normalize_powgen_ipts(state.powgen_ipts), sample_id=sample,
+                candidate_library_dataset_id=library, known_main_cif_dataset_id=main,
+                acquisition_ids=tuple(state.live_model_acquisition_ids or []))
+            available = {str(row["value"]) for row in state.powgen_run_options
+                         if row.get("sample_id") == sample}
+            if any(value not in available for value in entry.acquisition_ids):
+                raise ValueError("Choose acquisition IDs from this sample's observed scan list")
+            if ":NAME:" in sample and not entry.acquisition_ids:
+                raise ValueError("This is a name-only label; select the observed acquisitions whose sample models you reviewed")
+            current = state.live_sample_models
+            rows = []
+            if current:
+                previous = SampleModelAssignments.model_validate(current)
+                if previous.galaxy_url != self.service.galaxy_url.rstrip("/") or previous.history_id != self.service.history_id:
+                    raise ValueError("Clear the previous History's assignments before assigning current datasets")
+                rows = [row for row in previous.assignments
+                        if (row.key, row.acquisition_ids) != (entry.key, entry.acquisition_ids)]
+            routing = SampleModelAssignments(galaxy_url=self.service.galaxy_url,
+                history_id=self.service.history_id, assignments=[*rows, entry])
+            state.live_sample_models = routing.model_dump(mode="json")
+            self._live_setup_changed()
+        except (ValueError, TypeError) as exc:
+            state.error_message = str(exc)
+        state.flush()
+
+    def select_live_model_sample(self, value, **_):
+        state = self.server.state
+        state.live_model_sample_id = value or ""
+        match = next((entry for entry in (state.live_sample_models or {}).get("assignments", [])
+            if (entry["instrument"], entry["ipts"], entry["sample_id"]) ==
+            (self._live_adapter().instrument, "IPTS-" + str(state.powgen_ipts or "").upper().removeprefix("IPTS-"), value)
+            and not entry.get("acquisition_ids")), None)
+        state.live_model_library_id = match["candidate_library_dataset_id"] if match else None
+        state.live_model_main_id = match["known_main_cif_dataset_id"] if match else None
+        state.live_model_acquisition_ids = []
+        state.flush()
+
+    def clear_live_sample_models(self, **_):
+        state = self.server.state
+        if state.powgen_monitoring or state.live_launch_busy:
+            return
+        if state.live_configuration_source == "history":
+            self._apply_live_configuration(self.service.load_configuration_dataset(state.powgen_configuration_dataset_id))
+        state.live_sample_models = None
+        self._live_setup_changed()
+        state.flush()
 
     def _live_analysis_setup(self):
         locked = "powgen_monitoring || live_launch_busy"
@@ -368,6 +454,46 @@ class LiveSetupMixin:
             persistent_hint=True,
             update_modelValue=(self.update_live_post_analysis_selection, "[$event]"),
         )
+        self._sample_model_assignments_ui(locked)
+
+    def _sample_model_assignments_ui(self, locked):
+        with html.Details(classes="radar-soft-panel mb-2"):
+            html.Summary("Sample model assignments")
+            html.P("Assign each sample its allowed candidate library and optional known main CIF. An empty main keeps blind discovery within that library. Sample names and a low Rwp do not establish chemical identity. Assignments use datasets already saved in this History.", classes="radar-help-copy")
+            vuetify.VAutocomplete(label="Sample to assign", v_model=("live_model_sample_id",),
+                items=("powgen_discovered_sample_options",), item_title="title", item_value="value",
+                density="compact", variant="outlined", disabled=(locked,),
+                update_modelValue=(self.select_live_model_sample, "[$event]"))
+            vuetify.VAutocomplete(label="Allowed candidate library (empty = built-in catalog)",
+                v_model=("live_model_library_id",), items=("history_archive_datasets",),
+                item_title="display_name", item_value="id", clearable=True,
+                density="compact", variant="outlined", disabled=(locked,))
+            vuetify.VAutocomplete(v_show="(live_model_sample_id || '').includes(':NAME:')",
+                label="Reviewed acquisitions for this name-only label",
+                v_model=("live_model_acquisition_ids",),
+                items=("(powgen_run_options || []).filter(row => row.sample_id === live_model_sample_id)",),
+                item_title="title", item_value="value", multiple=True, chips=True,
+                density="compact", variant="outlined", disabled=(locked,))
+            vuetify.VAutocomplete(label="Known main CIF (empty = blind discovery)",
+                v_model=("live_model_main_id",), items=("history_cif_datasets",),
+                item_title="display_name", item_value="id", clearable=True,
+                density="compact", variant="outlined", disabled=(locked,))
+            vuetify.VBtn("Assign models to sample", click=self.assign_live_sample_models,
+                disabled=(locked + " || !live_model_sample_id",), variant="outlined", size="small")
+            vuetify.VBtn("Clear assignments", click=self.clear_live_sample_models,
+                disabled=(locked + " || !live_sample_models",), variant="text", size="small")
+            with html.Table(v_if="live_sample_models", classes="radar-table"):
+                with html.Thead():
+                    with html.Tr():
+                        for title in ("Sample scope", "Acquisitions", "Allowed library", "Known main"):
+                            html.Th(title)
+                with html.Tbody():
+                    with html.Tr(v_for="assignment in (live_sample_models ? live_sample_models.assignments : [])"):
+                        html.Td("{{ assignment.instrument }} / {{ assignment.ipts }} / {{ assignment.sample_id }}")
+                        html.Td("{{ (assignment.acquisition_ids || []).join(', ') || 'Matching sample ID' }}")
+                        html.Td("{{ assignment.candidate_library_dataset_id || 'Built-in catalog' }}")
+                        html.Td("{{ assignment.known_main_cif_dataset_id || 'Blind discovery' }}")
+            html.P("Without assignments, select exactly one sample; the shared library and main CIF apply only to it. With assignments, shared model inputs are ignored and unassigned samples stop for review.", classes="radar-help-copy")
 
     def _apply_live_configuration(self, config):
         if config.radiation.value != "neutron" or config.instrument_mode not in {'auto', self._live_adapter().instrument_mode}:
@@ -610,7 +736,8 @@ class LiveSetupMixin:
             return None
         checked = self._powgen_preflight_signature()
         config = self._live_checked_configuration.model_copy(deep=True)
-        library = deepcopy(self._live_library_selection())
+        library = ({"dataset_id": None, "path": None, "label": "Per-sample model assignments"}
+                   if config.sample_models else deepcopy(self._live_library_selection()))
         adapter = self._live_adapter()
         values = {
             key: deepcopy(getattr(state, key, None))
@@ -644,6 +771,8 @@ class LiveSetupMixin:
             )
         }
         selected_samples = self._powgen_processing_ids()
+        if config.sample_models:
+            values["powgen_main_cif_source"] = "none"
         selected_banks = self._powgen_processing_bank_ids()
         if test:
             bank = values["live_test_bank"]

@@ -61,6 +61,7 @@ def configuration_form_values(config: AnalysisConfig) -> dict[str, Any]:
 
 
 CONFIG_FORM_FIELDS = (
+    "sample_models",
     "library_review",
     "analysis_mode",
     "background_mode",
@@ -222,8 +223,13 @@ def configuration_from_form(state: Any) -> AnalysisConfig:
         )
         or (state.main_cif_source == "ipts" and bool(state.facility_main_cif_path))
     )
+    sample_models = getattr(state, "sample_models", None)
+    if sample_models:
+        has_main_phase = any(entry.get("known_main_cif_dataset_id")
+                             for entry in sample_models.get("assignments", []))
     profile_terms = getattr(state, 'tof_profile_terms', None)
     values: dict[str, Any] = {
+        "sample_models": getattr(state, "sample_models", None),
         'library_review':review,
         "mode": state.analysis_mode,
         "radiation": state.radiation,

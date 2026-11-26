@@ -408,6 +408,48 @@ class PowgenWatchController:
         suffix=f'_retry{generation}' if generation else ''
         return f"{self.settings.ipts}_{run.run_id}{suffix}"
 
+    def _sample_model_binding(self, run):
+        """Freeze the model choice from rechecked source identity before staging."""
+        from .sample_models import bind_sample_models, single_sample_cohort
+        if self._configuration is None:
+            with self._configuration_lock:
+                if self._configuration is None:
+                    self._configuration = self.service.load_configuration_dataset(
+                        self.settings.configuration_dataset_id)
+        metadata = self.sample_index.identity(run)
+        discovered = run.scan_metadata.get("sample_id")
+        if discovered and discovered != metadata.get("sample_id"):
+            raise ValueError("Source sample identity changed after discovery; check a new watch before choosing models")
+        selected = self.settings.selected_sample_ids
+        if self._configuration.sample_models is None and selected is None:
+            # Preserve old single-sample All watches, then pin their sample.
+            # A later different sample must stop, even after checkpoint restore.
+            with self._configuration_lock:
+                saved = self.state.sample_model_scope
+                if saved:
+                    if (saved.get("instrument"), saved.get("ipts")) != (self.settings.instrument, self.settings.ipts):
+                        raise ValueError("Saved sample model scope belongs to another experiment")
+                    if (not isinstance(saved.get("sample_id"), str) or not saved["sample_id"]
+                            or saved.get("mode") != "single_sample"
+                            or saved.get("candidate_library_dataset_id") != self.settings.database_dataset_id
+                            or saved.get("known_main_cif_dataset_id") != self.settings.main_cif_dataset_id):
+                        raise ValueError("Saved single-sample model binding changed; review a new watch")
+                    selected = (saved["sample_id"],)
+                else:
+                    cohort = {r.run_id: r for phase in (self.state.discovered, self.state.submitted,
+                        self.state.completed, self.state.failed) for r in phase.values()}
+                    cohort[run.run_id] = run
+                    selected = single_sample_cohort(self.sample_index.identity(r) for r in cohort.values())
+        binding = bind_sample_models(self._configuration,
+            instrument=self.settings.instrument, ipts=self.settings.ipts,
+            metadata=metadata, selected_sample_ids=selected,
+            galaxy_url=getattr(self.service, "galaxy_url", ""), history_id=self.service.history_id,
+            shared_library=self.settings.database_dataset_id, shared_main=self.settings.main_cif_dataset_id,
+            acquisition_id=run.run_id)
+        if self._configuration.sample_models is None:
+            self.state.sample_model_scope = binding.receipt()
+        return binding
+
     def _list_source_directory(self):
         return bounded_directory_listing(self.source_directory)
 
@@ -1191,12 +1233,7 @@ class PowgenWatchController:
                 raise ValueError(f"{run.run_id} was already submitted outside this controller instance")
             return existing
 
-        if self._configuration is None:
-            with self._configuration_lock:
-                if self._configuration is None:
-                    self._configuration = self.service.load_configuration_dataset(
-                        self.settings.configuration_dataset_id
-                    )
+        model_binding = self._sample_model_binding(run)
         config = self._configuration
         if config.radiation.value != "neutron" or config.instrument_mode == "cw":
             raise ValueError("POWGEN requires a neutron time-of-flight configuration")
@@ -1251,8 +1288,9 @@ class PowgenWatchController:
             bank=str(run.bank or run.scan_metadata.get("source_bank") or setup.banks[0].bank),
             run_number=str(run.run_number),
             instrument_dataset_id=profile_dataset_id,
-            main_cif_dataset_id=self.settings.main_cif_dataset_id,
-            database_dataset_id=self.settings.database_dataset_id,
+            main_cif_dataset_id=model_binding.known_main_cif_dataset_id,
+            database_dataset_id=model_binding.candidate_library_dataset_id,
+            sample_id=model_binding.sample_id,
             facility_root="/SNS",
             instrument="PG3",
             ipts=self.settings.ipts,
@@ -1269,6 +1307,7 @@ class PowgenWatchController:
         if not record.galaxy_job_id:
             raise RuntimeError(f"Galaxy did not acknowledge {run.run_id}")
         record.provenance["powgen_bank"] = bank_provenance
+        record.provenance["sample_model_assignment"] = model_binding.receipt()
         return record
 
     def _check_discovered_setup(self, run, setup):
@@ -1357,10 +1396,19 @@ class PowgenWatchController:
             if inputs is not None
             else str(record.input_dataset_ids.get("instrument") or "")
         )
+        try:
+            model_binding = self._sample_model_binding(run)
+        except (OSError, ValueError):
+            return False
+        if inputs is not None and inputs.sample_id and inputs.sample_id != model_binding.sample_id:
+            return False
+        saved_binding = record.provenance.get("sample_model_assignment")
+        if saved_binding and saved_binding != model_binding.receipt():
+            return False
         matches_custom_profile = self._profile_matches_watch(record, run, candidate_instrument)
         return (
-            candidate_database == str(self.settings.database_dataset_id or "")
-            and candidate_main == str(self.settings.main_cif_dataset_id or "")
+            candidate_database == str(model_binding.candidate_library_dataset_id or "")
+            and candidate_main == str(model_binding.known_main_cif_dataset_id or "")
             and matches_custom_profile
         )
 

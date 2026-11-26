@@ -17,6 +17,7 @@ _DELIVERY_FIELDS = (
     "ipts",
     "run_number",
     "bank",
+    "sample_id",
     "data_relative_path",
     "instrument_relative_path",
     "main_cif_relative_path",
@@ -86,6 +87,7 @@ def config_from_contract(payload: dict[str, Any]) -> AnalysisConfig:
     full = payload.get("full") or {}
     rapid = payload.get("rapid") or {}
     return AnalysisConfig(
+        sample_models=payload.get("sample_models"),
         post_analysis=payload.get("post_analysis", {}),
         library_review=payload.get('library_review',{}),
         scan_interpretation=payload.get("scan_interpretation", {}),

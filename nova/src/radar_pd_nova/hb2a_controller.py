@@ -374,24 +374,23 @@ class Hb2aWatchController(PowgenWatchController):
         if plan is None:
             if run.run_id in self.records:return self.records[run.run_id]
             raise ValueError('Run already acknowledged outside this controller')
-        if self._configuration is None:
-            with self._configuration_lock:
-                if self._configuration is None:
-                    self._configuration=self.service.load_configuration_dataset(self.settings.configuration_dataset_id)
+        model_binding=self._sample_model_binding(run)
         if self._configuration.radiation.value!='neutron' or self._configuration.instrument_mode=='tof':
             raise ValueError('HB-2A requires neutron CW settings, not TOF or Cu K-alpha')
         data,profile,receipt=self._prepare_run(run)
         profile_id=self._profile_dataset_id(profile)
         config=self._configuration.model_copy(update={'run_name':self._run_name(run),'instrument_mode':'cw'})
         inputs=InputSelection(source=InputSource.UPLOAD,data_path=str(data),bank='1',run_number=str(run.run_number),
-            instrument_dataset_id=profile_id,main_cif_dataset_id=self.settings.main_cif_dataset_id,
-            database_dataset_id=self.settings.database_dataset_id,facility_root='/HFIR',instrument='HB2A',ipts=self.settings.ipts,
+            instrument_dataset_id=profile_id,main_cif_dataset_id=model_binding.known_main_cif_dataset_id,
+            database_dataset_id=model_binding.candidate_library_dataset_id,sample_id=model_binding.sample_id,
+            facility_root='/HFIR',instrument='HB2A',ipts=self.settings.ipts,
             data_relative_path=f'{self.settings.subfolder}/{Path(run.source_path).name}')
         snapshot=self.service.create_submission_snapshot(config,inputs,idempotency_token=plan.idempotency_key,
             output_profile='monitor',prepared_dataset_ids={'configuration':self.settings.configuration_dataset_id})
         record=self._submit_live_snapshot(run,snapshot)
         if not record.galaxy_job_id:raise RuntimeError(f'Galaxy did not acknowledge {run.run_id}')
         record.provenance[self.bank_provenance_key]=receipt
+        record.provenance['sample_model_assignment']=model_binding.receipt()
         return record
 
     def _profile_matches_watch(self,record,run,candidate_instrument):

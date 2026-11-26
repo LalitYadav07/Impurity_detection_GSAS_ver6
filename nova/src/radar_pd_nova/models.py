@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .post_analysis import PostAnalysisSettings
 from .scan_interpretation import InterpretationSettings
+from .sample_models import SampleModelAssignments
 
 
 class AnalysisMode(str, Enum):
@@ -90,6 +91,7 @@ class InputSelection(BaseModel):
     ipts: str | None = None
     run_number: int | None = None
     bank: str | None = None
+    sample_id: str | None = None
     data_relative_path: str | None = None
     instrument_relative_path: str | None = None
     main_cif_relative_path: str | None = None
@@ -140,6 +142,7 @@ class AnalysisConfig(BaseModel):
     instrument_mode: Literal["auto", "cw", "tof"] = "auto"
     sample_elements: list[str] = Field(min_length=1)
     library_review: dict[str, Any] = Field(default_factory=dict)
+    sample_models: SampleModelAssignments | None = None
 
     @field_validator('library_review')
     @classmethod
@@ -281,6 +284,7 @@ class AnalysisConfig(BaseModel):
         return {
             "$schema": "radar-pd-config/v1",
             "library_review": {key:value for key,value in self.library_review.items() if key!='source_key'},
+            "sample_models": self.sample_models.model_dump(mode="json") if self.sample_models else None,
             "post_analysis": self.post_analysis.model_dump(mode="json"),
             "scan_interpretation": self.scan_interpretation.model_dump(mode="json"),
             "created_utc": datetime.now(timezone.utc).isoformat(),

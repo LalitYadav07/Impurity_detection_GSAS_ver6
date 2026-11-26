@@ -848,6 +848,7 @@ def test_nomad_inline_setup_keeps_physical_and_profile_banks_distinct(
             "available_banks": [5],
             "scan_count": 1,
             "message": "Supplied profile reviewed",
+            "metadata_resolution": [{"run_number":138719, "status":"resolved", "sample_id":"66546"}],
         }
 
     monkeypatch.setitem(

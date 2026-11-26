@@ -646,6 +646,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.library_builder_decision_token = ""
         state.library_builder_failure_search = ""
         state.library_review = {}
+        state.sample_models = None
         state.library_review_source = ''
         state.library_review_preview = {}
         state.library_review_loading = False
@@ -1947,7 +1948,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     density="compact", variant="outlined",
                     disabled=("powgen_monitoring || powgen_sample_loading",),
                     no_data_text="No sample IDs found. Refresh sample IDs after entering the IPTS.",
-                    hint=("live_beamline === 'HB2A' ? 'Labels are scoped to their SPICE experiment. Review titles when names are reused for different specimens.' : 'Only matching samples are processed, including later scans. Scans without a readable ID require All samples.'",),
+                    hint=("live_beamline === 'HB2A' ? 'Labels are scoped to their SPICE experiment. Review titles when names are reused for different specimens.' : 'Only source-verified matching samples are processed. Multiple samples require explicit model assignments below.'",),
                     persistent_hint=True,
                 )
                 vuetify.VSelect(
@@ -5581,6 +5582,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
 
     def _powgen_processing_changed(self, **_: Any) -> None:
         state = self.server.state
+        self._clear_shared_main_on_sample_change()
         self._sync_powgen_dashboard_provenance()
         state.powgen_preflight_ready = False
         state.powgen_preflight_status = "idle"
@@ -5944,7 +5946,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 contract = configuration.portable_contract()
                 contract.pop("created_utc", None)
                 state.powgen_configuration_yaml = yaml.safe_dump(contract, sort_keys=False)
-            library = self._live_library_selection()
+            library = ({"dataset_id": None, "path": None, "label": "Per-sample model assignments"}
+                       if configuration.sample_models else self._live_library_selection())
 
             backfill_mode = str(state.powgen_backfill_mode or "latest_5")
             if backfill_mode not in _POWGEN_BACKFILL_LIMITS:
@@ -5973,7 +5976,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             elif instrument_source != "automatic":
                 raise ValueError(f"Unsupported instrument-profile source: {instrument_source}")
 
-            main_source = str(state.powgen_main_cif_source or "none")
+            main_source = "none" if configuration.sample_models else str(state.powgen_main_cif_source or "none")
             if main_source == "computer":
                 main_path = Path(str(state.powgen_main_cif_path or ""))
                 if not main_path.is_file() or main_path.suffix.lower() != ".cif":
@@ -6041,6 +6044,12 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 state.powgen_preflight_message = "Inputs changed during the experiment check. Check the current selection again."
                 state.flush()
                 return False
+            from .sample_models import check_model_selection
+            model_scope = check_model_selection(configuration,
+                instrument=self._live_adapter().instrument, ipts=ipts,
+                selected_sample_ids=self._powgen_processing_ids(),
+                galaxy_url=self.service.galaxy_url, history_id=self.service.history_id,
+                cohort_metadata=result.get("metadata_resolution", []))
             state.nomad_quality_notices = result.get("quality_notices", []) if self._live_adapter().instrument != "PG3" else []
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])
@@ -6101,6 +6110,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.powgen_preflight_details = [
                 {"label": "Read-only source", "value": state.powgen_source_directory},
                 {"label": "Samples to process", "value": ", ".join(self._powgen_processing_ids() or ()) or "All samples"},
+                {"label": "Sample model scope", "value": model_scope},
                 {"label": "Run review", "value": run_review_summary(result)},
                 {"label": "Bank analyses", "value": f"{result.get('analysis_count', 0)}; selected source banks {list(preflight_arguments['selected_banks']) if preflight_arguments['selected_banks'] is not None else result.get('available_banks', [])}; each bank is analyzed separately"},
                 {

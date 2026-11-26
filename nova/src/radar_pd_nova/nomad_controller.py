@@ -325,9 +325,7 @@ class NomadWatchController(PowgenWatchController):
         if plan is None:
             if run.run_id in self.records:return self.records[run.run_id]
             raise ValueError('Run already submitted outside this controller')
-        if self._configuration is None:
-            with self._configuration_lock:
-                if self._configuration is None:self._configuration=self.service.load_configuration_dataset(self.settings.configuration_dataset_id)
+        model_binding=self._sample_model_binding(run)
         if self._configuration.radiation.value!='neutron' or self._configuration.instrument_mode=='cw':
             raise ValueError('NOMAD requires a neutron TOF configuration')
         data,profile,receipt=self._prepare_run(run)
@@ -341,7 +339,8 @@ class NomadWatchController(PowgenWatchController):
         config=self._configuration.model_copy(update={'run_name':self._run_name(run),'instrument_mode':'tof'})
         inputs=InputSelection(source=InputSource.UPLOAD,data_path=str(data),bank=str(receipt['source_bank']),
             run_number=str(run.run_number),instrument_dataset_id=profile_id,
-            main_cif_dataset_id=self.settings.main_cif_dataset_id,database_dataset_id=self.settings.database_dataset_id,
+            main_cif_dataset_id=model_binding.known_main_cif_dataset_id,database_dataset_id=model_binding.candidate_library_dataset_id,
+            sample_id=model_binding.sample_id,
             facility_root='/SNS',instrument='NOM',ipts=self.settings.ipts,
             data_relative_path=f'{self.settings.subfolder}/{Path(run.source_path).name}')
         snapshot=self.service.create_submission_snapshot(config,inputs,idempotency_token=self._submission_identity(run),
@@ -350,6 +349,7 @@ class NomadWatchController(PowgenWatchController):
         if not record.galaxy_job_id:raise RuntimeError(f'Galaxy did not acknowledge {run.run_id}')
         receipt['staged_profile_dataset_id']=profile_id
         record.provenance[self.bank_provenance_key]=receipt
+        record.provenance['sample_model_assignment']=model_binding.receipt()
         return record
 
     def _profile_matches_watch(self,record,run,candidate_instrument):

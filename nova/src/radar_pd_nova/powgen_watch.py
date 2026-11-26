@@ -233,6 +233,7 @@ class WatchState:
     interpretation_report: dict[str, Any] = field(default_factory=dict)
     transition_tracking: dict[str, Any] = field(default_factory=dict)
     discovery_cursor: dict[str, Any] = field(default_factory=dict)
+    sample_model_scope: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.history_id = _nonempty(self.history_id, "history_id")
@@ -280,6 +281,7 @@ class WatchState:
             "interpretation_report": self.interpretation_report,
             "transition_tracking": self.transition_tracking,
             "discovery_cursor": self.discovery_cursor,
+            "sample_model_scope": self.sample_model_scope,
             "updated_utc": self.updated_utc,
         }
 
@@ -309,6 +311,7 @@ class WatchState:
             interpretation_report=dict(value.get("interpretation_report") or {}),
             transition_tracking=dict(value.get("transition_tracking") or {}),
             discovery_cursor=dict(value.get('discovery_cursor') or {}),
+            sample_model_scope=dict(value.get('sample_model_scope') or {}),
             updated_utc=str(value.get("updated_utc") or _utc_now()),
             schema=str(value["$schema"]),
         )
