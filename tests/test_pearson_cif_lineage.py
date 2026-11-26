@@ -52,6 +52,10 @@ def fake_manager(monkeypatch, source, *, mutation=None):
     import gsas_core_infrastructure
 
     class Histogram:
+        def __init__(self):
+            signal=np.array([1.,3.,2.,5.])
+            self.data={'data':[{},[np.arange(4.)+1,signal,np.ones(4),signal.copy()]],
+                       'Limits':[[1.,4.],[1.,4.]]}
         def set_refinements(self, *_args, **_kwargs): pass
         def clear_refinements(self, *_args, **_kwargs): pass
         def getdata(self, name): return np.array([1., 3., 2., 5.])

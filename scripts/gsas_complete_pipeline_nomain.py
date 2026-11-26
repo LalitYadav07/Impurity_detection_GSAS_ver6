@@ -2752,6 +2752,9 @@ class UnifiedPipeline:
             tpm = GSASProjectManager(diag_resid_dir, f"template_pass{pass_ix}")
             if tpm.create_project():
                 if tpm.add_histogram(str(resid_xye), instprm_path, fmthint="xye"):
+                    from gsas_native_observations import restore_native_observations
+                    restore_native_observations(tpm.main_histogram, pearson_x_native,
+                                                pearson_residual_native, shift_positive=True)
                     tpm.save_project()
                 else:
                     template_gpx = None

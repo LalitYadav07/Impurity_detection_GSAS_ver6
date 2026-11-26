@@ -1734,6 +1734,14 @@ def compute_gsas_pearson_for_cif(
             raise RuntimeError("Failed to add histogram for Pearson")
         hist = pm.main_histogram
 
+    if using_override:
+        # Internal residuals are already native-center observations. Generic
+        # TOF XYE loading shifts them to midpoints and drops the last sample.
+        # Apply this to both fresh and cached-template paths before refinement.
+        from gsas_native_observations import restore_native_observations
+        restore_native_observations(hist, x_override, y_override,
+                                    shift_positive=shift_positive)
+
     # Limits & excludes
     try:
         if using_override:

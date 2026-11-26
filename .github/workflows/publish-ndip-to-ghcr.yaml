@@ -224,7 +224,8 @@ jobs:
             python -m pip install --quiet pytest==8.4.2 &&
             cd /validation &&
             PYTHONPATH="/opt/radar-pd/scripts:/opt/radar-pd:$PYTHONPATH" python -m pytest -q -o cache_dir=/tmp/pytest-cache \
-              /validation/tests/test_screening_fit_domain.py'
+              /validation/tests/test_screening_fit_domain.py \
+              /validation/tests/test_native_residual_observations.py'
 
       - name: Push Docker schema v2 manifests
         shell: bash

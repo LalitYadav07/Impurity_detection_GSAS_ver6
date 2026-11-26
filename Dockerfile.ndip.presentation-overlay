@@ -8,11 +8,13 @@ USER root
 COPY --chown=radar:radar scripts/ndip_runner.py /opt/radar-pd/scripts/ndip_runner.py
 COPY --chown=radar:radar scripts/gsas_complete_pipeline_nomain.py /opt/radar-pd/scripts/gsas_complete_pipeline_nomain.py
 COPY --chown=radar:radar scripts/gsas_main_phase_refiner.py /opt/radar-pd/scripts/gsas_main_phase_refiner.py
+COPY --chown=radar:radar scripts/gsas_native_observations.py /opt/radar-pd/scripts/gsas_native_observations.py
 COPY --chown=radar:radar scripts/plotly_interactive.py /opt/radar-pd/scripts/plotly_interactive.py
 RUN python -m py_compile \
         /opt/radar-pd/scripts/ndip_runner.py \
         /opt/radar-pd/scripts/gsas_complete_pipeline_nomain.py \
         /opt/radar-pd/scripts/gsas_main_phase_refiner.py \
+        /opt/radar-pd/scripts/gsas_native_observations.py \
         /opt/radar-pd/scripts/plotly_interactive.py
 
 USER radar
