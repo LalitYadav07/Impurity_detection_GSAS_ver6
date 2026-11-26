@@ -215,6 +215,17 @@ jobs:
             python -m pytest -q -o cache_dir=/tmp/pytest-cache \
               /validation/tests/test_analysis_worker_budget.py'
 
+      - name: Verify native observation masks used by phase discovery
+        shell: bash
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/validation:ro" \
+            -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
+            python -m pip install --quiet pytest==8.4.2 &&
+            cd /validation &&
+            PYTHONPATH="/opt/radar-pd/scripts:/opt/radar-pd:$PYTHONPATH" python -m pytest -q -o cache_dir=/tmp/pytest-cache \
+              /validation/tests/test_screening_fit_domain.py'
+
       - name: Push Docker schema v2 manifests
         shell: bash
         run: |
