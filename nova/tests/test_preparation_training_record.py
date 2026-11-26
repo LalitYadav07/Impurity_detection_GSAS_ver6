@@ -52,6 +52,28 @@ def test_old_cpu_metadata_does_not_invent_a_recorded_gpu_or_cpu_device(tmp_path)
     assert rows['Recorded training device']==rows['Portable inference']=='Not recorded'
 
 
+def test_training_record_shows_synthetic_quality_and_prior_without_claiming_experimental_accuracy(tmp_path):
+    value=metadata(classes=[5,12,148,155,160,166],test=dict(top1=.203,top5=.861),
+        prior_only_test=dict(top1=.366,top5=.949),
+        calibration_partition=dict(available=False,reason='Fewer than 5001 distinct clean fitting pairs'),
+        dataset=dict(partitions=dict(train=dict(clean_pairs=1922))))
+    library,entry,seen,_=fixture(tmp_path,value)
+    record=describe(library,entry);rows={r['label']:r['value'] for r in record['rows']}
+    assert rows['Synthetic test · top-1 / top-5']=='20.3% / 86.1% (6 classes)'
+    assert rows['Prior-only reference · top-1 / top-5']=='36.6% / 94.9%'
+    assert rows['Distinct clean training pairs']=='1,922'
+    assert rows['Independent calibration'].startswith('Unavailable: Fewer than 5001')
+    assert 'not experimental identification' in record['note']
+    assert 'discard candidates' in record['note']
+    assert seen==['entry/entry.json','entry/model.json']
+
+
+@pytest.mark.parametrize('score',[True,-.1,1.1,float('nan'),'0.9'])
+def test_invalid_recorded_accuracy_is_not_presented_as_a_percentage(tmp_path,score):
+    library,entry,_,_=fixture(tmp_path,metadata(test=dict(top1=score,top5=.9)))
+    with pytest.raises(ValueError):describe(library,entry)
+
+
 def test_completed_training_shows_unresolved_strain_supervision(tmp_path):
     library,entry,seen,_=fixture(tmp_path,metadata(mode_family_supervision=dict(
         native_points=9224,unresolved_native_strain_rows=528,strain_labels_from_out_of_basis_projection=False)))

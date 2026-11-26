@@ -22,6 +22,15 @@ def _duration(seconds):
     return f'{rounded} s' if rounded<60 else f'{rounded//60} min {rounded%60} s'
 
 
+def _accuracy_pair(metrics):
+    if not isinstance(metrics,dict):raise ValueError('Recorded accuracy must be an object')
+    values=[metrics.get(key) for key in ('top1','top5')]
+    if any(not _finite(value) or value>1 for value in values):
+        raise ValueError('Recorded accuracy is outside the probability range')
+    if values[0]>values[1]:raise ValueError('Recorded top-1 accuracy exceeds top-5 accuracy')
+    return ' / '.join(f'{value:.1%}' for value in values)
+
+
 def describe(library,entry):
     if _entry_detail(library,entry,{'structural-training','structural-ranking-model'}) is None:return None
     files=[a for a in entry.get('files',[]) if Path(a['path']).name=='model.json']
@@ -76,6 +85,37 @@ def describe(library,entry):
         dict(label='Trainer time',value='Not recorded' if seconds is None else _duration(seconds)),
         dict(label='Portable inference',value=portable)]
     note='Values reported by the saved model. Trainer time excludes Galaxy queue, image startup and data transfer.'
+    if model.get('test') is not None:
+        value=_accuracy_pair(model['test']);classes=model.get('classes')
+        if classes is not None:
+            if (not isinstance(classes,list) or not classes or
+                    any(type(number)is not int or not 1<=number<=230 for number in classes)
+                    or len(set(classes))!=len(classes)):
+                raise ValueError('Recorded target classes are invalid')
+            value+=f' ({len(classes)} classes)'
+        rows.append(dict(label='Synthetic test · top-1 / top-5',value=value))
+        if model.get('prior_only_test') is not None:
+            rows.append(dict(label='Prior-only reference · top-1 / top-5',
+                value=_accuracy_pair(model['prior_only_test'])))
+        note+=' These are held-out synthetic tests, not experimental identification. Completed training and a top-5 score do not authorize the model to discard candidates.'
+    dataset=model.get('dataset')
+    if isinstance(dataset,dict):
+        partitions=dataset.get('partitions')
+        training=partitions.get('train') if isinstance(partitions,dict) else None
+        if isinstance(training,dict) and 'clean_pairs' in training:
+            clean=training['clean_pairs']
+            if type(clean)is not int or clean<0:raise ValueError('Recorded clean training pair count is invalid')
+            rows.append(dict(label='Distinct clean training pairs',value=f'{clean:,}'))
+    calibration=model.get('calibration_partition')
+    if calibration is not None:
+        if not isinstance(calibration,dict) or type(calibration.get('available'))is not bool:
+            raise ValueError('Recorded calibration availability is invalid')
+        reason=calibration.get('reason')
+        if reason is not None and (not isinstance(reason,str) or len(reason)>1000):
+            raise ValueError('Recorded calibration reason is invalid')
+        value='Available synthetic reserve' if calibration['available'] else 'Unavailable'
+        if reason:value+=': '+reason
+        rows.append(dict(label='Independent calibration',value=value))
     supervision=model.get('mode_family_supervision')
     if isinstance(supervision,dict) and 'unresolved_native_strain_rows' in supervision:
         unresolved=supervision['unresolved_native_strain_rows'];total=supervision.get('native_points')

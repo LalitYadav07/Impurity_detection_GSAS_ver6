@@ -62,6 +62,7 @@ class PreparationMixin:
         self._prep_range_axis='native'
         self._prep_structural_scope_previous=None
         self._prep_search_library=None
+        self._prep_saved_records={}
         s=self.server.state
         values=dict(prep_busy=False,prep_operation='',prep_error='',prep_message='',prep_tab='new',
             prep_name='Experiment preparation',prep_parent_path='',prep_profile_path='',prep_bank_label='',
@@ -793,6 +794,14 @@ class PreparationMixin:
         async def refresh():
             store=self._preparation_store()
             rows=await asyncio.to_thread(store.saved)
+            s=self.server.state
+            previous=getattr(self,'_prep_saved_records',{}).get(s.prep_saved,{})
+            records={r['dataset_id']:r for r in rows}
+            if s.prep_saved and s.prep_saved not in records:
+                queue=previous.get('queue_id')
+                replacements=[r['dataset_id'] for r in rows if queue and r.get('queue_id')==queue]
+                s.prep_saved=replacements[0] if len(replacements)==1 else ''
+            self._prep_saved_records=records
             self.server.state.prep_saved_options=[dict(title=r['name'],value=r['dataset_id']) for r in rows]
             archives=await asyncio.to_thread(self.service.search_history_datasets,query='',limit=200,include_generated=True)
             self.server.state.prep_history_archives=[dict(title=r.get('name') or r['id'],value=r['id']) for r in archives
@@ -878,6 +887,7 @@ class PreparationMixin:
         self._prep_site_inputs={};self._prep_loaded_reference='';self._prep_return=None
         self._prep_profile_handoff=None;self._prep_range_axis='native';self._prep_input_revision+=1
         self._prep_search_library=None
+        self._prep_saved_records={}
         self._sync_prepared_reference_requirement()
         for key,value in self._prep_reset_values.items():
             setattr(self.server.state,key,copy.deepcopy(value))

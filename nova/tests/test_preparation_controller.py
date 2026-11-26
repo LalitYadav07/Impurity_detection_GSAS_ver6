@@ -363,6 +363,21 @@ def test_saved_preparation_search_finishes_with_count_and_next_action(app,monkey
         assert s.prep_message=='No saved preparation checkpoints were found in this History.'
 
 
+@pytest.mark.parametrize('same_queue',[True,False])
+def test_refresh_saved_preparation_replaces_or_clears_an_obsolete_selection(app,monkeypatch,same_queue):
+    application,store,_,_=app;s=application.server.state
+    current=[dict(name='Original',dataset_id='old-checkpoint',queue_id='same-queue')]
+    monkeypatch.setattr(store,'saved',lambda:list(current))
+    async def refresh():
+        application.refresh_preparation_saved()
+        await asyncio.gather(*tuple(application._prep_tasks))
+    asyncio.run(refresh());s.prep_saved='old-checkpoint'
+    current[:]=[dict(name='Latest',dataset_id='new-checkpoint',queue_id='same-queue' if same_queue else 'different-queue')]
+    asyncio.run(refresh())
+    assert s.prep_saved==('new-checkpoint' if same_queue else '')
+    assert all(row['value']!='old-checkpoint' for row in s.prep_saved_options)
+
+
 def test_recovery_explains_receipt_checks_before_starting_collection(app,monkeypatch):
     application,store,key,service=app;s=application.server.state
     s.prep_saved='checkpoint1';driver_messages=[]
