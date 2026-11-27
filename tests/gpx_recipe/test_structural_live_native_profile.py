@@ -9,16 +9,19 @@ from gpx_recipe.live.native_axis_view import NativeUnmaskedAxisView
 
 
 @pytest.mark.parametrize('array_storage',[False,True])
-def test_zero_observation_forward_call_never_generates_dummy_counts(array_storage):
+@pytest.mark.parametrize('complete_background_derivatives',[False,True])
+def test_zero_observation_forward_call_never_generates_dummy_counts(
+        array_storage,complete_background_derivatives):
     native=module.NativeReducedProfile.__new__(module.NativeReducedProfile)
     native.peak_memo=NativePeakMemo()
     native.axis_view=NativeUnmaskedAxisView(False)
+    native.complete_background_derivatives=complete_background_derivatives
     data=[np.arange(4.),np.zeros(4),np.ones(4),np.zeros(4),np.zeros(4),np.zeros(4)]
     if array_storage:data=np.array(data)
     histogram={'Data':data,'Reflection Lists':{}}
     native.histo_phases=[{'PWDR test':histogram},{},{},{}]
     native.parts=[('PWDR test',slice(None))];native.parms={};native.vary=[]
-    native.maps=SimpleNamespace(Dict2Map=lambda p:None)
+    native.maps=SimpleNamespace(Dict2Map=lambda p:None,GetDependentVars=lambda:[])
     native._constraint_signature=module.constraint_state_signature(native.maps)
     native._reflection_cell_keys=[];native._reflection_cell_signature=()
     native.refresh_cell_reflections=False;native.histdict={};native.controls={};native.pawley={}
