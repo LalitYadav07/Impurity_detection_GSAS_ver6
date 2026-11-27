@@ -168,6 +168,9 @@ jobs:
             /validation-tests/test_model_checkpoint_choices.py \
             /validation-tests/test_structural_display_labels.py \
             /validation-tests/test_symmetry_sources.py \
+            /validation-tests/test_model_history_on_demand.py \
+            /validation-tests/test_model_start_staging.py \
+            /validation-tests/test_model_start_durability.py \
             /validation-tests/test_parent_moments.py \
             /validation-tests/test_guided_refinement.py \
             /validation-tests/test_refinement_phase_labels.py \
