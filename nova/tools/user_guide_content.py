@@ -81,7 +81,7 @@ TASKS = [
          shot="11-preflight-cohort", alt="Historical AGES preflight showing selected scans and separate bank analyses.",
          steps=[
              "In the assistant, click <b>Check Live configuration</b>, review its summary, then <b>Finish setup</b>. In the Live panel, the equivalent check is <b>Check experiment and inputs</b>.",
-             "Read the selected cohort, excluded runs, bank count, resolved profile and blocking reasons. Resolve a mismatch before continuing.",
+             "Read the selected cohort, excluded runs, bank count, resolved profile and blocking reasons. Resolve a mismatch before continuing. If chemistry is missing, <b>Enter sample elements</b> opens the field in Analysis settings. For multiple samples, <b>Review sample model assignments</b> opens the per-sample controls.",
              "Use <b>Test latest scan</b> and, if offered, <b>Bank for the one-scan test</b>. Inspect that result before clicking <b>Start monitoring</b> for the series."
          ],
          expected="The check reports the intended inputs. A one-scan test creates one analysis; continuous monitoring remains stopped until you start it.",

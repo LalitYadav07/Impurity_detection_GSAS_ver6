@@ -153,6 +153,7 @@ jobs:
             /validation-tests/test_live_assistant_inventory.py \
             /validation-tests/test_hb2a.py \
             /validation-tests/test_hb2a_live_setup.py \
+            /validation-tests/test_live_setup.py \
             /validation-tests/test_sample_models.py \
             /validation-tests/test_acquisition.py \
             /validation-tests/test_refinement_restored_grouping.py \

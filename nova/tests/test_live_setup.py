@@ -207,6 +207,25 @@ def test_preflight_is_read_only_and_requires_no_history_configuration(live):
     )
 
 
+@pytest.mark.parametrize("empty_chemistry", ["", "  ", ", ,\n"])
+def test_empty_live_chemistry_gives_actionable_read_only_feedback(live, empty_chemistry):
+    state = live.server.state
+    state.live_sample_elements = empty_chemistry
+    state.flush()
+    assert not asyncio.run(live.check_powgen_experiment())
+    assert not state.powgen_preflight_ready
+    assert "Enter sample element symbols" in state.powgen_preflight_message
+    assert "Analysis settings" in state.powgen_preflight_message
+    assert "validation error" not in state.powgen_preflight_message
+    assert not live.service.saved and not live.service.uploads and not live.service.jobs
+
+    state.live_sample_elements = "Mg, Al, O"
+    state.flush()
+    assert asyncio.run(live.check_powgen_experiment())
+    assert state.powgen_preflight_ready
+    assert "Enter sample element symbols" not in state.powgen_preflight_message
+
+
 @pytest.mark.parametrize('scope,expected',[('selected','[2]'),('all','[1, 2, 3, 4, 5, 6]')])
 def test_bank_summary_distinguishes_selected_from_available_histograms(live,monkeypatch,scope,expected):
     live.server.state.powgen_bank_scope=scope

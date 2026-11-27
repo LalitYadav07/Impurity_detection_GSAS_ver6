@@ -167,6 +167,11 @@ class LiveSetupMixin:
                 name: deepcopy(getattr(state, "live_" + name))
                 for name in CONFIG_FORM_FIELDS
             }
+            if not AnalysisConfig.normalize_elements(payload.get("sample_elements")):
+                raise ValueError(
+                    "Enter sample element symbols under Analysis settings before checking "
+                    "the experiment, for example Fe, O. Include possible impurity elements."
+                )
             source_main = str(state.powgen_main_cif_source or "none")
             payload.update(
                 radiation="neutron",
@@ -349,6 +354,7 @@ class LiveSetupMixin:
             )
             vuetify.VTextField(
                 label="Sample elements",
+                id="radar-live-sample-elements",
                 v_model=("live_sample_elements",),
                 placeholder="Li, C, O, Al, Cu, Mn, Co, Ni",
                 disabled=(locked,),
@@ -482,7 +488,7 @@ class LiveSetupMixin:
                 f" || {json.dumps(missing)}) : {json.dumps(empty)}"
             )
 
-        with html.Details(classes="radar-soft-panel mb-2"):
+        with html.Details(id="radar-live-model-assignments", tabindex="0", classes="radar-soft-panel mb-2"):
             html.Summary("Sample model assignments")
             html.P("Assign each sample its allowed candidate library and optional known main CIF. An empty main keeps blind discovery within that library. Sample names and a low Rwp do not establish chemical identity. Assignments use datasets already saved in this History.", classes="radar-help-copy")
             html.P("Assign models to sample updates this Live draft. The reviewed configuration, including its assignments, is saved when Test latest scan or Start monitoring proceeds.", classes="radar-help-copy")

@@ -1756,6 +1756,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             prepend_icon="mdi-arrow-right-circle-outline",
             click=(f"live_setup_panels = [{panel}]; $nextTick(() => {{"
                    f"const el = window.document.getElementById('{target}');"
+                   "if (el?.tagName === 'DETAILS') el.open = true;"
                    "const rail = el?.closest('.radar-setup-rail');"
                    "if (el && rail) rail.scrollTop += el.getBoundingClientRect().top - rail.getBoundingClientRect().top - rail.clientHeight * .28;"
                    "el?.focus?.(); })"),
@@ -2210,6 +2211,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     self._live_fix_chip("Supply a matching profile", "powgen_instrument_source === 'computer' && !powgen_instrument_path || powgen_instrument_source === 'galaxy' && !powgen_instrument_dataset_id", 0, "radar-live-profile-source")
                     self._live_fix_chip("Choose a candidate library", "live_database_source === 'archive' && (live_library_archive_source === 'computer' && !live_database_archive_path || live_library_archive_source === 'galaxy' && !powgen_database_dataset_id)", 1, "radar-live-setup-2")
                     self._live_fix_chip("Choose saved analysis settings", "live_configuration_source === 'history' && !powgen_configuration_dataset_id", 2, "radar-live-setup-3")
+                    self._live_fix_chip("Enter sample elements", "live_configuration_source === 'inline' && !(live_sample_elements || '').replace(/[,\\s]+/g, '')", 2, "radar-live-sample-elements")
+                    self._live_fix_chip("Review sample model assignments", "(powgen_processing_scope === 'selected' ? powgen_processing_sample_ids.length : powgen_discovered_sample_options.length) > 1", 2, "radar-live-model-assignments")
                     vuetify.VBtn("Refresh Galaxy inputs", v_if="powgen_instrument_source === 'galaxy' && !history_instrument_datasets.length || live_configuration_source === 'history' && !history_configuration_datasets.length",
                                  click=self.refresh_history, size="small", variant="tonal", color="#15543c", prepend_icon="mdi-refresh")
                     self._live_fix_chip("Finish the library decision", "live_library_builder_decision_pending", 1, "radar-live-setup-2")
