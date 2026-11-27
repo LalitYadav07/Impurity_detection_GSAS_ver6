@@ -38,6 +38,7 @@ RUN python -m py_compile \
         scripts/gsas_signed_fxye.py \
         scripts/gsas_core_infrastructure.py \
         scripts/gsas_native_observations.py \
+        scripts/blind_main_reduction.py \
         scripts/ndip_refinement.py \
         scripts/ndip_runner.py \
     && python -m compileall -q nova/src/gpx_recipe
