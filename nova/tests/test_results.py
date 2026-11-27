@@ -1708,3 +1708,60 @@ def test_final_joint_plot_is_preferred_to_latest_discovery_pass():
     plots = [{'path': 'seq_pass10_accepted_model.png', 'stage': 'full_pipeline_pass'},
              {'path': 'seq_final_joint_accepted_model.png', 'stage': 'final_refinement'}]
     assert _primary_plot_index(plots, {}, 'full') == 1
+
+
+def test_rapid_lattice_sampling_counts_survive_csv_text_without_changing_status():
+    sampling = dict(method="bounded-cell-sobol", generated=800, accepted=795,
+                    unique_including_source=796, selected=10, only_original_scored=False)
+    raw = dict(formula="CrCl3", space_group=2, best_score=.85, sampling_json=json.dumps(sampling),
+               scored_count="10.0", error="")
+    before = deepcopy(raw)
+    row = curate_rapid_rows("lattice_nudge", [raw])[0]
+    assert [row[k] for k in ("generated_proposals", "valid_proposals", "scored_cells")] == ["800", "795", "10"]
+    assert row["lattice_coverage"] == "Multiple cells tested" and row["status"] == "Ready"
+    assert raw == before and "sampling_json" not in row
+
+
+@pytest.mark.parametrize("sampling", [
+    dict(method="bounded-cell-sobol", generated=800, accepted=0, unique_including_source=1,
+         selected=1, only_original_scored=True),
+    dict(method="bounded-cell-sobol", generated=800, accepted=795, unique_including_source=796,
+         selected=1, only_original_scored=True),
+    dict(method="source-cell-held", generated=0, accepted=0, selected=1, only_original_scored=True),
+])
+def test_rapid_lattice_only_original_label_requires_explicit_evidence(sampling):
+    row = curate_rapid_rows("lattice_nudge", [dict(sampling_json=json.dumps(sampling), scored_count=1)])[0]
+    assert row["lattice_coverage"] == "Only original cell tested"
+    assert row["scored_cells"] == "1" and row["status"] == "Ready"
+
+
+@pytest.mark.parametrize("change", [
+    {"generated": -1}, {"generated": True}, {"generated": float("inf")},
+    {"accepted": 801}, {"accepted": .5}, {"selected": 9},
+    {"only_original_scored": True}, {"only_original_scored": "false"},
+    {"unique_including_source": 9}, {"method": []},
+])
+def test_malformed_lattice_sampling_does_not_invent_counts_or_original_only(change):
+    sampling = dict(method="bounded-cell-sobol", generated=800, accepted=795,
+                    unique_including_source=796, selected=10, only_original_scored=False)
+    sampling.update(change)
+    row = curate_rapid_rows("lattice_nudge", [dict(sampling_json=json.dumps(sampling), scored_count=10, error="review")])[0]
+    assert all(row[k] == "Unavailable" for k in ("generated_proposals", "valid_proposals", "scored_cells", "lattice_coverage"))
+    assert row["status"] == "Needs review"
+
+
+@pytest.mark.parametrize("raw", [{}, {"scored_count": 1}, {"sampling_json": ""},
+    {"sampling_json": "not-json"}, {"sampling_json": "[]"}, {"sampling_json": "{}"},
+    {"sampling_json": "x" * 65537}])
+def test_legacy_lattice_sampling_is_unavailable_not_zero(raw):
+    row = curate_rapid_rows("lattice_nudge", [raw])[0]
+    assert all(row[k] == "Unavailable" for k in ("generated_proposals", "valid_proposals", "scored_cells", "lattice_coverage"))
+    assert row["status"] == "Ready"
+
+
+@pytest.mark.parametrize("scored", [True, "NaN", 1.5, -1, 10**30, None])
+def test_invalid_scored_count_cannot_claim_sampling_coverage(scored):
+    sampling = dict(method="bounded-cell-sobol", generated=800, accepted=795,
+                    unique_including_source=796, selected=10, only_original_scored=False)
+    row = curate_rapid_rows("lattice_nudge", [dict(sampling_json=json.dumps(sampling), scored_count=scored)])[0]
+    assert row["lattice_coverage"] == row["scored_cells"] == "Unavailable"

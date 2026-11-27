@@ -1561,6 +1561,50 @@ def _cell_summary(row: dict[str, Any]) -> str:
     return f"a, b, c: {', '.join(lengths)}; angles: {', '.join(angles)}"
 
 
+def _rapid_lattice_sampling(row: dict[str, Any]) -> dict[str, str]:
+    """Render complete additive sampling receipts; legacy absence is unknown."""
+    unavailable = dict(generated_proposals="Unavailable", valid_proposals="Unavailable",
+                       scored_cells="Unavailable", lattice_coverage="Unavailable")
+    value = row.get("sampling_json")
+    if isinstance(value, str):
+        if not value or len(value) > 65536:
+            return unavailable
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return unavailable
+    if not isinstance(value, dict):
+        return unavailable
+    method = value.get("method")
+    if not isinstance(method, str) or method not in {"bounded-cell-sobol", "source-cell-held"}:
+        return unavailable
+
+    def count(raw: Any) -> int | None:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            return None
+        try:
+            number = float(raw)
+        except (ValueError, OverflowError):
+            return None
+        if not np.isfinite(number) or not 0 <= number <= 2**53 - 1 or not number.is_integer():
+            return None
+        return int(number)
+
+    generated, valid, selected, scored = [count(raw) for raw in (
+        value.get("generated"), value.get("accepted"), value.get("selected"), row.get("scored_count"))]
+    if any(number is None for number in (generated, valid, selected, scored)):
+        return unavailable
+    only_original = value.get("only_original_scored")
+    if (valid > generated or not 1 <= scored <= valid + 1 or selected != scored
+            or type(only_original) is not bool or only_original != (scored == 1)):
+        return unavailable
+    unique = count(value.get("unique_including_source"))
+    if "unique_including_source" in value and (unique is None or not scored <= unique <= valid + 1):
+        return unavailable
+    return dict(generated_proposals=str(generated), valid_proposals=str(valid), scored_cells=str(scored),
+                lattice_coverage="Only original cell tested" if only_original else "Multiple cells tested")
+
+
 def curate_rapid_rows(stage: str, rows: Iterable[dict[str, Any]], *, limit: int = 100) -> list[dict[str, Any]]:
     """Project internal Rapid CSV columns into the ORC user-facing vocabulary."""
 
@@ -1593,6 +1637,7 @@ def curate_rapid_rows(stage: str, rows: Iterable[dict[str, Any]], *, limit: int 
                     "space_group": _canonical_space_group(row.get("space_group") or "-"),
                     "nudge_match": _number_text(row.get("best_score")),
                     "cell_adjustment": _number_text(row.get("distance_from_start"), 4),
+                    **_rapid_lattice_sampling(row),
                     "best_cell": _cell_summary(row),
                     "time": f"{_number_text(row.get('seconds'), 1)} s" if _as_float(row.get("seconds")) is not None else "-",
                     "status": "Needs review" if str(row.get("error") or "").strip() else "Ready",

@@ -1807,6 +1807,8 @@ def _nudge_unique_phases(
             "space_group": "",
             "best_score": np.nan,
             "distance_from_start": 0.0,
+            "sampling_json": "",
+            "scored_count": None,
             "a": np.nan,
             "b": np.nan,
             "c": np.nan,
@@ -1841,6 +1843,15 @@ def _nudge_unique_phases(
                     "gamma": float(params.get("gamma", np.nan)),
                 }
             )
+            sampling = getattr(res, "sampling", None)
+            if isinstance(sampling, dict) and sampling:
+                try:
+                    rec["sampling_json"] = json.dumps(sampling, sort_keys=True, allow_nan=False)
+                except (TypeError, ValueError):
+                    pass  # Unavailable diagnostics never discard a fitted candidate.
+            scored = getattr(res, "scored_count", None)
+            if type(scored) is int and scored >= 0:
+                rec["scored_count"] = scored
         if error:
             rec["error"] = error
         if not rec["nudged_cif"]:
