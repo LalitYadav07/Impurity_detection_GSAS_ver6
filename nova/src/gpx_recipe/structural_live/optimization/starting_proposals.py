@@ -123,7 +123,8 @@ def build_if_useful(source,path,*,batch_renderer=None):
     if proposals is None:
         return None,dict(status='original_native',reason='Current profile is below the measured proposal-compilation work threshold')
     hybrid=_Hybrid(source,exact,proposals)
-    receipt=banks._construct(source,path,policy='joint_cell_v1',proposal_renderer=hybrid.evaluate,batch_renderer=batch_renderer)
+    receipt=banks._construct(source,path,policy='joint_cell_v1',proposal_renderer=hybrid.evaluate,
+        batch_renderer=batch_renderer,proposal_batch_native=lambda:hybrid.disabled)
     receipt['construction_execution']=hybrid.diagnostics()
     write_json(Path(path).with_suffix('.json'),receipt)
     _remember(source,path)

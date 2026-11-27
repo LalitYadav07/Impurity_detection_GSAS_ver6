@@ -9,6 +9,7 @@ from collections import OrderedDict
 import threading
 import zipfile
 import zlib
+from contextlib import nullcontext
 from pathlib import Path
 import numpy as np
 from .structural_start_bank import multiscale_starts,joint_cell_starts
@@ -82,7 +83,18 @@ def build(source,path,policy='multiscale_v1',*,reuse_fixed_cell_profiles=False,b
     return _construct(source,path,policy=policy,batch_renderer=batch_renderer)
 
 
-def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None,batch_renderer=None):
+def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None,batch_renderer=None,
+               proposal_batch_native=None):
+    # One allocation-owned pool serves the portfolio and the independent
+    # secant probes, and is closed even if either construction fails.
+    manager=batch_renderer if hasattr(batch_renderer,'__enter__') else nullcontext()
+    with manager:
+        return _construct_in_pool(source,path,policy,proposal_renderer=proposal_renderer,
+            batch_renderer=batch_renderer,proposal_batch_native=proposal_batch_native)
+
+
+def _construct_in_pool(source,path,policy='multiscale_v1',*,proposal_renderer=None,batch_renderer=None,
+                       proposal_batch_native=None):
     """Shared complete portfolio; proposal rendering cannot grant native origin."""
     path=Path(path)
     if path.exists() or path.with_suffix('.json').exists():raise ValueError('Start-bank artifacts are immutable; use a new path')
@@ -110,14 +122,31 @@ def _construct(source,path,policy='multiscale_v1',*,proposal_renderer=None,batch
     weight=1/np.sqrt(np.maximum(abs(parent),max(np.max(abs(parent))*1e-4,1e-30)))
     def allowed(p):
         return np.isfinite(p).all() and np.all(abs(p)<=1.) and bool(np.isfinite(source.chemistry.log_kernel((p*source.radii)[None,:])[0]))
+    probe_parallel=None
+    def sample_many(points):
+        nonlocal probe_parallel
+        # Preserve the first complete serial stencil. For interpolated start
+        # proposals this also performs the existing parent's native anchor
+        # check before parallel work; its fallback decision remains binding.
+        prefix=min(2,len(points));first=[evaluate(p*source.radii) for p in points[:prefix]]
+        native=proposal_renderer is None or (proposal_batch_native is not None and proposal_batch_native())
+        remaining,probe_parallel=batch_renderer(points[prefix:]*source.radii,native=native)
+        values=np.asarray(first+list(remaining),float)
+        if values.shape!=(len(points),len(source.fast.x)) or not np.isfinite(values).all():
+            raise RuntimeError('Parallel secant profiles changed their complete native grid or order')
+        probe_parallel=dict(probe_parallel,serial_anchor_points=prefix,
+                            complete_stencil_points=len(points),observations_used=False)
+        return values*weight
     try:
         steps,details=select_secant_steps(lambda p:evaluate(p*source.radii)*weight,origin,
-            range(source.mode_dimensions,len(source.radii)),allowed=allowed,scales=(.0005,.002,.008,.032,.128))
+            range(source.mode_dimensions,len(source.radii)),allowed=allowed,scales=(.0005,.002,.008,.032,.128),
+            sample_many=sample_many if batch_renderer is not None else None)
         proposal=dict(state='prepared',details=details)
     except ValueError as exc:
         steps=np.full(len(source.radii),.002);proposal=dict(state='fixed_default_fallback',reason=str(exc),details=[])
     proposal.update(seconds=time.perf_counter()-began,derivative_qualified=False,observations_used=False,
         weighting='inverse square root of parent profile magnitude with 1e-4 peak floor; proposal heuristic only',anchor='parent geometry')
+    if probe_parallel is not None:proposal['parallel_execution']=probe_parallel
     if context(source)!=identity:raise ValueError('Fixed native context changed while preparing starting curves')
     from ...preparation.structural_nuisance import reference
     normalization=reference(source)

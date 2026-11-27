@@ -39,15 +39,32 @@ def feasible_stencil(point,column,step,*,allowed):
 
 
 def select_secant_steps(function, point, columns, *, allowed,
-                        scales=(.001,.004,.016,.064,.256)):
+                        scales=(.001,.004,.016,.064,.256),sample_many=None):
     point=np.asarray(point,float);scales=np.asarray(scales,float)
     if scales.ndim!=1 or len(scales)<2 or not np.isfinite(scales).all() or np.any(scales<=0) or np.any(np.diff(scales)<=0):
         raise ValueError('At least two increasing finite positive secant scales required')
-    steps=np.full(len(point),.001);receipts=[]
+    # Stencils depend only on the declared domain, not on profile values.
+    # Keep their original column/scale/plus-minus order when scheduling them
+    # together; do not substitute a new step or reduce the sampled domain.
+    plans=[];points=[]
     for column in columns:
-        previous=None;rows=[];best=None
+        rows=[]
         for step in scales:
-            derivative,detail=feasible_secant(function,point,column,step,allowed=allowed)
+            stencil,detail=feasible_stencil(point,column,step,allowed=allowed)
+            rows.append((step,detail));points.extend(stencil)
+        plans.append((column,rows))
+    if sample_many is None:
+        values=[np.array(function(p),copy=True) for p in points]
+    else:
+        values=np.asarray(sample_many(np.asarray(points,float)))
+        if values.ndim<1 or len(values)!=len(points) or not np.isfinite(values).all():
+            raise ValueError('Batched secants must return every finite profile in stencil order')
+    values=iter(values);steps=np.full(len(point),.001);receipts=[]
+    for column,plan in plans:
+        previous=None;rows=[];best=None
+        for step,detail in plan:
+            derivative=(next(values)-next(values))/((2 if detail['scheme']=='central' else 1)*detail['effective_step'])
+            if not np.isfinite(derivative).all():raise ValueError('Nonfinite secant')
             row=dict(requested_step=float(step),**detail,norm=float(np.linalg.norm(derivative)))
             # Compare the same stencil at genuinely different effective scales.
             # Repeated backtracking must not masquerade as independent agreement.
