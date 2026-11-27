@@ -223,6 +223,7 @@ jobs:
           for test_file in \
             test_result_preview.py \
             test_fit_first_opening.py \
+            test_result_render_commit.py \
             test_result_preview_native_authority.py \
             test_result_transactions.py \
             test_history_result_opening.py \

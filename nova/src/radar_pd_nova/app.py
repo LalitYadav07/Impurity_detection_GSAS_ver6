@@ -5378,6 +5378,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     self._result_preview_enrichment_failed(loaded.message)
                     return
                 self._load_results(loaded)
+                if not owns_selection():
+                    return
                 state.active_page = 'results'
                 if not preview_shown:
                     state.workspace_view = 'results'
@@ -8183,7 +8185,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
     def _result_actions_ready(self, uid: str | None = None) -> bool:
         """Partial display files never authorize native handoff or exports."""
         state = self.server.state
-        if self._result_preview_pending(uid or state.selected_run_uid):
+        uid = uid or state.selected_run_uid
+        if (self._result_preview_pending(uid)
+                or (state.result_owner_uid == uid and state.result_preview)):
             state.error_message = "Complete result files are not ready for downloads or handoffs from this view."
             state.flush()
             return False
@@ -8351,6 +8355,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     self._result_preview_enrichment_failed(record.message)
                     return
                 self._load_results(record)
+                if not owns_selection():
+                    return
                 state.active_page = "results"
                 state.notice = (record.message if record.result_status == ResultStatus.STALE else
                                 f"Reloaded the canonical result archive for {record.name}." if force else
@@ -8382,19 +8388,73 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
 
     def _load_results(self, record: RunRecord, *, local_only: bool = False, preview: bool = False) -> None:
         state = self.server.state
+        service, context = self.service, getattr(self, "_result_context", None)
+        source = self._result_source_identity(record)
         selected_uid = str(getattr(state, "selected_run_uid", "") or "")
+        registered = record.uid in self.records
+        def current():
+            if (self.service is not service or getattr(self, "_result_context", None) is not context
+                    or (selected_uid and state.selected_run_uid != selected_uid)
+                    or (state.selected_run_uid and state.selected_run_uid != record.uid)
+                    or self._result_source_identity(record) != source):
+                return False
+            live = self.records.get(record.uid)
+            return (not registered if live is None else
+                    self._result_sources_compatible(source, self._result_source_identity(live)))
         if selected_uid and selected_uid != record.uid:
             return
-        self._reset_result_state()
         # Every synchronous render reads local files. Missing observations and
         # declared collections are repaired by the shared background read.
-        reader = getattr(self.service, "cached_result_payload", None)
+        # Prepare the replacement before clearing a visible fit. A failed full
+        # view must not destroy the independently prepared preview.
+        reader = getattr(service, "cached_result_payload", None)
         payload = (reader if callable(reader) else GalaxyService.cached_result_payload)(record)
+        result_document = payload.get("summary") or {}
+        root = record.local_output_dir
+        if root is None:
+            return
+        view = build_result_view(result_document, root, submitted_mode=record.mode.value).to_state()
+        checkpoints = [] if preview else self._launchable_checkpoint_rows(record, view["checkpoints"])
+        tables = [] if preview else view["tables"]
+        primary_table = next((item for item in tables if item.get("primary")), tables[0] if tables else None)
+        selected_table = primary_table["path"] if primary_table else ""
+        table_rows, table_headers, table_notice = self._table_display_data(selected_table)
+        selected_plot = view["primary_plot_path"] or (view["plots"][0]["path"] if view["plots"] else "")
+        figure = None
+        if self._primary_plot_widget is not None or self._plot_widget is not None:
+            rendered = load_plot_with_fallback(view["plots"], selected_plot) if view["plots"] else None
+            if rendered is not None:
+                rendered_path, _, figure = rendered
+                if rendered_path != selected_plot:
+                    view["warnings"] = [*view["warnings"],
+                        "The preferred plot payload was incomplete; NOVA displayed the next valid ranked fit."]
+                selected_plot = rendered_path
+            else:
+                figure = figure_for_payload({})
+                if view["plots"]:
+                    view["warnings"] = [*view["warnings"],
+                        "NOVA found plot metadata but none of the ranked payloads could be rendered."]
+        if not current():
+            return
         if not local_only and not preview:
             self._refinement_maybe_refresh()
-        result_document = payload.get("summary") or {}
+        if not current():
+            return
         self._activate_post_analysis_scope(
             "single:" + record.uid, record.config.post_analysis if record.config is not None else None)
+        if not current():
+            return
+        # Widget transport can flush callbacks or fail. Keep the working view
+        # and its gates until both replacement figures have been accepted.
+        if self._primary_plot_widget is not None:
+            self._primary_plot_widget.update(figure)
+        if not current():
+            return
+        if self._plot_widget is not None:
+            self._plot_widget.update(figure)
+        if not current():
+            return
+        self._reset_result_state()
         if record.config is not None:
             state.scan_interpretation = record.config.scan_interpretation.model_dump(mode="json")
         # A single fit has its own result page. Preserve the live experiment's
@@ -8402,10 +8462,6 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.viewed_run_mode = record.mode.value
         state.viewed_output_profile = record.output_profile
         state.viewed_run_name = record.name
-        root = record.local_output_dir
-        if root is None:
-            return
-        view = build_result_view(result_document, root, submitted_mode=record.mode.value).to_state()
         state.viewed_run_mode = view["mode"]
         state.result_metrics = view["metrics"]
         state.result_review_status = view["review_status"]
@@ -8413,11 +8469,15 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.result_warnings = view["warnings"]
         state.phase_rows = view["phases"]
         state.phase_total = view["phase_total"]
-        state.table_options = view["tables"]
+        state.table_options = tables
+        state.selected_table = selected_table
+        state.table_rows = table_rows
+        state.table_headers = table_headers
+        state.table_preview_notice = table_notice
         state.plot_options = view["plots"]
         state.primary_plot_path = view["primary_plot_path"]
         state.file_groups = view["file_groups"]
-        state.checkpoint_rows = [] if preview else self._launchable_checkpoint_rows(record, view["checkpoints"])
+        state.checkpoint_rows = checkpoints
         state.gpx_rows = [] if preview else view["checkpoints"]
         state.rapid_coarse_rows = view["rapid_stages"]["coarse_search"]
         state.rapid_nudge_rows = view["rapid_stages"]["lattice_nudge"]
@@ -8446,23 +8506,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         for item in state.plot_options:
             counts[item["category"]] = counts.get(item["category"], 0) + 1
         state.plot_groups = [{"name": name, "count": count} for name, count in counts.items()]
-        if state.table_options:
-            primary_table = next((item for item in state.table_options if item.get("primary")), state.table_options[0])
-            state.selected_table = primary_table["path"]
-            self._table_changed()
         if state.plot_options:
-            state.selected_plot = state.primary_plot_path or state.plot_options[0]["path"]
+            state.selected_plot = selected_plot
             state.gallery_selected_plot = state.selected_plot
-            self._primary_plot_changed()
-            self._gallery_plot_changed()
-        else:
-            # Avoid an empty-then-final update while the hidden Plotly panels
-            # become visible. That race can leave the empty figure mounted
-            # until the user visits another tab.
-            if self._plot_widget is not None:
-                self._plot_widget.update(figure_for_payload({}))
-            if self._primary_plot_widget is not None:
-                self._primary_plot_widget.update(figure_for_payload({}))
         if state.artifact_options:
             state.selected_artifact = state.artifact_options[0]["path"]
         if state.checkpoint_rows:
@@ -8485,8 +8531,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             if preview else "Complete result loading is incomplete. Reopen results to retry downloads and handoffs from this view."
             if state.result_actions_pending else "")
         self._sync_selected_run_badge()
-        self._result_display_binding = (self.service, getattr(self, "_result_context", None),
+        self._result_display_binding = (service, context,
                                         *self._result_display_state(record))
+        # Commit all presentation fields and their owner together. Table and
+        # selection listeners must never receive an intermediate empty owner.
         state.flush()
 
     def _launchable_checkpoint_rows(
@@ -8570,20 +8618,27 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.comparison_hypothesis = None
         state.result_tab = "overview"
 
-    def _table_changed(self, path: str | None = None, **_: Any) -> None:
-        path = path or self.server.state.selected_table
-        if path:
-            self.server.state.selected_table = path
+    @staticmethod
+    def _table_display_data(path: str) -> tuple[list[dict[str, Any]], list[dict[str, str]], str]:
         rows = read_table(path, limit=501) if path else []
         truncated = len(rows) > 500
-        self.server.state.table_rows = rows[:500]
-        self.server.state.table_preview_notice = (
+        notice = (
             "Preview limited to 500 rows. Download the published table from Run File Browser for the complete file."
             if truncated
             else ""
         )
         keys = list(rows[0].keys()) if rows else []
-        self.server.state.table_headers = [{"title": key.replace("_", " ").title(), "key": key} for key in keys]
+        headers = [{"title": key.replace("_", " ").title(), "key": key} for key in keys]
+        return rows[:500], headers, notice
+
+    def _table_changed(self, path: str | None = None, **_: Any) -> None:
+        path = path or self.server.state.selected_table
+        if path:
+            self.server.state.selected_table = path
+        rows, headers, notice = self._table_display_data(path)
+        self.server.state.table_rows = rows
+        self.server.state.table_headers = headers
+        self.server.state.table_preview_notice = notice
         self.server.state.flush()
 
     def _primary_plot_changed(self, path: str | None = None, **_: Any) -> None:
