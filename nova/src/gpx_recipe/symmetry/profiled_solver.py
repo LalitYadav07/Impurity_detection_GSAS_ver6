@@ -40,7 +40,9 @@ def _apply_starting_point(context,project,fit,path):
         except Exception as error:
             # Preserve the scientific failure even if diagnostic storage is
             # unavailable. No fallback may publish this rejected candidate.
-            exc.add_note('Could not save native identity diagnostics: '+type(error).__name__)
+            note=getattr(exc,'add_note',None)
+            if callable(note):
+                note('Could not save native identity diagnostics: '+type(error).__name__)
         raise
 
 

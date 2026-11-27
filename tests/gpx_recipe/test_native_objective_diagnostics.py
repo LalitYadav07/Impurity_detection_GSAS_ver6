@@ -94,7 +94,23 @@ def test_receipt_storage_failure_preserves_rejection(monkeypatch,tmp_path,error_
     with pytest.raises(ValueError,match='final starting point disagrees') as caught:
         _apply_starting_point(context(),UntouchedProject(),fit(),tmp_path/'model.gpx')
     assert type(caught.value) is ValueError
-    assert caught.value.__notes__==['Could not save native identity diagnostics: '+error_type.__name__]
+    if callable(getattr(caught.value,'add_note',None)):
+        assert caught.value.__notes__==['Could not save native identity diagnostics: '+error_type.__name__]
+
+
+def test_receipt_storage_failure_preserves_rejection_without_exception_notes(monkeypatch,tmp_path):
+    from gpx_recipe import execution
+    class RejectedWithoutNotes(ValueError):
+        add_note=None  # Python 3.10 does not supply BaseException.add_note.
+    rejected=RejectedWithoutNotes('Original native rejection')
+    rejected.native_objective_diagnostics={'candidate_applied':False}
+    def apply(*args):raise rejected
+    def storage(*args):raise OSError('Diagnostic write failed')
+    monkeypatch.setattr(execution,'write_json',storage)
+    with pytest.raises(RejectedWithoutNotes) as caught:
+        _apply_starting_point(SimpleNamespace(apply_to_project=apply),UntouchedProject(),fit(),tmp_path/'model.gpx')
+    assert caught.value is rejected
+    assert not (tmp_path/'native-objective-mismatch.json').exists()
 
 
 def test_overflowing_norms_remain_json_safe_and_fail_closed(tmp_path):
