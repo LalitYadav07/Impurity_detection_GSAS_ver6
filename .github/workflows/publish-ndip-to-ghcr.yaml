@@ -17,7 +17,13 @@ on:
       - ML_components/**
       - ML_ranker/**
       - .github/workflows/publish-ndip-to-ghcr.yaml
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      audit_catalog_ids:
+        description: 'Optional exact public MP/COD records for a source-CIF diagnostic artifact'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: publish-ndip-${{ github.ref }}
@@ -84,6 +90,26 @@ jobs:
           docker run --rm --network none --entrypoint python \
             -v "$PWD/tests/check_packaged_catalog.py:/validation/check_packaged_catalog.py:ro" \
             "${IMAGE_NAME}:ndip-${GITHUB_SHA}" /validation/check_packaged_catalog.py
+
+      - name: Audit requested public catalog CIF records
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.audit_catalog_ids != '' }}
+        env:
+          AUDIT_CATALOG_IDS: ${{ inputs.audit_catalog_ids }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/catalog-record-audit"
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/tests/audit_packaged_cif_records.py:/validation/audit_packaged_cif_records.py:ro" \
+            -v "$RUNNER_TEMP/catalog-record-audit:/audit" \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" /validation/audit_packaged_cif_records.py \
+            --ids "$AUDIT_CATALOG_IDS" --output /audit
+
+      - name: Save public catalog CIF audit
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.audit_catalog_ids != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-catalog-cif-audit
+          path: ${{ runner.temp }}/catalog-record-audit
+          if-no-files-found: error
 
       - name: Verify production image excludes development fixtures
         run: |
