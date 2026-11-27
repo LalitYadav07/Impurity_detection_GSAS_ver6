@@ -130,7 +130,12 @@ def _construct_in_pool(source,path,policy='multiscale_v1',*,proposal_renderer=No
         # check before parallel work; its fallback decision remains binding.
         prefix=min(2,len(points));first=[evaluate(p*source.radii) for p in points[:prefix]]
         native=proposal_renderer is None or (proposal_batch_native is not None and proposal_batch_native())
-        remaining,probe_parallel=batch_renderer(points[prefix:]*source.radii,native=native)
+        try:
+            remaining,probe_parallel=batch_renderer(points[prefix:]*source.radii,native=native)
+        except ValueError as exc:
+            # A worker/context validation failure is not an unavailable
+            # finite-difference stencil and must not select default steps.
+            raise RuntimeError('Parallel secant batch failed validation: '+str(exc)) from exc
         values=np.asarray(first+list(remaining),float)
         if values.shape!=(len(points),len(source.fast.x)) or not np.isfinite(values).all():
             raise RuntimeError('Parallel secant profiles changed their complete native grid or order')

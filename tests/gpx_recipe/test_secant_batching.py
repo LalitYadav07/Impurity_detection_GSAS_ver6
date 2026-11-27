@@ -77,6 +77,30 @@ def test_failed_parent_proposal_anchor_requires_native_secant_batch(tmp_path,mon
     assert receipt['proposal_step_selection']['parallel_execution']['native_curve_role']
 
 
+def test_worker_context_failure_cannot_become_default_secants(tmp_path,monkeypatch):
+    from test_structural_live_offline_start_bank import source
+    from gpx_recipe.structural_live.optimization import offline_native_start_bank as banks
+    s,*_=source(monkeypatch);calls=[];path=tmp_path/'bank.npz'
+    def batch(points,*,native):
+        calls.append(len(points))
+        if len(calls)==2:raise ValueError('Parallel bank native context changed')
+        return np.asarray([s.native(p) for p in points]),{}
+    with pytest.raises(RuntimeError,match='Parallel secant batch failed validation'):
+        banks.build(s,path,policy='joint_cell_v1',batch_renderer=batch)
+    assert len(calls)==2 and not path.exists() and not path.with_suffix('.json').exists()
+
+
+def test_genuinely_unavailable_stencil_keeps_existing_default_fallback(tmp_path,monkeypatch):
+    from test_structural_live_offline_start_bank import source
+    from gpx_recipe.structural_live.optimization import offline_native_start_bank as banks
+    s,*_=source(monkeypatch)
+    s.chemistry=SimpleNamespace(log_kernel=lambda points:np.where(np.all(points==0.,axis=1),0.,-np.inf))
+    def unused(*args,**kwargs):raise AssertionError('No parallel stencil exists')
+    result=banks.build(s,tmp_path/'bank.npz',policy='joint_cell_v1',batch_renderer=unused)
+    assert result['proposal_step_selection']['state']=='fixed_default_fallback'
+    assert 'No feasible finite-difference' in result['proposal_step_selection']['reason']
+
+
 def fake_map(monkeypatch,tmp_path,*,fail=False):
     created=[]
     monkeypatch.setattr(parallel_bank,'allocation',lambda _:dict(workers=4,memory_mb=8192,reserve_mb=512))
