@@ -1082,6 +1082,7 @@ class SymmetryMixin(KSearchMixin):
             s.sx_plan_summary+=f" {len(template['existing_ids'])} selected scans · {trial_count(template)} {unit} per scan · maximum {template['maximum_scans']} scans. Following new scans: {'on' if template['future'] else 'off'}."
             s.sx_plan_summary+=f" Existing-cohort budget: {len(template['existing_ids'])*trial_count(template):,} {unit} before per-scan compatibility checks."
             s.sx_plan_ready=True;s.sx_approved=False
+            s.sx_message='Finite plan prepared. Review this plan and approve it before starting the campaign.'
         except Exception as exc:s.sx_error=str(exc)
 
     def approve_symmetry(self,payload=None):
