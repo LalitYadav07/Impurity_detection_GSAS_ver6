@@ -22,7 +22,9 @@ def test_snap_live_setup_keeps_export_variant_and_profile_mapping(live,tmp_path,
     def preflight(*args,**kwargs):
         captured.append(kwargs)
         return {'ready':True,'source_directory':'/SNS/SNAP/IPTS-38203/shared/SNAPRed/export/gsa/bank',
-                'scan_count':1,'available_banks':[2],'message':'Reviewed SNAP mapping'}
+                'scan_count':1,'available_banks':[2],'message':'Reviewed SNAP mapping',
+                'metadata_resolution':[{'run_number':73470,'sample_id':'synthetic-snap',
+                    'identity_status':'resolved','identity_verification':'source_file'}]}
     monkeypatch.setitem(BEAMLINES,'SNAP',replace(BEAMLINES['SNAP'],preflight=preflight,controller=TrialController))
     state.flush()
     async def start():
@@ -62,6 +64,8 @@ def test_snap_reviewed_sensor_survives_live_check_and_launch(live,tmp_path,monke
         captured.append(kwargs)
         return {'ready':True,'source_directory':'/SNS/SNAP/IPTS-38203/shared/SNAPRed/export/gsa/all',
             'scan_count':1,'available_banks':[1],'condition_scope':scope,
+            'metadata_resolution':[{'run_number':73470,'sample_id':'synthetic-snap',
+                'identity_status':'resolved','identity_verification':'source_file'}],
             'condition_options':[{'title':'LakeshoreSampleTemp · K','value':'LakeshoreSampleTemp'}]}
     monkeypatch.setitem(BEAMLINES,'SNAP',replace(BEAMLINES['SNAP'],preflight=preflight,controller=TrialController))
     assert asyncio.run(live.check_powgen_experiment()),state.error_message

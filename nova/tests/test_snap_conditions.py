@@ -166,7 +166,8 @@ def test_controller_freezes_sensor_receipt_restores_and_rejects_changed_source(t
         product_family=snap.parse_filename(source).family,profile_bank=7,
         profile_acknowledged=True,allow_exploratory=True,condition_bindings_json=json.dumps(binding,sort_keys=True))
     service=Galaxy(profile())
-    index=SimpleNamespace(identity=lambda run:{'sample_id':'123'})
+    index=SimpleNamespace(identity=lambda run:{'sample_id':'123',
+        'identity_status':'resolved','identity_verification':'source_file'})
     first=SnapWatchController(service,settings,sample_index=index)
     run=first.discover()[0];record=first.submit(run)
     receipt=record.provenance['snap_bank']
