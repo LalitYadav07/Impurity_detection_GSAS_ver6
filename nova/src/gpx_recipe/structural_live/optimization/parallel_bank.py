@@ -57,23 +57,55 @@ class NativeBankProcessMap:
         from .offline_native_start_bank import context
         self.source=source;self.output=Path(output);self.capacity=allocation(16)
         self.identity=digest(context(source));self.workers=self.capacity['workers']
+        self._pool=None;self._native=None;self._managed=False;self._closed=False
+        self._batch=0;self._generation=0;self._count=None
+
+    def __enter__(self):
+        if self._managed or self._closed:raise RuntimeError('Native bank pool cannot be entered twice')
+        self._managed=True
+        return self
+
+    def __exit__(self,*unused):
+        try:
+            if self._pool is not None:self._pool.shutdown(wait=True,cancel_futures=True)
+        finally:
+            self._pool=None;self._managed=False;self._closed=True
 
     def __call__(self,points,*,native):
+        if self._closed:raise RuntimeError('Native bank pool is closed')
+        if not self._managed:
+            # Keep direct one-call users safe; preparation opens this scope
+            # around both batches so it does not pay a second native startup.
+            with self:return self._evaluate(points,native=native)
+        return self._evaluate(points,native=native)
+
+    def _evaluate(self,points,*,native):
         points=np.asarray(points,float)
         if points.ndim!=2 or points.shape[1]!=len(self.source.radii) or not np.isfinite(points).all():
             raise ValueError('Complete finite start-bank coordinates required')
+        if type(native)is not bool:raise ValueError('Native curve role must be explicit')
+        if self._batch>=2:raise ValueError('A bank pool is limited to its portfolio and secant batches')
         count=min(self.workers,len(points))
         if count<2:raise ValueError('A parallel bank requires at least two admitted tasks')
-        self.output.mkdir(parents=True,exist_ok=False)
+        if self._batch==0:self.output.mkdir(parents=True,exist_ok=False)
         began=time.monotonic()
         # Only the already verified prepared context enters children. Uploaded
         # native-origin flags and parent-process GSAS-II objects never do.
         prepared=str(self.source.fast.slow.root)
         memory=None if self.capacity['memory_mb'] is None else max(1,(self.capacity['memory_mb']-self.capacity['reserve_mb'])//count)
-        args=(prepared,str(self.output),self.source.radii,self.source.mode_dimensions,native,memory)
-        with ProcessPoolExecutor(max_workers=count,mp_context=multiprocessing.get_context('spawn'),
-                                 initializer=_initialize,initargs=args) as pool:
-            values=list(pool.map(_evaluate,points,chunksize=1))
+        reused=self._pool is not None and self._native==native and self._count==count
+        if self._pool is not None and not reused:
+            # A failed parent proposal anchor can require exact native probes.
+            # Close the old workers before creating replacements: the grant
+            # is never multiplied or nested.
+            self._pool.shutdown(wait=True,cancel_futures=True);self._pool=None
+        if self._pool is None:
+            work=self.output/f'workers-{self._generation:02d}';self._generation+=1
+            args=(prepared,str(work),self.source.radii,self.source.mode_dimensions,native,memory)
+            self._pool=ProcessPoolExecutor(max_workers=count,mp_context=multiprocessing.get_context('spawn'),
+                                          initializer=_initialize,initargs=args)
+            self._native=native;self._count=count
+        values=list(self._pool.map(_evaluate,points,chunksize=1));self._batch+=1
         curves=[];records=[]
         for curve,record in values:
             if record['context_sha256']!=self.identity:raise ValueError('Parallel bank native context changed')
@@ -86,6 +118,7 @@ class NativeBankProcessMap:
         return np.asarray(curves),dict(allocation=self.capacity,workers=count,
             worker_pids=sorted({r['pid'] for r in records}),peak_active_tasks=peak,
             completed_curves=len(curves),seconds=time.monotonic()-began,
+            batch=self._batch,pool_reused=reused,
             native_curve_role=native,aggregate_curve_cpu_seconds=sum(r['cpu_seconds'] for r in records),
             peak_worker_rss_bytes=max(r['peak_rss_bytes'] for r in records),
             every_context_verified=True,all_points_retained=True)

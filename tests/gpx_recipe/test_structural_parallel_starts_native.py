@@ -44,17 +44,24 @@ def test_parallel_starts_keep_the_same_native_objective_and_complete_portfolio(t
     assert all(row['cpu_seconds']>0 for row in execution['processes'])
 
 
-def test_parallel_start_bank_retains_every_native_curve(tmp_path,monkeypatch):
+@pytest.mark.parametrize('kind',['PNC','PNT'])
+def test_parallel_start_bank_retains_every_native_curve(tmp_path,monkeypatch,kind):
     from pathlib import Path
     import json
-    source_gpx,_=native_source(tmp_path/'inputs','PNT')
+    import time
+    source_gpx,_=native_source(tmp_path/'inputs',kind)
     child=Path(__file__).with_name('data')/'synthetic-ersi-cmcm-isodistort.cif'
-    banks=[]
+    banks=[];timings=[]
     for workers in (1,4):
         monkeypatch.setenv('GALAXY_SLOTS',str(workers));monkeypatch.setenv('GALAXY_MEMORY_MB','8192')
         prepared=tmp_path/f'prepared-{workers}'
+        began=time.monotonic()
         prepare_model(source_gpx,child,[[-1.,0,0],[0,-1.,0],[0,0,1.]],
                       [0,0,0],prepared,settings=SearchSettings())
+        receipt=json.loads((prepared/'starting-curves.json').read_text())
+        timings.append(dict(workers=workers,total_seconds=time.monotonic()-began,
+            bank_seconds=receipt['seconds'],secant_seconds=receipt['proposal_step_selection']['seconds'],
+            secant_execution=receipt['proposal_step_selection'].get('parallel_execution')))
         with np.load(prepared/'starting-curves.npz',allow_pickle=False) as arrays:
             banks.append({name:arrays[name].copy() for name in arrays.files})
     assert banks[0].keys()==banks[1].keys()
@@ -65,3 +72,12 @@ def test_parallel_start_bank_retains_every_native_curve(tmp_path,monkeypatch):
     assert receipt['parallel_execution']['peak_active_tasks']==4
     assert receipt['parallel_execution']['completed_curves']==len(banks[0]['curves'])
     assert receipt['native_curves']==len(banks[0]['curves']) and not receipt['interpolation']
+    probes=receipt['proposal_step_selection']['parallel_execution']
+    assert probes['pool_reused'] and probes['peak_active_tasks']==4
+    assert probes['complete_stencil_points']==10*len(banks[0]['proposal_cell_steps'][2:])
+    assert probes['serial_anchor_points']==2 and not probes['observations_used']
+    assert probes['worker_pids']==receipt['parallel_execution']['worker_pids']
+    # Timing is evidence, not a flaky speed threshold. Both native domains
+    # must match before any speed comparison is considered meaningful.
+    print('NATIVE_SECANT_BENCHMARK '+json.dumps(dict(kind=kind,exact_arrays_equal=True,
+        proposal_steps_equal=True,timings=timings)),flush=True)
