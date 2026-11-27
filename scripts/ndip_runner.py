@@ -365,8 +365,11 @@ def _db_root_for(radiation: str, explicit: str | None) -> Path:
     environment = os.environ.get("RADAR_PD_DB_ROOT", "").strip()
     if environment:
         candidate = Path(environment).resolve()
-        nested = candidate / f"database_{radiation}"
-        return nested if nested.exists() else candidate
+        # A flat explicit catalog remains supported; an empty parent must not
+        # be silently mistaken for a usable radiation-specific database.
+        if (candidate / 'catalog_deduplicated.csv').is_file():
+            return candidate
+        return candidate / f"database_{radiation}"
     return (PROJECT_ROOT / "data" / f"database_{radiation}").resolve()
 
 
@@ -787,6 +790,14 @@ def command_analyze(args: argparse.Namespace) -> int:
 
     radiation = str((raw_config.get("analysis") or {}).get("radiation") or args.radiation or "neutron").lower()
     builtin_db_root = _db_root_for(radiation, args.db_root)
+    if not args.db_pack and not args.dry_run:
+        from ndip_catalog_bundle import BuiltinCatalogUnavailable, require_runtime_catalog
+        try:
+            require_runtime_catalog(builtin_db_root, radiation)
+        except BuiltinCatalogUnavailable as exc:
+            atomic_write_json(portal / 'diagnostics' / 'catalog-readiness.json', exc.catalog_diagnostic)
+            (portal / 'console.log').write_text(json.dumps(exc.catalog_diagnostic, indent=2) + '\n')
+            raise
     db_root = builtin_db_root
     original_json_override = None
     if args.db_pack:
@@ -1076,6 +1087,8 @@ def command_build_library(args: argparse.Namespace) -> int:
     if args.library_mode == "augmented":
         if not args.base_db_root:
             raise ValueError("Augmented libraries require --base-db-root")
+        from ndip_catalog_bundle import require_runtime_catalog
+        require_runtime_catalog(Path(args.base_db_root).resolve(), args.radiation)
         result = build_augmented_db_pack(
             cif_paths,
             output_root,
@@ -1312,7 +1325,9 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.handler(args))
     except Exception as exc:
         print(f"[NDIP ERROR] {exc}", file=sys.stderr)
-        traceback.print_exc()
+        from ndip_catalog_bundle import BuiltinCatalogUnavailable
+        if not isinstance(exc, BuiltinCatalogUnavailable):
+            traceback.print_exc()
         return 1
 
 

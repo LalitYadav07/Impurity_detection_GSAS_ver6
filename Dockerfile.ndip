@@ -1,3 +1,7 @@
+# Copy only the existing immutable built-in data; keep its older runtime out
+# of the scientific image. This registry permits anonymous read access.
+FROM savannah.ornl.gov/radar-pd/radar-pd@sha256:eeb2c0c6f2892f22b655ed39cf70ef9ddd508dab012deb2c771d7e8091ba121a AS builtin_catalog
+
 # Preserve the scientific runtime that reproduced the complete 141-scan study.
 # Dependency upgrades require their own real-pattern validation. Copying tested
 # application source must not resolve a newer GSAS-II or numerical stack.
@@ -11,6 +15,15 @@ ARG RADAR_PD_BUILD_SHA=unknown
 ENV RADAR_PD_GIT_COMMIT=${RADAR_PD_BUILD_SHA}
 ENV RADAR_PD_EXECUTION_CONTEXT=galaxy
 COPY --chown=radar:radar . /opt/radar-pd
+# The inherited /opt/radar-pd/data is a VOLUME. Keep required immutable assets
+# outside that mount so an empty runtime volume cannot hide the catalog.
+COPY --from=builtin_catalog --chown=radar:radar /opt/radar-pd/data/ /opt/radar-pd/catalog/
+ENV RADAR_PD_DB_ROOT=/opt/radar-pd/catalog \
+    RADAR_PD_DATABASE_VERSION=orc-builtins-20260617
+LABEL gov.ornl.radar-pd.catalog.version="orc-builtins-20260617" \
+    gov.ornl.radar-pd.catalog.source="savannah.ornl.gov/radar-pd/radar-pd@sha256:eeb2c0c6f2892f22b655ed39cf70ef9ddd508dab012deb2c771d7e8091ba121a"
+RUN python scripts/ndip_catalog_bundle.py prepare-runtime-layout --source /opt/radar-pd/catalog \
+    && python scripts/ndip_catalog_bundle.py verify-installed --source /opt/radar-pd/catalog
 RUN python -m py_compile \
         scripts/ndip_contracts.py \
         scripts/ndip_gpx_handoff.py \
