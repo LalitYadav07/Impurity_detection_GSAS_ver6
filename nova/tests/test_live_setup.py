@@ -161,6 +161,7 @@ def live(monkeypatch):
         }
 
     monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", preflight)
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *args, **kwargs: {"metadata_resolution": [], "metadata_notices": []})
     monkeypatch.setattr("radar_pd_nova.app.PowgenWatchController", TrialController)
     monkeypatch.setitem(
         BEAMLINES, "PG3", replace(BEAMLINES["PG3"], controller=TrialController)

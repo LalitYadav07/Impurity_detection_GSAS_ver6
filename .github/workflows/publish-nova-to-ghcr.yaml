@@ -154,6 +154,7 @@ jobs:
             /validation-tests/test_hb2a.py \
             /validation-tests/test_hb2a_live_setup.py \
             /validation-tests/test_live_setup.py \
+            /validation-tests/test_live_identity_review.py \
             /validation-tests/test_sample_identity_timing.py \
             /validation-tests/test_powgen_samples.py \
             /validation-tests/test_sample_catalog.py \

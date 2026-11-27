@@ -826,6 +826,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.powgen_run_options = []
         state.powgen_metadata_resolution = []
         state.powgen_metadata_notices = []
+        state.powgen_identity_review_rows = []
+        state.powgen_identity_review_notices = []
         state.powgen_excluded_runs = []
         state.powgen_include_background = False
         state.powgen_include_ramps = False
@@ -2175,14 +2177,18 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     text=("powgen_metadata_notices.join('; ')",),
                     type="warning", variant="tonal", density="compact", classes="mb-2",
                 )
-                with html.Details(v_if="powgen_metadata_resolution.length", classes="radar-soft-panel mb-2"):
+                with html.Details(v_if="live_beamline === 'PG3' ? powgen_identity_review_rows.length : powgen_metadata_resolution.length", classes="radar-soft-panel mb-2"):
                     html.Summary("Sample identity checks and choices")
                     html.P("Resolved identities retain their recorded sources. Conflicting or unidentified runs remain unassigned and cannot enter sample-bound Live analysis. To analyze one individually, use Single pattern, choose Browse an SNS/HFIR experiment folder, and select its exact reduced file and matching profile. This does not establish that two runs contain the same physical sample.", classes="radar-help-copy")
-                    with html.Div(v_for="row in powgen_metadata_resolution.slice(0, 100)", key="row.run_id || row.run_number", classes="radar-preflight-row"):
+                    html.P("The full source identity inventory is shown below, with unresolved runs first. Displayed excluded runs are not enrolled; the selected sample and input check still control which scans can be analyzed.", v_if="live_beamline === 'PG3'", classes="radar-help-copy")
+                    html.P("{{ powgen_identity_review_notices.join('; ') }}", v_if="live_beamline === 'PG3' && powgen_identity_review_notices.length", classes="radar-help-copy")
+                    with html.Div(v_for="row in (live_beamline === 'PG3' ? powgen_identity_review_rows : powgen_metadata_resolution).slice(0, 100)", key="row.run_id || row.run_number", classes="radar-preflight-row"):
                         html.Span("{{ row.run_id || ('Run ' + row.run_number) }} · {{ row.verification === 'catalog_preview' ? 'Catalog preview · ' : '' }}{{ row.status }} · {{ row.sample_display || row.sample_id || 'No verified sample ID' }}")
+                        html.Span("{{ row.selection_note || '' }}", classes="radar-help-copy")
                         html.Span("{{ (row.actions || []).map(a => a.message).join('; ') }}", classes="radar-help-copy")
                         html.Span("{{ (row.sources || []).map(s => s.kind + ': ' + s.value + (s.path ? ' (' + s.path + (s.line ? ':' + s.line : '') + ')' : '')).join('; ') }}", classes="radar-help-copy")
-                    html.P("Showing the first 100 checks; narrow the sample selection to review a smaller group.", v_if="powgen_metadata_resolution.length > 100", classes="radar-help-copy")
+                    html.P("Showing the first 100 identity checks; unresolved runs appear first. Sample filtering does not hide this source evidence.", v_if="live_beamline === 'PG3' && powgen_identity_review_rows.length > 100", classes="radar-help-copy")
+                    html.P("Showing the first 100 checks; narrow the sample selection to review a smaller group.", v_if="live_beamline !== 'PG3' && powgen_metadata_resolution.length > 100", classes="radar-help-copy")
                 with html.Details(v_show="powgen_configuration_summary.length > 0", classes="radar-soft-panel mb-2"):
                     html.Summary("Analysis settings in this check")
                     with html.Div(v_for="item in powgen_configuration_summary", key="item.label", classes="radar-preflight-row"):
@@ -5654,6 +5660,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.powgen_preflight_checked = "Not checked"
         state.powgen_metadata_resolution = []
         state.powgen_metadata_notices = []
+        self._reset_powgen_identity_review()
         state.powgen_preflight_message = "Check experiment and inputs after changing the scan, sample, wavelength or bank selection."
         if not getattr(state, "powgen_monitoring", False):
             state.powgen_message = state.powgen_preflight_message
@@ -5820,6 +5827,71 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.powgen_sample_message = "Refresh sample IDs for this reduction folder."
         self._powgen_processing_changed()
 
+    def _powgen_identity_review_key(self):
+        """Bind display-only evidence to one service and full source, not a sample filter."""
+        state = self.server.state
+        if self._live_adapter().instrument != "PG3":
+            return None
+        try:
+            ipts = self._normalize_powgen_ipts(getattr(state, "powgen_ipts", None))
+        except ValueError:
+            return None
+        service = getattr(self, "service", None)
+        return (id(service), getattr(service, "galaxy_url", None),
+                getattr(service, "history_id", None), "PG3", ipts,
+                str(getattr(state, "powgen_source_subfolder", "shared/autoreduce") or "shared/autoreduce"))
+
+    def _reset_powgen_identity_review(self):
+        state = self.server.state
+        key = self._powgen_identity_review_key()
+        if key is None or key != getattr(self, "_powgen_identity_review_context", None):
+            self._powgen_identity_review_request = object()
+            self._powgen_identity_review_source = []
+            self._powgen_identity_review_context = None
+            state.powgen_identity_review_rows = []
+            state.powgen_identity_review_notices = []
+        else:
+            from .sample_identity_review import identity_review_rows
+            state.powgen_identity_review_rows = identity_review_rows(self._powgen_identity_review_source)
+
+    def _begin_powgen_identity_review(self, context):
+        if context is None:
+            return None
+        token = self._powgen_identity_review_request = object()
+        self._powgen_identity_review_source = []
+        self._powgen_identity_review_context = context
+        self.server.state.powgen_identity_review_rows = []
+        self.server.state.powgen_identity_review_notices = []
+        return token
+
+    def _publish_powgen_identity_review(self, result, context, request):
+        if request is not getattr(self, "_powgen_identity_review_request", None):
+            return False
+        if context is None or context != self._powgen_identity_review_key():
+            self._reset_powgen_identity_review()
+            return False
+        from .sample_identity_review import identity_review_rows
+        self._powgen_identity_review_context = context
+        self._powgen_identity_review_source = deepcopy(result.get("metadata_resolution", []))
+        self.server.state.powgen_identity_review_rows = identity_review_rows(self._powgen_identity_review_source)
+        self.server.state.powgen_identity_review_notices = list(result.get("metadata_notices", []))
+        return True
+
+    async def _check_powgen_identity_review(self, ipts, signature, context, request):
+        """Read the full identity inventory before any selected-run validation."""
+        if context is None:
+            return True
+        folder = context[-1]
+        args = (ipts, self._powgen_sample_index(ipts))
+        if folder != "shared/autoreduce":
+            args += (folder,)
+        result = await asyncio.to_thread(discover_powgen_samples, *args)
+        if signature != self._powgen_preflight_signature():
+            if request is getattr(self, "_powgen_identity_review_request", None):
+                self._reset_powgen_identity_review()
+            return False
+        return self._publish_powgen_identity_review(result, context, request)
+
     def _powgen_sample_index(self, ipts: str) -> PowgenSampleIndex:
         if not hasattr(self, "_powgen_sample_indexes"):
             self._powgen_sample_indexes = {}
@@ -5872,6 +5944,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             return
         token = object()
         self._powgen_sample_request = token
+        identity_context = self._powgen_identity_review_key()
+        if identity_context is not None:
+            self._powgen_processing_changed()
+        identity_request = self._begin_powgen_identity_review(identity_context)
         try:
             ipts = self._normalize_powgen_ipts(state.powgen_ipts)
             state.powgen_sample_loading = True
@@ -5885,7 +5961,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             loop=asyncio.get_running_loop()
             def publish_progress(done,total):
                 def update():
-                    if self._powgen_sample_request is token:
+                    if (self._powgen_sample_request is token and
+                            (identity_context is None or identity_request is self._powgen_identity_review_request)):
                         state.powgen_sample_message=f"Reading sample identities: {done:,} of {total:,} completed scans…"
                         state.flush()
                 try:
@@ -5899,6 +5976,11 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 kwargs['product_family'] = str(state.snap_product_family or '')
             result = await asyncio.to_thread(discovery, *args, **kwargs)
             if self._powgen_sample_request is not token:
+                return
+            if identity_context is not None and identity_request is not self._powgen_identity_review_request:
+                return
+            if identity_context is not None and identity_context != self._powgen_identity_review_key():
+                self._reset_powgen_identity_review()
                 return
             state.powgen_source_options = result.get("source_options") or getattr(state, "powgen_source_options", [])
             if self._live_adapter().instrument == "SNAP":
@@ -5916,6 +5998,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     state.hb2a_condition_reviewed=False
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])
+            self._publish_powgen_identity_review(result, identity_context, identity_request)
             state.powgen_sample_discovery_ipts = ipts
             from .powgen_samples import sample_identity_summary
             state.powgen_sample_message = (
@@ -5937,7 +6020,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 state.powgen_sample_message='The selected reduction folder is unavailable. Choose one of the available reduction families, then refresh sample IDs.'
             return result
         except Exception as exc:
-            if self._powgen_sample_request is token:
+            if (self._powgen_sample_request is token and
+                    (identity_context is None or identity_request is self._powgen_identity_review_request)):
                 state.powgen_sample_message = f"Sample discovery failed: {exc}. You can still check All samples; unresolved identities block Live submission."
                 state.powgen_discovered_sample_options = []
         finally:
@@ -5989,6 +6073,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
 
         state = self.server.state
         signature = self._powgen_preflight_signature()
+        identity_context = self._powgen_identity_review_key()
+        self._reset_powgen_identity_review()
+        identity_request = self._begin_powgen_identity_review(identity_context)
         state.powgen_preflight_status = "checking"
         state.powgen_preflight_ready = False
         state.powgen_preflight_checked = "Checking now"
@@ -5998,6 +6085,12 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.flush()
         try:
             ipts = self._normalize_powgen_ipts(state.powgen_ipts)
+            if not await self._check_powgen_identity_review(ipts, signature, identity_context, identity_request):
+                if signature == self._powgen_preflight_signature() and identity_context == self._powgen_identity_review_key():
+                    state.powgen_preflight_status = "idle"
+                    state.powgen_preflight_message = "Sample identities were refreshed during this check. Check the current inputs again."
+                    state.flush()
+                return False
             configuration_id = str(state.powgen_configuration_dataset_id or "").strip()
             configuration = await asyncio.to_thread(self._live_configuration)
             source = getattr(state, "live_configuration_source", None) or "history"
@@ -6102,7 +6195,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 result = await asyncio.to_thread(preflight_powgen_experiment, ipts,
                     requested_wavelength=str(state.powgen_wavelength or ""),
                     instrument_profile_name=instrument_profile_name, **preflight_arguments)
-            if signature != self._powgen_preflight_signature():
+            if (signature != self._powgen_preflight_signature() or identity_context != self._powgen_identity_review_key()
+                    or (identity_context is not None and identity_request is not self._powgen_identity_review_request)):
                 state.powgen_preflight_ready = False
                 state.powgen_preflight_status = "idle"
                 state.powgen_preflight_message = "Inputs changed during the experiment check. Check the current selection again."
@@ -6125,6 +6219,10 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.nomad_quality_notices = result.get("quality_notices", []) if self._live_adapter().instrument != "PG3" else []
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])
+            if identity_context is not None:
+                from .sample_identity_review import identity_review_rows
+                state.powgen_identity_review_rows = identity_review_rows(
+                    self._powgen_identity_review_source, result.get('metadata_resolution', []), checked=True)
             if self._live_adapter().instrument == 'SNAP':
                 state.snap_condition_options = result.get('condition_options', [])
                 scope = json.dumps(result.get('condition_scope', {}),sort_keys=True)
@@ -6249,7 +6347,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             )
             state.error_message = "" if state.powgen_preflight_ready else state.powgen_preflight_message
         except Exception as exc:
-            if signature != self._powgen_preflight_signature():
+            if (signature != self._powgen_preflight_signature() or identity_context != self._powgen_identity_review_key()
+                    or (identity_context is not None and identity_request is not self._powgen_identity_review_request)):
                 return False
             state.powgen_preflight_status = "error"
             state.powgen_preflight_ready = False

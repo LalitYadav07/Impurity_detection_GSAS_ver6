@@ -1681,7 +1681,8 @@ def test_powgen_preflight_passes_uploaded_instrument_profile_to_resolution(
     )
     app.server = SimpleNamespace(state=state)
     config = AnalysisConfig(mode=AnalysisMode.RAPID, sample_elements=["Fe", "V", "Al"])
-    app.service = SimpleNamespace(load_configuration_dataset=lambda _dataset_id: config)
+    app.service = SimpleNamespace(load_configuration_dataset=lambda _dataset_id: config,
+                                  galaxy_url="https://local.invalid", history_id="local-history")
     app._set_powgen_configuration_preview = lambda *_args: None
     captured: dict[str, object] = {}
 
@@ -1696,6 +1697,7 @@ def test_powgen_preflight_passes_uploaded_instrument_profile_to_resolution(
             "latest_file": "PG3_10000.gsa",
             "latest_start_time": "2026-01-01T00:00:00Z",
             "sample_display": "Legacy sample",
+            "metadata_resolution": [{"run_number":10000, "status":"resolved", "sample_id":"legacy-sample"}],
             "temperature_display": "300 K",
             "detected_wavelength": "1.5",
             "selected_wavelength": "1.5",
@@ -1707,8 +1709,9 @@ def test_powgen_preflight_passes_uploaded_instrument_profile_to_resolution(
         }
 
     monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", fake_preflight)
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *args, **kwargs: {"metadata_resolution": [], "metadata_notices": []})
 
-    assert asyncio.run(app.check_powgen_experiment()) is True
+    assert asyncio.run(app.check_powgen_experiment()) is True, state.powgen_preflight_message
     assert captured["instrument_profile_name"] == "2011A_bank2.instprm"
     assert state.powgen_instrument_label == "2011A_bank2.instprm"
     assert state.powgen_preflight_ready is True
@@ -2236,6 +2239,7 @@ def test_powgen_preflight_runs_off_thread_and_discards_changed_selection(monkeyp
         assert release.wait(5)
         return {"ready":True}
     monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", inspect)
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *args, **kwargs: {"metadata_resolution": [], "metadata_notices": []})
     async def check():
         task = asyncio.create_task(app.check_powgen_experiment())
         assert await asyncio.to_thread(started.wait, 5)
