@@ -8412,6 +8412,15 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         result_document = payload.get("summary") or {}
         root = record.local_output_dir
         if root is None:
+            # Selecting an uncollected single run still leaves the prior Live
+            # analysis scope, without clearing a displayed fit prematurely.
+            if not current():
+                return
+            if not local_only and not preview:
+                self._refinement_maybe_refresh()
+            if current():
+                self._activate_post_analysis_scope(
+                    "single:" + record.uid, record.config.post_analysis if record.config is not None else None)
             return
         view = build_result_view(result_document, root, submitted_mode=record.mode.value).to_state()
         checkpoints = [] if preview else self._launchable_checkpoint_rows(record, view["checkpoints"])
