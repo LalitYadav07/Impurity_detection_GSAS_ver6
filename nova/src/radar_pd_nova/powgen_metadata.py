@@ -22,6 +22,7 @@ import subprocess
 from typing import Any, Iterable
 
 from .facility_metadata import resolve_nexus_path, resolve_identity, qualify_temperature, parse_nexus_timestamp
+from .sample_identity_timing import scope_identity_log
 
 
 _MAX_LOG_VALUES = 200_000
@@ -36,6 +37,32 @@ _SAMPLE_ID_PATHS = (
     "/entry/sample/sample_identifier", "/entry/DASlogs/SampleId/value",
     "/entry/DASlogs/BL11A:SE:SampleId/value",
 )
+_SAMPLE_ID_TIME_PATHS = tuple(field.rsplit("/", 1)[0] + "/time"
+                              for field in _SAMPLE_ID_PATHS if "/DASlogs/" in field)
+
+
+def _identity_attribute(value):
+    """Decode only a scalar attribute; arrays are not a valid log clock."""
+    if getattr(value, "size", None) == 1:
+        value = value.item()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip()
+    return value
+
+
+def _h5dump_identity_attributes(body):
+    result = {}
+    for key in ("start", "units", "scaling_factor"):
+        match = re.search(r'ATTRIBUTE\s+"' + key + r'".*?\bDATA\s*\{(.*?)\}', body, re.DOTALL)
+        if not match:
+            continue
+        quoted = _QUOTED.findall(match[1])
+        numbers = _NUMBER.findall(match[1]) if not quoted else []
+        if len(quoted) == 1:
+            result[key] = _decode_h5dump_text(quoted[0])
+        elif len(numbers) == 1:
+            result[key] = float(numbers[0])
+    return result
 
 
 def _decode_h5dump_text(text: str) -> str:
@@ -80,11 +107,14 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
     if executable is None and h5py is None:
         raise ImportError("No compatible bounded HDF5 identity reader is available")
     path = Path(nexus_path) if nexus_path is not None else powgen_nexus_path(ipts, run_number)
-    fields = (*_SAMPLE_ID_PATHS, "/entry/sample/name", "/entry/run_number", "/entry/experiment_identifier", "/entry/instrument/name")
+    fields = (*_SAMPLE_ID_PATHS, *_SAMPLE_ID_TIME_PATHS, "/entry/start_time", "/entry/end_time",
+              "/entry/sample/name", "/entry/run_number", "/entry/experiment_identifier", "/entry/instrument/name")
     numeric_fields = (*_SAMPLE_ID_PATHS, "/entry/run_number")
     before = path.stat()
     values: dict[str, str] = {}
     identity_observations: dict[str, list[str]] = {}
+    identity_times = {}
+    identity_time_attributes = {}
     if executable:
         # Request only named sample fields. Missing aliases do not invalidate
         # fields which h5dump successfully returned in the same invocation.
@@ -124,6 +154,8 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
         )
         sections = re.split(r'(?m)^\s*DATASET "([^"]+)" \{', completed.stdout)
         for field, body in zip(sections[1::2], sections[2::2]):
+            if field in _SAMPLE_ID_TIME_PATHS:
+                identity_time_attributes[field] = _h5dump_identity_attributes(body)
             match = _DATA.search(body)
             if not match:
                 continue
@@ -141,6 +173,10 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
                     tokens = _NUMBER.findall(match.group(1))
                     if len(tokens)>1000:raise ValueError('Sample identity log exceeds the bounded identity limit')
                     identity_observations[field] = [_sample_identifier_number(v) for v in tokens]
+            elif field in _SAMPLE_ID_TIME_PATHS:
+                tokens = _NUMBER.findall(match.group(1))
+                if len(tokens)>1000:raise ValueError('Sample identity time log exceeds the bounded identity limit')
+                identity_times[field] = [float(v) for v in tokens]
     else:
         with h5py.File(path, "r") as handle:
             for field in fields:
@@ -169,6 +205,12 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
                             observations.append(_sample_identifier_number(str(item)))
                         else:observations.append(str(item).strip())
                     identity_observations[field]=observations
+                elif field in _SAMPLE_ID_TIME_PATHS:
+                    identity_times[field] = [_identity_attribute(v) for v in (dataset[()].reshape(-1) if dataset.shape else [raw])]
+                    identity_time_attributes[field] = {
+                        key: _identity_attribute(dataset.attrs[key])
+                        for key in ("start", "units", "scaling_factor") if key in dataset.attrs
+                    }
     after = path.stat()
     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
         raise ValueError("Raw identity metadata changed during inspection; retry")
@@ -180,9 +222,46 @@ def read_powgen_sample_identity(ipts: str, run_number: int, *, nexus_path=None, 
     aliases = {'POWGEN':'PG3','PG3':'PG3','NOMAD':'NOM','NOM':'NOM','SNAP':'SNAP'}
     if stored_instrument in aliases and aliases[stored_instrument] != instrument:
         raise ValueError('NeXus instrument disagrees with the selected beamline')
-    result = resolve_identity([{"value": observed, "field": field, "path": str(path), "kind": "nexus"}
-                               for field in _SAMPLE_ID_PATHS if field in values
-                               for observed in dict.fromkeys(identity_observations.get(field,[values[field]]))])
+    evidence, scopes, notices = [], [], []
+    for field in _SAMPLE_ID_PATHS:
+        if field not in values:
+            continue
+        observed = identity_observations.get(field, [values[field]])
+        indices = list(range(len(observed)))
+        scope = None
+        if "/DASlogs/" in field:
+            time_field = field.rsplit("/", 1)[0] + "/time"
+            indices, scope = scope_identity_log(
+                observed, identity_times.get(time_field, []), identity_time_attributes.get(time_field, {}),
+                values.get("/entry/start_time"), values.get("/entry/end_time"),
+            )
+            scope.update(field=field, time_field=time_field)
+            scopes.append(scope)
+            ignored = scope.get("ignored_before_count", 0) + scope.get("ignored_after_count", 0)
+            if ignored:
+                notices.append(f"{field}: {ignored} out-of-acquisition identity record(s) were excluded using the recorded log clock.")
+        seen = set()
+        for index in indices:
+            value = observed[index]
+            if value in seen:
+                continue
+            seen.add(value)
+            row = {"value": value, "field": field, "path": str(path), "kind": "nexus"}
+            if scope and scope["status"] == "acquisition_window":
+                row.update(time_scope="acquisition_window", seconds_from_start=scope["seconds_from_acquisition_start"][index])
+            evidence.append(row)
+    result = resolve_identity(evidence)
+    if result["identity_status"] == "conflict":
+        details = []
+        for field in _SAMPLE_ID_PATHS:
+            ids = list(dict.fromkeys(str(row["value"]) for row in evidence if row["field"] == field))
+            if ids:
+                suffix = " during acquisition" if any(row.get("time_scope") for row in evidence if row["field"] == field) else ""
+                details.append(field + suffix + " = " + ", ".join(ids[:4]) + (", …" if len(ids) > 4 else ""))
+        result["identity_warning"] = "Conflicting recorded sample identifiers: " + "; ".join(details) + ". Review source identity before assigning this run to a sample."
+    result["identity_time_scopes"] = scopes
+    result["identity_read_verified"] = True
+    result["metadata_notices"] = notices
     result["sample_name"] = values.get("/entry/sample/name", "")
     return result
 

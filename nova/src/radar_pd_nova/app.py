@@ -2175,7 +2175,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 )
                 with html.Details(v_if="powgen_metadata_resolution.length", classes="radar-soft-panel mb-2"):
                     html.Summary("Sample identity checks and choices")
-                    html.P("Resolved identities retain their recorded sources. Conflicting or unidentified runs remain visible; choosing All samples includes unidentified runs. Instrument profiles and diffraction banks are checked separately.", classes="radar-help-copy")
+                    html.P("Resolved identities retain their recorded sources. Conflicting or unidentified runs remain unassigned and cannot enter sample-bound Live analysis. To analyze one individually, use Single pattern, choose Browse an SNS/HFIR experiment folder, and select its exact reduced file and matching profile. This does not establish that two runs contain the same physical sample.", classes="radar-help-copy")
                     with html.Div(v_for="row in powgen_metadata_resolution.slice(0, 100)", key="row.run_id || row.run_number", classes="radar-preflight-row"):
                         html.Span("{{ row.run_id || ('Run ' + row.run_number) }} · {{ row.verification === 'catalog_preview' ? 'Catalog preview · ' : '' }}{{ row.status }} · {{ row.sample_display || row.sample_id || 'No verified sample ID' }}")
                         html.Span("{{ (row.actions || []).map(a => a.message).join('; ') }}", classes="radar-help-copy")
@@ -5914,11 +5914,11 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.powgen_metadata_resolution = result.get('metadata_resolution', [])
             state.powgen_metadata_notices = result.get('metadata_notices', [])
             state.powgen_sample_discovery_ipts = ipts
-            unknown = int(result["unidentified_count"])
+            from .powgen_samples import sample_identity_summary
             state.powgen_sample_message = (
                 (f"Found {len(result['options'])} experiment-scoped sample labels across {result['scan_count']} reduced acquisitions. "
                     if self._live_adapter().instrument=='HB2A' else f"Found {len(result['options'])} sample IDs across {result['scan_count']} completed scans. ")
-                + (f"{unknown} scans have no readable sample ID and require review before Live submission." if unknown else "")
+                + sample_identity_summary(result)
                 + (" Sample list uses catalog metadata; selected runs are verified from source files before analysis."
                    if result.get("catalog_preview_count") else "")
             )

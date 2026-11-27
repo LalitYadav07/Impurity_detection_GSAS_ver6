@@ -17,6 +17,21 @@ from .sample_labels import with_recorded_run_context
 MAX_CATALOG_NAME_REPRESENTATIVES = 128
 
 
+def sample_identity_summary(result: dict[str, Any]) -> str:
+    """Keep real conflicts distinct from absent IDs in the Live summary."""
+    unresolved = int(result.get("unidentified_count", 0))
+    conflicts = int(result.get("identity_conflict_count", 0))
+    missing = max(0, unresolved - conflicts)
+    parts = []
+    if conflicts:
+        parts.append(f"{conflicts} scans have conflicting sample IDs; review Sample identity checks and choices.")
+    if missing:
+        parts.append(f"{missing} scans have no readable sample ID and require review before Live submission.")
+    if conflicts or missing:
+        parts.append("For an individual analysis, use Single pattern and Browse an SNS/HFIR experiment folder to choose the exact reduced file and matching profile. Live sample binding remains blocked until identity is reviewed.")
+    return " ".join(parts)
+
+
 def _queue_title_role(title: str) -> str:
     """Extend only the PG3/NOM queue policy, not native preparation identity."""
     role = title_role(title)
@@ -103,8 +118,10 @@ class PowgenSampleIndex:
                 # metadata. Keep the notice while checking independent sources.
                 raw_metadata = {'metadata_notices': [f'Raw sample identity is unavailable: {exc}']}
             metadata = self.metadata_index.enrich(run.run_number, raw_metadata)
+            if raw_metadata.get("identity_time_scopes"):
+                metadata["identity_time_scopes"] = raw_metadata["identity_time_scopes"]
             # Empty metadata may belong to a file still being written.
-            if metadata.get("sample_id") and not raw_metadata.get('metadata_notices'):
+            if metadata.get("sample_id") and (not raw_metadata.get('metadata_notices') or raw_metadata.get('identity_read_verified')):
                 with self._lock:
                     self._cache[run.run_number] = (signature, dict(metadata))
             return metadata
@@ -249,6 +266,10 @@ class PowgenSampleIndex:
             else:
                 role = run_role(run)
             title = role["run_title"] or "Title unavailable in preview"
+            if metadata.get("identity_status") == "conflict":
+                title = "Conflicting sample IDs · " + title
+            elif not metadata.get("sample_id"):
+                title = "Sample ID not reported · " + title
             run_options.append({"value": run.run_number, "run_id": run.run_id,
                                 "sample_id": metadata.get("sample_id", ""),
                                 "title": f"{run.run_id} — {role['run_role']}: {title}",
@@ -270,6 +291,7 @@ class PowgenSampleIndex:
                 "metadata_resolution": [{"run_number": r.run_number, "status": m.get('identity_status','unidentified'),
                    "sample_id": m.get('sample_id',''), "actions": m.get('metadata_actions',[]),
                    "sources": m.get('identity_sources',[]),
+                   "time_scopes": m.get('identity_time_scopes',[]),
                    "verification": m.get("identity_verification", "source_file")} for r,m in zip(runs,identities)]}
 
 
