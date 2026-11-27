@@ -361,8 +361,8 @@ def test_powgen_configuration_copy_keeps_run_inputs_independent() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html
 
-    assert "Reuses analysis settings." in template
-    assert "Scans, instrument profile, candidate library and main phase come from this Live setup." in template
+    assert "Reuses analysis settings and any sample model assignments." in template
+    assert "This Live setup supplies scans and profile; without assignments it also supplies the library and main CIF." in template
 
 
 def test_galaxy_remote_browser_remains_available_for_restored_legacy_runs() -> None:
