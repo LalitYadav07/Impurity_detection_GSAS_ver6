@@ -379,6 +379,8 @@ def restore_history(root,runtime,*,experiment=None,progress=None):
                     transport.setdefault('prepared_inputs',{})[sha]=dict(status='unavailable',
                         message='Prepared inputs could not be recovered. Current physics will be rebuilt.',
                         error_type=type(error).__name__)
+            from .model_reference_inputs import restore_reference_aliases
+            restore_reference_aliases(document,template,inputs,campaign.root)
             if digest(template['protocol']) not in inputs:raise ValueError('The reviewed reference inputs are absent from the checkpoint')
             if progress:progress(f'Rebuilding {len(document["ledger"]["trials"]):,} saved starts for {identifier}. No new refinements are being submitted.')
             from .model_ledger_recovery import restore_ledger

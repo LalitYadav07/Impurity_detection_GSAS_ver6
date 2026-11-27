@@ -669,7 +669,19 @@ class GalaxyChunkTransport:
         for key in ['context','inspection','source_path']:source.pop(key,None)
         with self._state_lock:self.state['sources'][protocol]=source;self.save()
 
-    def prepare_source(self,protocol,root,source):
+    def prepare_reference(self,protocol,template,root,source):
+        """Publish one exact bound packet for the original current-only source."""
+        from .model_reference_inputs import bound_reference_protocol, reference_alias
+        bound=bound_reference_protocol(template,source)
+        if bound is None or digest(protocol) in self.state['inputs']:
+            # A partial legacy Start may already own its separate reference.
+            return self.prepare_source(protocol,root,source)
+        if protocol!=template['protocol']:
+            raise ValueError('The reference protocol differs from its approved template')
+        alias=reference_alias(template,bound,source,self.runtime.service.history_id)
+        self.prepare_source(bound,root,source,_reference_alias=alias)
+
+    def prepare_source(self,protocol,root,source,*,_reference_alias=None):
         """Capture input-HDA references before new trials enter the ledger."""
         from gpx_recipe.symmetry.compiler import prepare_shared_inputs
         sha=digest(protocol)
@@ -677,9 +689,16 @@ class GalaxyChunkTransport:
         _,prepared_paths=self._prepared_inputs(protocol,captured,capture_new=True)
         packet=self.runtime.packet(captured,['protocol.json']+[a['path'] for a in assets(protocol)]+prepared_paths,
                                    source_sha256=protocol['source']['sha256'])
+        source=copy.deepcopy(source)
+        for key in ['context','inspection','source_path']:source.pop(key,None)
         with self._state_lock:
+            # A checkpoint sees the complete input/source/alias binding or none
+            # of it, including when a new viewer dies before enrollment.
             self.state['inputs'][sha]=packet
-            self.bind_source(sha,source)
+            self.state['sources'][sha]=source
+            if _reference_alias is not None:
+                self.state.setdefault('reference_aliases',{})[_reference_alias['reference_protocol_sha256']]=_reference_alias
+            self.save()
 
     def _prepared_inputs(self,protocol,root,*,capture_new=False):
         from gpx_recipe.preparation.hints import read,packet_paths

@@ -958,7 +958,7 @@ def test_checkpoint_keeps_ledger_tables_on_one_side_of_a_concurrent_commit(remot
 
 
 @pytest.mark.parametrize('lost_ack',[True,False])
-@pytest.mark.parametrize('reference_binding',['direct','legacy-enrolled-copy'])
+@pytest.mark.parametrize('reference_binding',['direct','legacy-enrolled-copy','single-packet-alias'])
 def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,tmp_path,monkeypatch,lost_ack,reference_binding):
     from gpx_recipe.symmetry.contracts import validate_protocol
     from gpx_recipe.symmetry.templates import make_template
@@ -982,7 +982,13 @@ def test_lost_viewer_restores_the_existing_chunk_and_all_trial_receipts(remote,t
         reference=prepare_shared_inputs(p,inputs,c.root)
         t.state['inputs'][digest(p)]=runtime.packet(reference,['protocol.json']+[a['path'] for a in assets(p)],source_sha256=p['source']['sha256'])
         p=validate_protocol(dict(p,template_sha256=digest(template)))
-    t.prepare_source(p,inputs,source)
+    if reference_binding=='single-packet-alias':
+        t.prepare_reference(p,template,inputs,source)
+        p=validate_protocol(dict(p,template_sha256=digest(template)))
+        assert len(t.state['inputs'])==1
+        assert digest(template['protocol']) in t.state['reference_aliases']
+    else:
+        t.prepare_source(p,inputs,source)
     assert not c.trials() and digest(p) in t.state['inputs'] and digest(p) in t.state['sources']
     c.enroll(p,inputs,approved_hash=digest(p))
     c.set_setting('template',template)
@@ -1070,3 +1076,223 @@ def test_legacy_reference_recovery_never_substitutes_a_different_input(alteratio
     elif alteration=='wrong-enrolled-hash':entry['source_sha256']='b'*64
     with pytest.raises(ValueError,match='saved source reference differs'):
         _recovery_source(document,digest(protocol),protocol,template)
+
+
+def reference_alias_fixture(remote, tmp_path):
+    from test_symmetry_contracts import make_protocol
+    from gpx_recipe.symmetry.templates import make_template
+    runtime, service, original = remote
+    root = tmp_path/'alias-inputs'
+    protocol = make_protocol(root)
+    protocol.update(acquisition_id='scan1', implementation_sha256=package_signature())
+    source = dict(original, source_path=str(root/'source.gpx'),
+                  source_sha256=protocol['source']['sha256'],
+                  experiment='IPTS-1', sample_key='sample:one', bank='1')
+    context = dict(sha256=source['source_sha256'])
+    template = make_template(protocol, context, source, [(source, 'radar')], origin='radar')
+    campaign = Campaign(tmp_path/'original/campaign-bbbbbbbbbbbb', shared_inputs=True)
+    campaign.set_setting('template', template)
+    transport = GalaxyChunkTransport(runtime, campaign)
+    return runtime, service, root, protocol, source, template, campaign, transport
+
+
+def test_current_reference_stages_one_packet_and_keeps_pre_dispatch_checkpoint(remote, tmp_path, monkeypatch):
+    from radar_pd_nova.model_reference_inputs import bound_reference_protocol
+    runtime, service, root, protocol, source, template, campaign, transport = reference_alias_fixture(remote, tmp_path)
+    transport.prepare_reference(protocol, template, root, source)
+    bound = bound_reference_protocol(template, source)
+    transport.prepare_source(bound, root, source)  # ordinary enrollment repeats staging
+    assert len([v for v in service.labels.values() if 'Model inputs ' in v]) == 1
+    assert set(transport.state['inputs']) == {digest(bound)}
+    assert set(transport.state['reference_aliases']) == {digest(protocol)}
+    ids = campaign.enroll(bound, root, approved_hash=digest(bound))
+    submitted = service.submit_utility
+    def inspect_checkpoint(**kwargs):
+        import gzip
+        key = next(k for k,v in reversed(list(service.labels.items())) if 'Model campaign ' in v)
+        saved = json.loads(gzip.decompress(service.data[key]))
+        assert saved['transport']['reference_aliases'][digest(protocol)]['bound_protocol_sha256'] == digest(bound)
+        assert len(saved['ledger']['trials']) == 1
+        return submitted(**kwargs)
+    monkeypatch.setattr(service, 'submit_utility', inspect_checkpoint)
+    campaign.tick(transport, slots=1)
+    assert len(service.submissions) == 1 and len(ids) == 1
+
+
+@pytest.mark.parametrize('change', ['schema', 'history', 'template', 'source_id', 'source_sha',
+                                    'source_hda', 'catalog', 'policy', 'source_bytes', 'catalog_bytes',
+                                    'missing_packet', 'duplicate_reference'])
+def test_reference_alias_recovery_rejects_changed_binding_before_materialization(remote, tmp_path, change):
+    from radar_pd_nova.model_reference_inputs import restore_reference_aliases
+    runtime, service, root, protocol, source, template, campaign, transport = reference_alias_fixture(remote, tmp_path)
+    transport.prepare_reference(protocol, template, root, source)
+    bound_sha = next(iter(transport.state['inputs']))
+    bound_root = campaign.root/'inputs'/bound_sha
+    document = dict(history_id=service.history_id, transport=copy.deepcopy(transport.state))
+    alias = document['transport']['reference_aliases'][digest(protocol)]
+    inputs = {bound_sha:bound_root}
+    if change == 'schema':alias['schema'] = 'unrecognized/v2'
+    elif change == 'history':alias['history_id'] = 'another-history'
+    elif change == 'template':alias['template_sha256'] = 'f'*64
+    elif change == 'source_id':document['transport']['sources'][bound_sha]['id'] = 'another-source'
+    elif change == 'source_sha':document['transport']['sources'][bound_sha]['source_sha256'] = 'f'*64
+    elif change == 'source_hda':document['transport']['sources'][bound_sha]['dataset_id'] = 'another-hda'
+    elif change in {'catalog', 'policy'}:
+        p = json.loads((bound_root/'protocol.json').read_text())
+        if change == 'catalog':p['catalog']['sha256'] = 'f'*64
+        else:p['policy']['cycles'] += 1
+        (bound_root/'protocol.json').write_text(json.dumps(p))
+        # Even a consistently rehashed foreign protocol cannot use this alias.
+        changed_sha=digest(p)
+        alias['bound_protocol_sha256']=changed_sha
+        document['transport']['sources'][changed_sha]=document['transport']['sources'][bound_sha]
+        inputs={changed_sha:bound_root}
+    elif change == 'source_bytes':(bound_root/'source.gpx').write_bytes(b'changed source')
+    elif change == 'catalog_bytes':(bound_root/'catalog.json').write_text('{}')
+    elif change == 'missing_packet':inputs.clear()
+    else:inputs[digest(protocol)] = bound_root
+    destination = tmp_path/'must-not-exist'
+    with pytest.raises(ValueError):restore_reference_aliases(document, template, inputs, destination)
+    assert not destination.exists()
+    assert not service.submissions
+
+
+def test_reference_alias_crash_before_enrollment_restores_unarmed_inputs(remote, tmp_path, monkeypatch):
+    from radar_pd_nova.model_campaigns import restore_history, start_barrier_ready, START_BARRIER_SCHEMA
+    runtime, service, root, protocol, source, template, campaign, transport = reference_alias_fixture(remote, tmp_path)
+    transport.prepare_reference(protocol, template, root, source)
+    campaign.set_setting('start_barrier', dict(schema=START_BARRIER_SCHEMA, state='incomplete',
+                                               template_sha256=digest(template)))
+    transport.checkpoint(force=True)
+    service.data['original-data'] = Path(source['source_path']).read_bytes()
+    again = GalaxyModelRuntime(tmp_path/'crash-runtime', service)
+    restore_history(tmp_path/'crash-viewer', again, experiment='IPTS-1')
+    restored = Campaign(tmp_path/'crash-viewer'/campaign.root.name, shared_inputs=True)
+    assert not restored.trials() and not start_barrier_ready(restored)
+    assert (restored.root/'inputs'/digest(protocol)/'source.gpx').read_bytes() == Path(source['source_path']).read_bytes()
+    assert not service.submissions
+
+
+@pytest.mark.parametrize('scope', ['future', 'cohort', 'different_source'])
+def test_reference_alias_keeps_separate_packets_for_other_scopes(remote, tmp_path, scope):
+    runtime, service, root, protocol, source, template, campaign, transport = reference_alias_fixture(remote, tmp_path)
+    if scope == 'future':template['future'] = True
+    elif scope == 'cohort':template['existing_ids'].append('scan2');template['seen_ids'].append('scan2')
+    else:source['id'] = 'scan2'
+    transport.prepare_reference(protocol, template, root, source)
+    assert set(transport.state['inputs']) == {digest(protocol)}
+    assert not transport.state.get('reference_aliases')
+
+
+def test_reference_alias_restores_prepared_assets_without_granting_native_trust(remote, tmp_path, monkeypatch):
+    from test_structural_ranking_dispatch import setup_inputs
+    from gpx_recipe.execution import write_json
+    from gpx_recipe.preparation import hints, structural_hints
+    from gpx_recipe.symmetry.templates import make_template
+    from radar_pd_nova.model_campaigns import restore_history
+    runtime, service, original = remote
+    inputs, protocol, prepared = setup_inputs(tmp_path/'prepared-alias')
+    protocol['acquisition_id'] = 'scan1'
+    source = dict(original, source_path=str(inputs/'source.gpx'),
+                  source_sha256=protocol['source']['sha256'],
+                  experiment='IPTS-1', sample_key='sample:one', bank='1')
+    template = make_template(protocol, dict(sha256=source['source_sha256']), source,
+                             [(source, 'radar')], origin='radar')
+    def attach(bound, target):
+        document = copy.deepcopy(prepared)
+        document['protocol_sha256'] = digest(bound)
+        document.pop('snapshot_sha256')
+        document['snapshot_sha256'] = digest(document)
+        for name in structural_hints.paths(document):
+            path = target/name;path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(inputs/name, path)
+        write_json(target/structural_hints.MANIFEST, document)
+    runtime.preparation_provider = attach
+    campaign = Campaign(tmp_path/'prepared-original/campaign-cccccccccccc', shared_inputs=True)
+    campaign.set_setting('template', template)
+    transport = GalaxyChunkTransport(runtime, campaign)
+    transport.prepare_reference(protocol, template, inputs, source)
+    packet = next(iter(transport.state['inputs'].values()))
+    transport.checkpoint(force=True)
+    service.data['original-data'] = Path(source['source_path']).read_bytes()
+    downloaded = []
+    download = service._download_dataset
+    def tracked(identifier, target, **kwargs):
+        downloaded.append(identifier);return download(identifier, target, **kwargs)
+    monkeypatch.setattr(service, '_download_dataset', tracked)
+    restored_runtime = GalaxyModelRuntime(tmp_path/'prepared-runtime', service)
+    restore_history(tmp_path/'prepared-viewer', restored_runtime, experiment='IPTS-1')
+    restored_root = tmp_path/'prepared-viewer'/campaign.root.name/'inputs'/digest(protocol)
+    document = hints.read(restored_root, protocol)
+    assert document['protocol_sha256'] == digest(protocol)
+    assert document['entries'] == prepared['entries']
+    assert document['ranking_models'] == prepared['ranking_models']
+    assert document['observations_included'] is False
+    for name in structural_hints.paths(document):
+        assert file_sha(restored_root/name) == file_sha(inputs/name)
+    recovered = json.loads((restored_root.parent.parent/'galaxy.json').read_text())
+    assert all(row['native_qualification_required'] for row in recovered['prepared_inputs'].values())
+    assert downloaded.count(packet) == 1
+    assert not service.submissions
+
+
+def test_partial_legacy_start_keeps_existing_reference_packet(remote, tmp_path):
+    runtime, service, root, protocol, source, template, campaign, transport = reference_alias_fixture(remote, tmp_path)
+    transport.prepare_source(protocol, root, source)
+    original_packet = transport.state['inputs'][digest(protocol)]
+    transport.prepare_reference(protocol, template, root, source)
+    assert transport.state['inputs'] == {digest(protocol):original_packet}
+    assert not transport.state.get('reference_aliases')
+    assert len([v for v in service.labels.values() if 'Model inputs ' in v]) == 1
+
+
+def test_reference_packet_and_alias_are_visible_in_the_same_saved_state(remote, tmp_path, monkeypatch):
+    runtime, service, root, protocol, source, template, campaign, transport = reference_alias_fixture(remote, tmp_path)
+    snapshots = []
+    save = transport.save
+    def observed_save():
+        snapshots.append(copy.deepcopy(transport.state))
+        save()
+    monkeypatch.setattr(transport, 'save', observed_save)
+    transport.prepare_reference(protocol, template, root, source)
+    reference_sha = digest(protocol)
+    assert snapshots
+    for state in snapshots:
+        if state['inputs']:
+            alias = state['reference_aliases'][reference_sha]
+            bound_sha = alias['bound_protocol_sha256']
+            assert bound_sha in state['inputs'] and bound_sha in state['sources']
+            assert alias['source']['dataset_id'] == state['sources'][bound_sha]['dataset_id']
+    assert len([v for v in service.labels.values() if 'Model inputs ' in v]) == 1
+
+
+@pytest.mark.parametrize('damage', ['missing', 'malformed', 'missing_asset', 'escaped_path'])
+def test_reference_alias_optional_preparation_damage_requires_rebuild_not_failed_recovery(remote, tmp_path, damage):
+    from radar_pd_nova.model_reference_inputs import restore_reference_aliases
+    from gpx_recipe.preparation.hints import MANIFEST, SCHEMA
+    runtime, service, root, protocol, source, template, campaign, transport = reference_alias_fixture(remote, tmp_path)
+    transport.prepare_reference(protocol, template, root, source)
+    bound_sha = next(iter(transport.state['inputs']))
+    bound_root = campaign.root/'inputs'/bound_sha
+    manifest = bound_root/MANIFEST;manifest.parent.mkdir(parents=True, exist_ok=True)
+    if damage == 'malformed':manifest.write_text('{bad-json')
+    elif damage in {'missing_asset', 'escaped_path'}:
+        document = dict(schema=SCHEMA, protocol_sha256=bound_sha, library_id='a'*24,
+            library_name='Synthetic', entries=[dict(entry='b'*24, candidate=protocol['candidates'][0]['id'],
+            bank='1', identity='c'*64, path='_prepared_scattering/'+('d'*64)+'.npz',
+            sha256='d'*64, entry_sha256='e'*64)], eligible_entries=1, omitted_entries=0,
+            observations_included=False)
+        if damage == 'escaped_path':document['entries'][0]['path']='../../untrusted.npz'
+        document['snapshot_sha256']=digest(document)
+        manifest.write_text(json.dumps(document))
+    inputs = {bound_sha:bound_root}
+    saved = dict(history_id=service.history_id, transport=copy.deepcopy(transport.state))
+    destination = tmp_path/'optional-recovery'
+    restore_reference_aliases(saved, template, inputs, destination)
+    reference = inputs[digest(protocol)]
+    assert (reference/'source.gpx').read_bytes() == (root/'source.gpx').read_bytes()
+    if damage != 'missing':
+        status = saved['transport']['prepared_inputs'][digest(protocol)]
+        assert status['status'] == 'unavailable' and status['native_qualification_required'] is True
+    assert not (tmp_path/'untrusted.npz').exists()
+    assert not service.submissions

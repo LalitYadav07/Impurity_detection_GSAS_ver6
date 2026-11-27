@@ -1120,9 +1120,9 @@ class SymmetryMixin(KSearchMixin):
                         bank=d['scope_sources'][key].get('bank'),source=portable_source(d['scope_sources'][key]),
                         origin=d['scope_origins'][key]) for key in d['template']['existing_ids']})
                     if isinstance(transport,GalaxyChunkTransport):
-                        # Preserve distinct reference/rebound packets and their
-                        # existing acknowledged-HDA/dependency readiness rules.
-                        await asyncio.to_thread(transport.prepare_source,d['protocol'],ref,current)
+                        # Exact current-only references share the eventual bound
+                        # packet; all other scopes keep separate reference inputs.
+                        await asyncio.to_thread(transport.prepare_reference,d['protocol'],d['template'],ref,current)
                 # Staging cannot admit trials or submit science. It may overlap
                 # the source backup, but both existing operations must succeed
                 # before the original enrollment/claim/dispatch sequence starts.
