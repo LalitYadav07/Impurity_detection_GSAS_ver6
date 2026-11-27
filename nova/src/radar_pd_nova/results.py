@@ -1270,7 +1270,10 @@ def _finish_figure(
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
         hovermode="x unified",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1},
+        # Use the same explicit system font for measuring and drawing the legend.
+        # Inherited font metrics can clip its final entry at compact widths.
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1,
+                "font": {"family": "Arial, sans-serif"}},
         font={"family": "Inter, Source Sans 3, Arial, sans-serif", "color": "#17251f"},
     )
     figure.update_xaxes(showgrid=False, zeroline=False, linecolor="#cbd5e1")
