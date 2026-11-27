@@ -7,6 +7,11 @@ def native_phase_label(label, native_space_group):
     if not isinstance(label, str) or not isinstance(native_space_group, str):
         return label, None
     match = re.fullmatch(r"(.*?)\s*\(SG\s+(.+)\)\s*", label)
+    if match is None:
+        # Native plot producers also use "formula — symbol (number)".
+        # Require the explicit group number so ordinary descriptive names
+        # containing a dash are not interpreted as symmetry evidence.
+        match = re.fullmatch(r"(.*?)\s+(?:—|–|--|\|)\s+(.+\(\d{1,3}\))\s*", label)
     native = native_space_group.strip()
     if not match or not native or native.lower() in {"unknown", "-", "?"}:
         return label, None

@@ -83,6 +83,8 @@ def _phase_color(index: int) -> str:
 
 def _phase_formula(label: str, fallback: str) -> str:
     text = str(label or fallback or "phase").strip()
+    if "(catalog " in text:
+        return text
     if re.search(r"\(SG\s*[^)]*\)", text, flags=re.IGNORECASE):
         return text
     match = re.search(r"\((.*?)\)", text)

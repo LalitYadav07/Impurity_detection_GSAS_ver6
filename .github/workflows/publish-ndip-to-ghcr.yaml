@@ -220,10 +220,11 @@ jobs:
           docker run --rm --entrypoint sh \
             -v "$PWD/tests/test_cif_space_group_evidence.py:/validation/test_cif_space_group_evidence.py:ro" \
             -v "$PWD/tests/test_ndip_lattice.py:/validation/test_ndip_lattice.py:ro" \
+            -v "$PWD/tests/test_plot_fit_region.py:/validation/test_plot_fit_region.py:ro" \
             "${IMAGE_NAME}:ndip-${GITHUB_SHA}" -c '
             python -m pip install --quiet pytest==8.4.2 &&
             PYTHONPATH=/opt/radar-pd:/opt/radar-pd/nova/src:/opt/radar-pd/scripts python -m pytest -q -o cache_dir=/tmp/pytest-cache \
-              /validation/test_cif_space_group_evidence.py /validation/test_ndip_lattice.py'
+              /validation/test_cif_space_group_evidence.py /validation/test_ndip_lattice.py /validation/test_plot_fit_region.py'
 
       - name: Verify phase-composition interpretation in the built worker
         shell: bash

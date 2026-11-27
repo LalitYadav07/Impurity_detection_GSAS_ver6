@@ -129,7 +129,16 @@ def test_single_bin_exclusion_and_masked_upper_endpoint_do_not_shift_native_slic
 
 
 @pytest.mark.parametrize("instrument,downsample", [("TOF", 1), ("CW", 4)])
-def test_static_plot_publishes_full_native_mask_and_keeps_display_gaps(tmp_path, monkeypatch, instrument, downsample):
+@pytest.mark.parametrize("provided,native,display", [
+    ("CrCl3 — C2/m (12)", "P -1", "CrCl3 · P -1 (catalog C2/m)"),
+    ("CrCl3 (SG C2/m, 12)", "P -1", "CrCl3 · P -1 (catalog C2/m)"),
+    ("mp-27630 (SG C2/m, 12)", "P -1", "mp-27630 · P -1 (catalog C2/m)"),
+    ("mp-27630 (CrCl3 — C2/m (12))", "P -1", "CrCl3 · P -1 (catalog C2/m)"),
+    ("CrCl3 — P-1 (2)", "P -1", "CrCl3 — P-1 (2)"),
+    ("CrCl3 — C2/m (12)", None, "CrCl3 — C2/m (12)"),
+])
+def test_static_plot_publishes_full_native_mask_and_keeps_display_gaps(
+        tmp_path, monkeypatch, instrument, downsample, provided, native, display):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
     import gsas_main_phase_refiner as refiner
     import gsas_core_infrastructure
@@ -141,18 +150,26 @@ def test_static_plot_publishes_full_native_mask_and_keeps_display_gaps(tmp_path,
     histogram.getdata = lambda key: raw[{"x": 0, "Q": 0, "d": 0, "yobs": 1, "ywt": 2, "ycalc": 3, "background": 4}[key]]
     histogram.get_wR = lambda: 1.25
     histogram.get = lambda *_: 0.
-    histogram.reflections = lambda: {}
-    project = SimpleNamespace(histograms=lambda: [histogram], phases=lambda: [])
+    reflection = np.zeros((1, 10))
+    reflection[0, [0, 4, 9]] = [1., 1., 1.]
+    histogram.reflections = lambda: {"mp-27630": {"RefList": reflection}}
+    phase = SimpleNamespace(name="mp-27630", data={"General": {"SGData": {"SpGrp": native}} if native else None,
+                                                  "pId": 42, "Atoms": [["untouched"]]})
+    phase_before = deepcopy(phase.data)
+    labels = {"mp-27630": provided, "foreign-phase": "Foreign (SG C2/m, 12)"}
+    project = SimpleNamespace(histograms=lambda: [histogram], phases=lambda: [phase])
     monkeypatch.setitem(sys.modules, "GSASII", SimpleNamespace(GSASIIscriptable=SimpleNamespace(G2Project=lambda **_: project)))
     monkeypatch.setattr(gsas_core_infrastructure.CoordinateHandler, "from_gsas_histogram",
-                        lambda *_: SimpleNamespace(instrument_type=instrument))
+                        lambda *_: SimpleNamespace(instrument_type=instrument,
+                                                   d_to_native=lambda d: np.full_like(d, raw[0, 8])))
     captured = []
     def save(figure, path, **_):
-        captured.append((figure.axes[0].get_title(), figure.axes[0].lines[0].get_ydata()))
+        captured.append((figure.axes[0].get_title(), figure.axes[0].lines[0].get_ydata(),
+                         [item.get_text() for item in figure.axes[1].get_yticklabels()]))
         Path(path).write_bytes(b"synthetic static preview")
     monkeypatch.setattr(Figure, "savefig", save)
     target = tmp_path / "fit.png"
-    refiner.plot_gpx_fit_with_ticks("synthetic.gpx", str(target), downsample=downsample)
+    refiner.plot_gpx_fit_with_ticks("synthetic.gpx", str(target), downsample=downsample, phase_labels=labels)
     payload = load_plot_payload(str(target) + ".plotdata.json")
     assert payload["fit_range_convention"] == NATIVE_FIT_CONVENTION
     assert payload["fit_points"] == int(expected.sum())
@@ -160,8 +177,28 @@ def test_static_plot_publishes_full_native_mask_and_keeps_display_gaps(tmp_path,
     assert np.isnan(captured[0][1]).any()  # No line across excluded/invalid bins, including after decimation.
     assert len(payload["arrays"]["x"]) == 20
     np.testing.assert_array_equal(payload["arrays"]["fit_valid"], expected)
+    assert payload["phase_order"] == ["mp-27630"]
+    assert payload["phase_labels"] == {"mp-27630": display}
+    assert " ".join(captured[0][2][0].split()) == display
+    assert labels == {"mp-27630": provided, "foreign-phase": "Foreign (SG C2/m, 12)"}
+    assert phase.data == phase_before
+    if native:
+        assert payload["phase_label_provenance"] == {"mp-27630": {
+            "provided_label": provided, "native_space_group": native, "source": "plotted_gpx"}}
+    else:
+        assert payload["phase_label_provenance"] == {}
     from scripts.plotly_interactive import _fig_gsas_fit
     figure = _fig_gsas_fit(payload)
     assert figure.layout.xaxis.range[1] >= payload["arrays"]["x"][16]
     assert int(np.isfinite(figure.data[1].y).sum()) == int(expected.sum())
+    if "(catalog " in display:
+        assert figure.data[-1].name == f"Key peaks: {display}"
+        assert "P -1" in figure.layout.yaxis3.ticktext[0]
+    from radar_pd_nova.results import figure_for_payload, read_plot_payload
+    ui_figure = figure_for_payload(read_plot_payload(str(target) + ".plotdata.json"))
+    ui_tick_traces = [trace for trace in ui_figure.data if trace.yaxis == "y3"]
+    if "(catalog " in display:
+        assert [trace.name for trace in ui_tick_traces] == [display, f"Key peaks: {display}"]
+        assert ui_figure.layout.yaxis3.ticktext == (display,)
+    assert all(list(trace.x) == [raw[0, 8]] for trace in ui_tick_traces)
     plt.close("all")

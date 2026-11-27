@@ -35,7 +35,7 @@ def phase_display_label(phase_id: Any, label: Any = None) -> str:
     wrapped_prefix = f"{phase_text} ("
     if phase_text and label_text.startswith(wrapped_prefix) and label_text.endswith(")"):
         scientific_text = label_text[len(wrapped_prefix) : -1].strip()
-        if scientific_text:
+        if scientific_text and not scientific_text.startswith("SG "):
             return scientific_text
     if label_text:
         return label_text
@@ -3360,7 +3360,26 @@ def plot_gpx_fit_with_ticks(
     # ---------------------------
     # Phase order and Wt% parsing
     # ---------------------------
-    phase_names = [p.name for p in proj.phases()]  # IDs in GPX
+    plot_phases = list(proj.phases())
+    phase_names = [p.name for p in plot_phases]  # IDs in GPX
+    from radar_pd_nova.phase_model_labels import native_phase_label
+    plot_phase_labels = {}
+    phase_label_provenance = {}
+    for phase in plot_phases:
+        name = phase.name
+        provided = (phase_labels or {}).get(name)
+        supplied = phase_display_label(name, provided)
+        phase_data = getattr(phase, 'data', {})
+        general = phase_data.get('General') if isinstance(phase_data, dict) else None
+        sg_data = general.get('SGData') if isinstance(general, dict) else None
+        native_sg = sg_data.get('SpGrp') if isinstance(sg_data, dict) else None
+        plot_phase_labels[name] = native_phase_label(supplied, native_sg)[0]
+        if isinstance(native_sg, str) and native_sg.strip():
+            phase_label_provenance[name] = {
+                'provided_label': str(provided) if provided is not None else None,
+                'native_space_group': native_sg,
+                'source': 'plotted_gpx',
+            }
     wt = {nm: 0.0 for nm in phase_names}
     try:
         from pathlib import Path as _P
@@ -3647,9 +3666,8 @@ def plot_gpx_fit_with_ticks(
                 wt_str = f" ({wt_val:.1f}%)" if wt_val > 0 else ""
                 
                 # Prefer provided custom labels
-                raw_label = phase_labels.get(nm) if phase_labels else None
                 from textwrap import fill
-                label = fill(f"{phase_display_label(nm, raw_label or nm)}{wt_str}",
+                label = fill(f"{plot_phase_labels[nm]}{wt_str}",
                              width=40, break_long_words=True, break_on_hyphens=False)
                 ylabels.append(label)
             
@@ -3785,10 +3803,8 @@ def plot_gpx_fit_with_ticks(
                     "fit_points": n_points,
                     "display_points": displayed_points,
                     "phase_order": [str(p) for p in phase_order],
-                    "phase_labels": {
-                        str(k): phase_display_label(k, v)
-                        for k, v in (phase_labels or {}).items()
-                    },
+                    "phase_labels": {str(k): v for k, v in plot_phase_labels.items()},
+                    "phase_label_provenance": phase_label_provenance,
                     "phase_weights": {str(k): float(v) for k, v in wt.items()},
                     "phase_ticks": phase_ticks_json,
                     "phase_major_ticks": phase_major_ticks_json,
