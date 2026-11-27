@@ -3,7 +3,7 @@ GSAS-II Lattice Refinement Module (Stage-4)
 
 This module implements the "Lattice Nudging" and advanced refinement logic (Stage-4).
 It is responsible for:
-- Adaptive lattice parameter optimization using a hit-and-run polytope sampling approach.
+- Bounded lattice parameter proposals with Q-space diversity selection.
 - Exploring the neighborhood of likely lattice parameters to escape local minima.
 - Tikhonov-regularized backsolving for lattice constraints.
 - Optimized Q-space metrics and gradients.
@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import math
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional
 from functools import lru_cache
 import threading
@@ -1109,6 +1109,40 @@ def _farthest_point_reps(sig: np.ndarray, k: int, center_idx: int) -> List[int]:
     return chosen
 
 
+def _bounded_lattice_vectors(base_lat, cons, names, samples, len_tol_pct, ang_tol_deg, seed):
+    """Propose within the physical parameter box before checking actual Q.
+
+    A broad reciprocal-space proposal followed by physical-box rejection can
+    discard every draw for a six-dimensional primitive cell. The unchanged
+    source is kept separately; axial endpoints and scrambled Sobol draws share
+    the same finite proposal budget here. No symmetry is inferred or imposed.
+    """
+    from scipy.stats import qmc
+    p0 = _pack_vector_from_lattice(base_lat, cons, names)
+    widths = np.array([abs(v) * len_tol_pct / 100.0 if name in ("a", "b", "c")
+                       else ang_tol_deg for name, v in zip(names, p0)])
+    active = np.flatnonzero(widths > 0)
+    if samples <= 0 or not active.size:
+        return []
+    points = []
+    for index in active:
+        for sign in (-1.0, 1.0):
+            if len(points) == samples:
+                return points
+            point = p0.copy()
+            point[index] += sign * widths[index]
+            points.append(point)
+    remaining = samples - len(points)
+    if remaining:
+        sampler = qmc.Sobol(d=len(active), scramble=True, seed=seed)
+        draws = sampler.random_base2(int(math.ceil(math.log2(remaining))))[:remaining]
+        for draw in draws:
+            point = p0.copy()
+            point[active] += (2.0 * draw - 1.0) * widths[active]
+            points.append(point)
+    return points
+
+
 # ======================================================================================
 # Neutron/X-ray sticks → Q (windowed simulation) - with caching (thread-safe calculator)
 # ======================================================================================
@@ -1320,6 +1354,7 @@ class Stage4Result:
     scoring_mode: str = ""
     lattice_deviation: float = 0.0
     score_tie_count: int = 1
+    sampling: Dict = field(default_factory=dict)
 
 class LatticeNudger:
     def __init__(self,
@@ -1590,94 +1625,83 @@ class LatticeNudger:
 
         base_lat = base_struct.lattice
         names = _free_param_names(cons)
-
-        q0_full, J, mask_rows = _compute_q_jacobian(base_lat, cons, names)
-        if _DEBUG:
-            q0_dbg = np.round(q0_full, 5)
-            valid_cnt = int(mask_rows.sum())
-            logger.debug(f"Q-signature(base)={q0_dbg}")
-            logger.debug(f"Valid HKL entries={valid_cnt}/7, DOF={len(names)} ({names})")
-
-        if len(names) == 0 or int(mask_rows.sum()) == 0:
-            if _DEBUG:
-                logger.debug("No DOF or no valid HKL rows; only base lattice will be used.")
-            return [base_lat]
-
-        seed_val = getattr(self, "random_seed", DEFAULT_STAGE4_SEED)
-        # resolve tolerances (percent for lengths, degrees for angles)
+        if int(reps) < 1:
+            raise ValueError("At least one lattice representative is required")
         if len_tol_pct is None:
             len_tol_pct = float(os.environ.get("STAGE4_LEN_TOL_PCT", "3.0"))
         if ang_tol_deg is None:
             ang_tol_deg = float(os.environ.get("STAGE4_ANG_TOL_DEG", "6.0"))
-        if _DEBUG:
-            logger.info(f"Lattice tolerance: lengths ≤ {len_tol_pct:.2f}%  |  angles ≤ {ang_tol_deg:.2f}°")
-
-        if float(len_tol_pct) <= 0.0 and float(ang_tol_deg) <= 0.0:
-            if _DEBUG:
-                logger.debug("Zero lattice tolerances requested; skipping target generation and using base lattice only.")
+        if not all(math.isfinite(float(v)) and float(v) >= 0
+                   for v in (len_tol_pct, ang_tol_deg, _QWIN_PCT)):
+            raise ValueError("Lattice and Q tolerances must be finite and nonnegative")
+        stats = dict(method="bounded-cell-sobol", requested_samples=samples,
+                     requested_representatives=int(reps), generated=0, accepted=0,
+                     rejected_invalid=0, rejected_physical=0, rejected_q_window=0,
+                     unique_including_source=1, selected=1,
+                     only_original_available=True, only_original_scored=True)
+        self._last_lattice_sampling = stats
+        q0_full = hkl_Q_signature(base_lat)
+        mask_rows = _q_valid_mask(q0_full)
+        if not names or not mask_rows.any() or (len_tol_pct == 0 and ang_tol_deg == 0):
             return [base_lat]
+        if samples is None or int(samples) <= 0:
+            density = int(os.environ.get("STAGE4_DENSITY_PER_DIM", "8"))
+            samples = max(int(os.environ.get("STAGE4_MIN_SAMPLES", "200")),
+                          min(int(os.environ.get("STAGE4_MAX_SAMPLES", "2000")), density ** len(names)))
+        vectors = _bounded_lattice_vectors(base_lat, cons, names, int(samples),
+                    float(len_tol_pct), float(ang_tol_deg),
+                    getattr(self, "random_seed", DEFAULT_STAGE4_SEED))
+        stats["generated"] = len(vectors)
+        cands = [base_lat]
+        for vector in vectors:
+            try:
+                candidate = _apply_params_from_vector(base_lat, cons, names, vector)
+                # Do not turn clipped or invalid physical proposals into hidden
+                # boundary points. Fixed angles/ties follow the declared setting.
+                if (not np.allclose(_pack_vector_from_lattice(candidate, cons, names), vector,
+                                    rtol=1e-12, atol=1e-10)
+                        or not np.all(np.isfinite(candidate.matrix))
+                        or not math.isfinite(candidate.volume) or candidate.volume <= 1e-10
+                        or _lattice_constraint_violations(cons, candidate)):
+                    stats["rejected_invalid"] += 1
+                    continue
+                if not _within_lattice_tolerances(base_lat, candidate, len_tol_pct, ang_tol_deg, cons)[0]:
+                    stats["rejected_physical"] += 1
+                    continue
+                q = hkl_Q_signature(candidate)
+                if (not np.all(_q_valid_mask(q[mask_rows]))
+                        or np.any(np.abs(q[mask_rows] / q0_full[mask_rows] - 1)
+                                  > _QWIN_PCT / 100.0 + 1e-12)):
+                    stats["rejected_q_window"] += 1
+                    continue
+            except (ValueError, FloatingPointError, np.linalg.LinAlgError):
+                stats["rejected_invalid"] += 1
+                continue
+            cands.append(candidate)
+            stats["accepted"] += 1
 
-        q_targets = _generate_q_targets(q0_full, J, mask_rows,
-                                        max_pct=_QWIN_PCT,
-                                        samples=samples,
-                                        seed=seed_val)
-
-        cands: List[Lattice] = [base_lat]
-        rej_len = 0
-        rej_ang = 0
-
-        for idx, qt in enumerate(q_targets):
-            Lcand, dp, scl = _backsolve_params_for_qtarget(base_lat, cons, names,
-                                                        q0_full, J, mask_rows, qt,
-                                                        reg_lambda=_REG_L2)
-            ok, reason = _within_lattice_tolerances(base_lat, Lcand, len_tol_pct, ang_tol_deg, cons)
-            if _DEBUG and (idx < 8 or idx % 50 == 0):
-                dpn = float(np.linalg.norm(dp)) if dp.size else 0.0
-                tag = "kept" if ok else f"rejected ({reason})"
-                logger.debug(f"Target#{idx:04d}: |Δp|={dpn:.5g}, scale={scl:.3f} → {tag}")
-
-            if ok:
-                cands.append(Lcand)
-            else:
-                # reason-based accounting
-                if "dev" in reason and "%" in reason:
-                    rej_len += 1
-                elif "°" in reason:
-                    rej_ang += 1
-
-        # Dedup by Q-signature (0.1% bins)
-        uniq: List[Lattice] = []
+        # Select Q-diverse representatives from valid physical proposals.
+        uniq = []
         seen = set()
         q0_norm = np.maximum(q0_full, 1e-12)
-        for L in cands:
-            q = hkl_Q_signature(L)
-            key = tuple(np.round(q / q0_norm, 4))
+        for candidate in cands:
+            key = tuple(np.round(hkl_Q_signature(candidate) / q0_norm, 4))
             if key not in seen:
                 seen.add(key)
-                uniq.append(L)
-
-        # FPS to 'reps'
-        S = np.vstack([hkl_Q_signature(L) for L in uniq])
-        S_proc = np.where(np.isfinite(S), np.clip(S, 0.0, _MAX_Q_BAD), _MAX_Q_BAD)
-
-        k = max(2, int(reps))
-        k = min(k, S_proc.shape[0])
-        idxs = _farthest_point_reps(S_proc, k=k, center_idx=0)
-        reps_lattices = [uniq[i] for i in idxs]
-
-        if _DEBUG:
-            # minus 1 because base_lat was pre-seeded in cands
-            built_from_targets = len(q_targets)
-            kept_targets = len(cands) - 1
-            logger.debug(f"lattice tolerance: built={built_from_targets}, kept={kept_targets}, "
-                 f"rejected_len={rej_len}, rejected_ang={rej_ang}")
-            logger.debug(f"Lattice candidates: built={len(cands)}; "
-                 f"unique_by_Qsig={len(uniq)}; FPS_kept={len(reps_lattices)} (reps={reps})")
-
-        # optional: warn if only the base lattice survived
-        if len(cands) == 1 and _DEBUG:
-            logger.warning("All candidates rejected by lattice tolerances; using base lattice only.")
-
+                uniq.append(candidate)
+        signatures = np.vstack([hkl_Q_signature(candidate) for candidate in uniq])
+        signatures = np.where(np.isfinite(signatures), np.clip(signatures, 0.0, _MAX_Q_BAD), _MAX_Q_BAD)
+        indices = _farthest_point_reps(signatures, k=min(int(reps), len(uniq)), center_idx=0)
+        reps_lattices = [uniq[index] for index in indices]
+        stats.update(unique_including_source=len(uniq), selected=len(reps_lattices),
+                     only_original_available=len(uniq) == 1,
+                     only_original_scored=len(reps_lattices) == 1)
+        logger.info("Lattice proposals: generated=%s accepted=%s rejected_invalid=%s "
+                    "rejected_physical=%s rejected_q=%s unique=%s selected=%s",
+                    stats["generated"], stats["accepted"], stats["rejected_invalid"],
+                    stats["rejected_physical"], stats["rejected_q_window"], len(uniq), len(reps_lattices))
+        if vectors and len(uniq) == 1:
+            logger.warning("No distinct valid lattice proposal; only the unchanged source is available.")
         return reps_lattices
 
     def optimize_one(self,
@@ -1738,8 +1762,13 @@ class LatticeNudger:
             if _DEBUG:
                 logger.debug(f"Crystal system={cs}; constraint window: ±{_prev_qwin:.1f}% → ±{_QWIN_PCT:.1f}%")
             t_targets = perf_counter()
+            self._last_lattice_sampling = {}
             reps_lattices = ([base_lat] if hold_source_cell else
                 self._make_candidates_qsignature(base_struct, cons, reps=reps,samples=samples,len_tol_pct=len_tol_pct, ang_tol_deg=ang_tol_deg))
+            sampling = dict(self._last_lattice_sampling)
+            if hold_source_cell:
+                sampling = dict(method="source-cell-held", generated=0, accepted=0, selected=1,
+                                only_original_available=True, only_original_scored=True)
             target_s = perf_counter() - t_targets
         finally:
             _QWIN_PCT = _prev_qwin  # restore
@@ -1887,7 +1916,8 @@ class LatticeNudger:
                             score_s=score_s,
                             scoring_mode="hkl-reposition" if use_fast_reposition else "exact",
                             lattice_deviation=best_dev,
-                            score_tie_count=int(score_tie_count))
+                            score_tie_count=int(score_tie_count),
+                            sampling=sampling)
 
     def optimize_many(self,
                       candidates: List[str],

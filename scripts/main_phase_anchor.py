@@ -1134,6 +1134,7 @@ def run_main_phase_prenudge_if_needed(
             "elapsed_s": float(nudge_result.elapsed_s),
             "candidate_count": int(nudge_result.candidate_count),
             "scored_count": int(nudge_result.scored_count),
+            "sampling": dict(getattr(nudge_result, "sampling", {}) or {}),
             "lattice_deviation": float(getattr(nudge_result, "lattice_deviation", 0.0)),
             "tie_count": int(getattr(nudge_result, "score_tie_count", 1)),
             "cif": nudge_result.nudged_cif_path,
