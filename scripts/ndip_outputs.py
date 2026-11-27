@@ -549,6 +549,41 @@ def _summary_sources(
     return summary, hypotheses, phases, hypothesis_stage
 
 
+def _native_phase_summaries(phases, lattice, *, source):
+    """Join retained native symmetry by exact, unique phase ID, never formula.
+
+    Summary_Fractions.csv inherits catalog symmetry. Keep that provenance while
+    reporting the actual retained model; an absent or ambiguous native row must
+    not borrow symmetry from a chemically identical phase or another checkpoint.
+    """
+    summary_ids = {}
+    native_ids = {}
+    for row in phases:
+        identifier = row.get("phase_id")
+        if isinstance(identifier, str) and identifier:
+            summary_ids[identifier] = summary_ids.get(identifier, 0) + 1
+    for row in lattice:
+        identifier = row.get("phase_id")
+        if isinstance(identifier, str) and identifier:
+            native_ids.setdefault(identifier, []).append(row)
+    result = []
+    for original in phases:
+        row = dict(original)
+        identifier = row.get("phase_id")
+        matches = native_ids.get(identifier, [])
+        if summary_ids.get(identifier) == 1 and len(matches) == 1:
+            native = matches[0]
+            group = native.get("space_group")
+            if (native.get("source_gpx") == source and isinstance(group, str)
+                    and group.strip() and group.strip().lower() not in {"unknown", "-", "?"}):
+                if row.get("space_group") not in (None, ""):
+                    row.setdefault("catalog_space_group", row["space_group"])
+                row.update(space_group=group, native_space_group=group,
+                           space_group_source="retained_native_gpx", source_gpx=source)
+        result.append(row)
+    return result
+
+
 def _artifact_href(item: dict[str, Any]) -> str:
     return html.escape(str(item.get("path") or "#"), quote=True)
 
@@ -991,6 +1026,8 @@ def collect_outputs(
             final_records = _read_gpx_records(final_gpx)
             lattice, final_rwp = extract_lattice(final_gpx, final_records,
                 source=final_gpx.relative_to(run_root).as_posix(), labels=gpx_phase_labels)
+            phases = _native_phase_summaries(phases, lattice,
+                source=final_gpx.relative_to(run_root).as_posix())
             scientific_warnings = lattice_quality(lattice)
         except Exception as exc:
             scientific_warnings.append({"code": "lattice_unavailable", "message": f"Could not inspect final lattice parameters: {exc}"})

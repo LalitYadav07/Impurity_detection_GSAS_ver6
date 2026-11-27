@@ -63,3 +63,61 @@ def test_published_gpx_renaming_preserves_native_ids_references_and_original(tmp
     assert after[1][1][1][new]==records[1][1][1][old] and new in after[2][0][1]
     assert after[3]==records[3] and original.read_bytes()==before
     assert after[0][1][1]['Atoms']==records[0][1][1]['Atoms']
+
+
+def test_phase_summary_joins_native_symmetry_by_id_not_same_composition():
+    from copy import deepcopy
+    from scripts.ndip_outputs import _native_phase_summaries
+    phases=[dict(phase_id='mp-27630',compound_name='CrCl3',space_group='C2/m (12)',weight_fraction_pct='48.635',is_main='1'),
+            dict(phase_id='mp-567504',compound_name='CrCl3',space_group='R-3 (148)',weight_fraction_pct='51.365',is_main='0')]
+    native=[dict(phase_id='mp-567504',space_group='P -1',source_gpx='accepted.gpx'),
+            dict(phase_id='mp-27630',space_group='P -1',source_gpx='accepted.gpx')]
+    before=deepcopy((phases,native))
+    result=_native_phase_summaries(phases,native,source='accepted.gpx')
+    assert [row['phase_id'] for row in result]==['mp-27630','mp-567504']
+    assert [row['space_group'] for row in result]==['P -1','P -1']
+    assert [row['catalog_space_group'] for row in result]==['C2/m (12)','R-3 (148)']
+    assert [row['weight_fraction_pct'] for row in result]==['48.635','51.365']
+    assert [row['is_main'] for row in result]==['1','0']
+    assert all(row['space_group_source']=='retained_native_gpx' for row in result)
+    assert (phases,native)==before
+
+
+def test_phase_summary_absent_ambiguous_or_foreign_native_keeps_catalog():
+    from scripts.ndip_outputs import _native_phase_summaries
+    phase=dict(phase_id='a',compound_name='CrCl3',space_group='C2/m (12)')
+    row=dict(phase_id='a',space_group='P -1',source_gpx='accepted.gpx')
+    for phases,native in [([phase],[]),([phase],[dict(row,phase_id='other')]),
+                          ([phase],[dict(row,source_gpx='rejected.gpx')]),
+                          ([phase],[row,row]),([phase,phase],[row]),
+                          ([phase],[dict(row,space_group='unknown')]),
+                          ([phase],[dict(row,space_group=None)])]:
+        assert _native_phase_summaries(phases,native,source='accepted.gpx')==phases
+
+
+def test_published_summary_uses_native_symmetry_without_changing_source_or_fit(tmp_path):
+    import csv,json,pickle
+    from unittest.mock import patch
+    from scripts.ndip_outputs import collect_outputs
+    run=tmp_path/'run';project=run/'Technical/GSAS_Projects/seq_final_accepted_model.gpx'
+    project.parent.mkdir(parents=True)
+    records=[[['Phases',{}],phase('mp-27630',1,100,[4,5,6,90,105,90,115])]]
+    records[0][1][1]['General']['SGData']['SpGrp']='P -1'
+    with project.open('wb') as handle:
+        for record in records:pickle.dump(record,handle,protocol=1)
+    table=run/'Summary_Fractions.csv'
+    with table.open('w',newline='') as handle:
+        writer=csv.DictWriter(handle,fieldnames=['phase_id','compound_name','space_group','weight_fraction_pct','is_main'])
+        writer.writeheader();writer.writerow(dict(phase_id='mp-27630',compound_name='CrCl3',space_group='C2/m (12)',weight_fraction_pct='100',is_main='1'))
+    original_project=project.read_bytes();original_table=table.read_bytes()
+    native=[dict(phase_id='mp-27630',space_group='P -1',source_gpx=project.relative_to(run).as_posix(),weight_percent=100,a=4)]
+    with patch('scripts.ndip_lattice.extract_lattice',return_value=(native,12.34)):
+        result=collect_outputs(run,tmp_path/'portal',mode='full',include_archive=False)
+    published=json.loads((tmp_path/'portal/summary.json').read_text())
+    assert published['phases']==result['phases']
+    assert published['phases'][0]['space_group']=='P -1'
+    assert published['phases'][0]['catalog_space_group']=='C2/m (12)'
+    assert published['phases'][0]['native_space_group']=='P -1'
+    assert published['phases'][0]['weight_fraction_pct']=='100'
+    assert result['final_rwp']==12.34 and result['lattice_parameters']==native
+    assert project.read_bytes()==original_project and table.read_bytes()==original_table
