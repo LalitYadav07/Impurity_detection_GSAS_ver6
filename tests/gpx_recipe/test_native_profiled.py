@@ -144,10 +144,22 @@ def test_wrong_quadratic_hint_rebuilds_from_native_instead_of_rejecting_model(tm
     assert max(proof['heldout_relative_errors'])<1e-8
 
 
-def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_free=True,background_free=True,npoints=701):
+def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_free=True,background_free=True,npoints=701,kind='PNC'):
     path=tmp_path/'artificial.gpx'
     inst=tmp_path/'artificial.instprm'
-    inst.write_text('#GSAS-II instrument parameter file\nType:PNC\nBank:1.0\nLam:1.54\nZero:0.0\nU:0.12\nV:0.0\nW:0.08\nX:0.0\nY:0.0\nZ:0.0\nSH/L:0.002\nPolariz.:0.0\nAzimuth:0.0\n')
+    if kind=='PNC':
+        inst.write_text('#GSAS-II instrument parameter file\nType:PNC\nBank:1.0\nLam:1.54\nZero:0.0\nU:0.12\nV:0.0\nW:0.08\nX:0.0\nY:0.0\nZ:0.0\nSH/L:0.002\nPolariz.:0.0\nAzimuth:0.0\n')
+        limits=(12.,130.)
+    elif kind=='PNT':
+        # Reuse the reviewed public TOF bank without inventing calibration.
+        # Only the simulation API bounds below use milliseconds; native
+        # saved x coordinates and exclusions remain in microseconds.
+        from test_preparation_theory_native import inputs
+        bank=tmp_path/'reviewed-tof-bank';bank.mkdir()
+        inputs(bank,'PNT')
+        inst.write_bytes((bank/'bank.instprm').read_bytes())
+        limits=(3.,40.)
+    else:raise ValueError('Unsupported public native fixture kind')
     p=G.G2Project(newgpx=str(path))
     cell=[4.7,5.6,6.8,79.,93.,104.]
     nuclear=p.add_phase(phasename='Public artificial nuclear',cell=cell)
@@ -165,7 +177,7 @@ def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_f
         mag.add_atom(*xyz,'Fe+3','Fe'+str(i+1))
         mag.data['Atoms'][i][7:10]=([1.7,2.1,1.2] if i==0 else [-1.7,-2.1,-1.2])
     general['Lande g']=[2.]*len(general['AtomTypes'])
-    hist=p.add_simulated_powder_histogram('public artificial',str(inst),12.,130.,Npoints=npoints,scale=120.,phases=p.phases())
+    hist=p.add_simulated_powder_histogram('public artificial',str(inst),*limits,Npoints=npoints,scale=120.,phases=p.phases())
     hist.data['Background'][0][2]=3;hist.data['Background'][0][3:]=[3.,.2,.1]
     freeze(p)
     hist.data['data'][1][1][:]=1.
@@ -173,7 +185,8 @@ def artificial_project(tmp_path,*,sites=1,constrained=False,masked=False,scale_f
     rng=np.random.default_rng(77017)
     arrays=hist.data['data'][1];arrays[1]=truth+rng.normal(0.,.05,len(truth));arrays[2]=np.ones(len(truth))*400.
     if masked:
-        hist.data['Limits'].append([45.,48.])
+        hist.data['Limits'].append([45.,48.] if kind=='PNC' else
+            [float(arrays[0][int(.35*npoints)]),float(arrays[0][int(.4*npoints)])])
         for j in [0,1,2]:arrays[j]=np.ma.array(arrays[j],mask=np.arange(len(truth))%73==0)
     # Bias every seed. Nuclear coordinates, cell and instrument stay fixed.
     for i,atom in enumerate(mag.data['Atoms']):
@@ -267,10 +280,11 @@ def test_large_basis_automatically_uses_shared_reflection_compiler(tmp_path):
     assert max(proof['heldout_relative_errors'])<1e-8
 
 
-@pytest.mark.parametrize('target_scale,qualified',[(5907124.940466692,True),(1e-8,False)])
-def test_physical_scale_gauge_preserves_native_objective_near_true_point(tmp_path,target_scale,qualified):
+@pytest.mark.parametrize('kind,target_scale,qualified',[
+    ('PNC',5907124.940466692,True),('PNC',1e-8,False),('PNT',5907124.940466692,True)])
+def test_physical_scale_gauge_preserves_native_objective_near_true_point(tmp_path,kind,target_scale,qualified):
     project,path=artificial_project(tmp_path,sites=4,masked=True,
-        scale_free=False,background_free=False,npoints=701)
+        scale_free=False,background_free=False,npoints=701,kind=kind)
     histogram=project.histograms()[0]
     original=np.asarray(MAIN.DoNoFit(str(path),histogram.name),float)
     scale=histogram.data['Sample Parameters']['Scale']
@@ -291,6 +305,8 @@ def test_physical_scale_gauge_preserves_native_objective_near_true_point(tmp_pat
         assert hashlib.sha256(path.read_bytes()).hexdigest()==before
         return
     model,proof=context.build()
+    assert context.args[4][f':{context.histogram_id}:histType']==kind
+    assert np.count_nonzero(context.residual_mask)>0
     truth=np.tile([-1.7,-2.1,-1.2],4);truth[:3]=[1.7,2.1,1.2]
     direct=context.residual(truth,target_scale,np.empty(0))
     assert model.heldout_error(truth,target_scale,np.empty(0),direct)<=1e-8
