@@ -17,6 +17,19 @@ from .sample_labels import with_recorded_run_context
 MAX_CATALOG_NAME_REPRESENTATIVES = 128
 
 
+def _queue_title_role(title: str) -> str:
+    """Extend only the PG3/NOM queue policy, not native preparation identity."""
+    role = title_role(title)
+    if role != 'unclassified':
+        return role
+    text = re.sub(r"[_-]+", " ", title.casefold())
+    # Warm/after-warming plateaus remain eligible. Require an explicit
+    # transition to a stated temperature, as in the PG3 Er2O3 scan title.
+    if re.search(r"\bwarming\s+to\s+[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*°?\s*(?:k|c)\b", text):
+        return 'ramp'
+    return role
+
+
 def run_role(run: WatchedRun) -> dict[str, str]:
     """Conservative title hints, shown for review rather than inferred chemistry."""
     title = ""
@@ -29,7 +42,7 @@ def run_role(run: WatchedRun) -> dict[str, str]:
                     break
     except OSError:
         pass
-    role = title_role(title)
+    role = _queue_title_role(title)
     return {"run_title": title, "run_role": role}
 
 
@@ -232,7 +245,7 @@ class PowgenSampleIndex:
         for run, metadata in zip(runs, identities):
             if metadata.get("identity_verification") == "catalog_preview":
                 title = metadata.get("run_title") or metadata.get("table_fields", {}).get("run_title", "")
-                role = {"run_title": title, "run_role": title_role(title)}
+                role = {"run_title": title, "run_role": _queue_title_role(title)}
             else:
                 role = run_role(run)
             title = role["run_title"] or "Title unavailable in preview"
