@@ -161,8 +161,16 @@ def test_saved_generation_recovers_an_existing_success_instead_of_rerunning():
                      galaxy_job_id='replacement',status='ok',output_dataset_ids={'summary':'new-summary'},
                      input_dataset_ids={'configuration':'config'})
     s.recovered_runs=[record]
+    def configuration(key):
+        assert key == 'config'
+        return AnalysisConfig(sample_elements=['Fe','O'])
+    s.load_configuration_dataset=configuration
+    restored.sample_index=SimpleNamespace(identity=lambda run:{
+        'sample_id':'sample-A','identity_status':'resolved',
+        'identity_verification':'source_file'})
     restored._scientific_summary=lambda record:{'rwp':2.0}
     assert restored.reconcile_recent_runs(checkpoint=False)==1
+    assert restored.state.sample_model_scope['sample_id']=='sample-A'
     assert restored.state.completed[run.run_id].galaxy_job_id=='replacement'
     assert restored.due_submissions()==[] and not s.posted
 
