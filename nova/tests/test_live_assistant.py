@@ -46,6 +46,14 @@ def assistant(monkeypatch, tmp_path):
 
     app.refresh_powgen_samples = discovery
     monkeypatch.setattr("radar_pd_nova.live_assistant_controller.inspect_inventory", inventory)
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *a, **k: {
+        "scan_count": 2,
+        "metadata_resolution": [
+            {"run_id": "PG3_1", "status": "resolved", "sample_id": "A"},
+            {"run_id": "PG3_2", "status": "resolved", "sample_id": "B"},
+        ],
+        "metadata_notices": [],
+    })
     monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", lambda *a, **k: {
         "ready": True, "available_banks": [2], "scan_count": 2, "analysis_count": 2,
         "profile_filename": "verified.instprm", "message": "Ready",
@@ -288,6 +296,9 @@ def test_empty_but_readable_experiment_can_fill_a_draft_without_claiming_ready(a
     def waiting(*args, **kwargs):
         raise NoPreviewData("No completed reduction yet; configuration can continue.")
     monkeypatch.setattr("radar_pd_nova.live_assistant_controller.inspect_inventory", waiting)
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", lambda *a, **k: {
+        "scan_count": 0, "metadata_resolution": [], "metadata_notices": [],
+    })
     monkeypatch.setattr("radar_pd_nova.app.preflight_powgen_experiment", lambda *a, **k: {
         "ready": False, "available_banks": [], "scan_count": 0,
         "message": "No completed reductions match the selection.",
@@ -303,6 +314,22 @@ def test_empty_but_readable_experiment_can_fill_a_draft_without_claiming_ready(a
     assert "No completed" in state.live_assistant_error
     assert not state.live_assistant_complete and not state.powgen_preflight_ready
     assert not assistant.service.saved and not assistant.service.jobs
+
+
+def test_identity_source_error_is_not_treated_as_an_empty_readable_experiment(assistant, monkeypatch):
+    async def run():
+        await complete_cards(assistant)
+        await assistant.live_assistant_continue()
+
+    def unavailable(*args, **kwargs):
+        raise PermissionError("Identity source is inaccessible")
+
+    monkeypatch.setattr("radar_pd_nova.app.discover_powgen_samples", unavailable)
+    asyncio.run(run())
+    state = assistant.server.state
+    assert "Identity source is inaccessible" in state.live_assistant_error
+    assert not state.live_assistant_complete and not state.powgen_preflight_ready
+    assert not assistant.service.saved and not assistant.service.uploads and not assistant.service.jobs
 
 
 def test_inaccessible_storage_is_not_treated_as_waiting_for_data(assistant, monkeypatch):

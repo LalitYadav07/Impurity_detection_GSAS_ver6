@@ -182,7 +182,8 @@ def test_original_selection_still_contains_only_three_verified_cold_runs(tmp_pat
 
 def test_ui_uses_full_inventory_and_marks_excluded_rows():
     from pathlib import Path
-    source = (Path(__file__).parents[1]/'src/radar_pd_nova/app.py').read_text()
+    import radar_pd_nova.app as app_module
+    source = Path(app_module.__file__).read_text()
     assert "live_beamline === 'PG3' ? powgen_identity_review_rows : powgen_metadata_resolution" in source
     assert 'Displayed excluded runs are not enrolled' in source
     assert 'row.selection_note' in source
