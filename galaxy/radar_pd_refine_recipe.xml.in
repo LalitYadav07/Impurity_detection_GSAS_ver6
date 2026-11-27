@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_refine_recipe_prototype" name="RADAR-PD Utility: Reviewed Refinement" version="0.3.25" profile="22.05">
+<tool id="neutrons_radar_pd_refine_recipe_prototype" name="RADAR-PD Utility: Reviewed Refinement" version="0.3.27" profile="22.05">
     <description>inspect, preflight or apply an approved recipe to one published GPX</description>
     <requirements><container type="docker">@IMMUTABLE_BATCH_IMAGE@</container></requirements>
     <command detect_errors="exit_code"><![CDATA[
