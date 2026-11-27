@@ -15,6 +15,7 @@ on:
       - scripts/ndip_model_campaign.py
       - scripts/ndip_runtime.py
       - scripts/ndip_symmetry.py
+      - scripts/ndip_refinement.py
       - scripts/render_radar_pd_preparation_tools.py
       - galaxy/radar_pd_model_campaign.xml.in
       - galaxy/radar_pd_live_snapshot.xml.in
@@ -84,6 +85,16 @@ jobs:
             -v "$PWD/tests/test_production_image_payload.py:/validation/test_production_image_payload.py:ro" \
             "$IMAGE" /validation/test_production_image_payload.py \
             --image-kind "${{ inputs.image_variant || 'models' }}"
+      - name: Verify absolute Galaxy Recipe entrypoint and native stages
+        if: inputs.image_variant != 'preparation-cuda'
+        run: |
+          SIGNATURE=$(docker run --rm --network none --entrypoint python "$IMAGE" -c 'from gpx_recipe.symmetry.compiler import package_signature; print(package_signature())')
+          docker run --rm --network none --cpus 1 --memory 2g --entrypoint sh \
+            -e RADAR_EXPECTED_RECIPE_SIGNATURE="$SIGNATURE" \
+            -e RADAR_EXPECTED_RECIPE_LAUNCHER_SHA="$(sha256sum scripts/ndip_refinement.py | cut -d' ' -f1)" \
+            -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
+            -v "$PWD/tests/gpx_recipe/test_refinement_cli_image_native.py:/validation/test_refinement_cli_image_native.py:ro" \
+            "$IMAGE" -c 'cd /tmp && python /validation/test_refinement_cli_image_native.py'
       - name: Verify CUDA image and device-independent recovery contracts
         if: inputs.image_variant == 'preparation-cuda'
         run: |

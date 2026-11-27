@@ -4,6 +4,12 @@ USER root
 # Keep inherited developer fixtures out of the production worker.
 RUN rm -rf /opt/radar-pd/nova/tests /opt/radar-pd/tests /opt/radar-symmetry/tests /src/tests
 COPY nova/src/gpx_recipe /opt/radar-symmetry/gpx_recipe
+# Every entrypoint must resolve this one package, including the inherited
+# scripts/ checkout bridge which otherwise shadows PYTHONPATH for Recipe jobs.
+RUN rm -rf /opt/radar-pd/scripts/gpx_recipe /opt/radar-pd/nova/src/gpx_recipe \
+    && ln -s /opt/radar-symmetry/gpx_recipe /opt/radar-pd/scripts/gpx_recipe \
+    && ln -s /opt/radar-symmetry/gpx_recipe /opt/radar-pd/nova/src/gpx_recipe
+COPY scripts/ndip_refinement.py /opt/radar-pd/scripts/ndip_refinement.py
 # The forward planner resolves reviewed profiles beside the scientific package.
 COPY nova/src/radar_pd_nova/data/powgen_calibrations /opt/radar-symmetry/radar_pd_nova/data/powgen_calibrations
 COPY nova/src/radar_pd_nova/model_admission.py /opt/radar-symmetry/radar_pd_nova/model_admission.py
