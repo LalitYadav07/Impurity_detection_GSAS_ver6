@@ -54,12 +54,15 @@ def test_parallel_start_bank_retains_every_native_curve(tmp_path,monkeypatch,kin
     banks=[];timings=[]
     for workers in (1,4):
         monkeypatch.setenv('GALAXY_SLOTS',str(workers));monkeypatch.setenv('GALAXY_MEMORY_MB','8192')
+        from gpx_recipe.symmetry.resources import allocation
+        effective_allocation=allocation(16)
         prepared=tmp_path/f'prepared-{workers}'
         began=time.monotonic()
         prepare_model(source_gpx,child,[[-1.,0,0],[0,-1.,0],[0,0,1.]],
                       [0,0,0],prepared,settings=SearchSettings())
         receipt=json.loads((prepared/'starting-curves.json').read_text())
         timings.append(dict(workers=workers,total_seconds=time.monotonic()-began,
+            effective_allocation=effective_allocation,
             bank_seconds=receipt['seconds'],secant_seconds=receipt['proposal_step_selection']['seconds'],
             secant_execution=receipt['proposal_step_selection'].get('parallel_execution')))
         with np.load(prepared/'starting-curves.npz',allow_pickle=False) as arrays:
