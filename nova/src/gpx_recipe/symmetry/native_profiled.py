@@ -392,7 +392,42 @@ class NativeMagneticStartingPoint:
         if not fit.success:raise ValueError('An unqualified numerical starting point cannot be applied')
         native=self.residual(fit.coefficients,fit.scale,fit.background)
         error=self.model.heldout_error(fit.coefficients,fit.scale,fit.background,native)
-        if error>1e-8:raise ValueError('The final starting point disagrees with the native weighted objective')
+        if error>1e-8:
+            coefficients=np.asarray(fit.coefficients,dtype=float)
+            # Diagnostic arithmetic must not change the original rejection,
+            # including for a finite input whose squared norm overflows.
+            def finite(value):
+                value=float(value)
+                return value if np.isfinite(value) else None
+            with np.errstate(over='ignore',invalid='ignore'):
+                predicted=(self.model.offset+fit.scale*(self.model.nuclear+
+                    np.einsum('i,nij,j->n',coefficients,self.model.quadratic,coefficients))+
+                    self.model.background@fit.background)
+                values=dict(relative_maximum_error=error,
+                    absolute_maximum_error=np.max(np.abs(predicted-native)),
+                    normalization=max(1.,float(np.max(np.abs(native)))),
+                    native_infinity_norm=np.max(np.abs(native)),
+                    predicted_infinity_norm=np.max(np.abs(predicted)),
+                    native_l2_norm=np.linalg.norm(native),
+                    predicted_l2_norm=np.linalg.norm(predicted),
+                    native_weighted_cost=.5*(native@native),
+                    predicted_weighted_cost=.5*(predicted@predicted))
+            diagnostics=dict(schema='radar-native-objective-mismatch/v1',
+                check='final_starting_point_native_weighted_residual_identity',
+                threshold=1e-8,comparison='relative_maximum_error > threshold',
+                **{key:finite(value) for key,value in values.items()},
+                nonfinite_diagnostic_fields=[key for key,value in values.items() if not np.isfinite(value)],
+                weighted_residual_points=len(native),
+                independent_magnetic_variables=list(self.moment_names),
+                magnetic_coefficients=coefficients.tolist(),scale=float(fit.scale),
+                background_coefficients=np.asarray(fit.background,dtype=float).tolist(),
+                compiler=getattr(self,'build_receipt',{}).get('compiler'),
+                cache_hit=getattr(self,'build_receipt',{}).get('cache_hit'),
+                candidate_applied=False,raw_residuals_saved=False,
+                tolerance_changed=False,acceptance_status_changed=False)
+            failure=ValueError('The final starting point disagrees with the native weighted objective')
+            failure.native_objective_diagnostics=diagnostics
+            raise failure
         moments=self._all_moments()
         for (name,index,_),moment in zip(self.atoms,moments):
             phase=project.phase(name);cx=phase.data['General']['AtomPtrs'][0]

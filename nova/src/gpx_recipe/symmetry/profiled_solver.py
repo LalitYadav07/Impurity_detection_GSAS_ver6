@@ -27,6 +27,23 @@ class ProfiledScopeError(ValueError):
     pass
 
 
+def _apply_starting_point(context,project,fit,path):
+    """Retain a small failure receipt without accepting a rejected point."""
+    try:
+        return context.apply_to_project(project,fit)
+    except ValueError as exc:
+        diagnostics=getattr(exc,'native_objective_diagnostics',None)
+        if diagnostics is None:raise
+        from ..execution import write_json
+        try:
+            write_json(Path(path).parent/'native-objective-mismatch.json',diagnostics)
+        except Exception as error:
+            # Preserve the scientific failure even if diagnostic storage is
+            # unavailable. No fallback may publish this rejected candidate.
+            exc.add_note('Could not save native identity diagnostics: '+type(error).__name__)
+        raise
+
+
 def validate_scope(protocol):
     p=protocol['policy']
     if (protocol['kind']!='magnetic' or
@@ -145,7 +162,7 @@ def refine(project,path,protocol,*,cache_root=None,candidate=None,screened=None)
         improves_nuclear_baseline=fit.weighted_cost<null_cost*(1-TOLERANCES['nuclear_improvement_relative']),
         nuclear_null_identity=null_identity<=TOLERANCES['native_identity_rtol'])
     if fit.success:
-        proof['final_native_identity']=context.apply_to_project(project,fit)
+        proof['final_native_identity']=_apply_starting_point(context,project,fit,path)
         project.save(str(path))
         fresh=NativeMagneticStartingPoint(path,refine_scale=p['refine_histogram_scale'],
             refine_background=p['refine_background'],maximum_moment=p['maximum_moment'],deadline=deadline)
