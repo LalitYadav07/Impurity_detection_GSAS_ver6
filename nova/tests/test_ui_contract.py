@@ -180,6 +180,15 @@ def test_plotly_canvases_have_nonzero_layout_frames() -> None:
     assert "window.Plotly && window.Plotly.Plots.resize" in template
 
 
+def test_expanded_fit_uses_remaining_viewport_and_keeps_dense_rows_scrollable() -> None:
+    app = RadarPdNovaApp()
+    css = app._css()
+    assert ".radar-inspector-card" in css and "height: 100dvh" in css
+    assert ".radar-inspector-frame { width: 100%; flex: 1 1 0; min-height: 0; overflow: auto; }" in css
+    assert "min-height: var(--radar-fit-min-height, 720px)" not in css
+    assert "min-height: calc(100% + max(0px, var(--radar-fit-min-height, 720px) - 720px))" in css
+
+
 def test_powgen_experiment_dashboard_exposes_scientific_trends() -> None:
     app = RadarPdNovaApp()
     template = app.layout.html

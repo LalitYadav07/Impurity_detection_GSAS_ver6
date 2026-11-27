@@ -152,17 +152,23 @@ def test_expanding_a_saved_view_preserves_data_and_scientific_settings():
     assert app._post_analysis_result == data
 
 
-def test_expanded_fit_retains_its_minimum_height_without_affecting_other_views(monkeypatch):
+@pytest.mark.parametrize("height, phase_count", [(720, 2), (930, 12)])
+def test_expanded_fit_preserves_rows_and_tracks_density_without_fixed_plot_height(monkeypatch, height, phase_count):
     import plotly.graph_objects as go
     from radar_pd_nova import results
 
     app = app_with_data()
-    figure = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
-    figure.update_layout(height=930, title="Twelve-phase fit")
+    figure = go.Figure([go.Scatter(x=[1, 2], y=[row, row], name=f"Phase {row}")
+                        for row in range(phase_count)])
+    figure.update_layout(height=height, title="Synthetic fit")
+    original_data = figure.to_dict()["data"]
     monkeypatch.setattr(results, "load_plot_with_fallback", lambda *args: ("fit.json", {}, figure))
     app.open_plot_inspector("fit")
-    assert app.server.state.post_analysis_inspector_min_height == 930
-    assert app.server.state.post_analysis_inspector_figure["data"]
+    assert app.server.state.post_analysis_inspector_min_height == height
+    expanded = app.server.state.post_analysis_inspector_figure
+    assert expanded["data"] == original_data
+    assert expanded["layout"].get("height") is None
+    assert expanded["layout"]["autosize"] is True
     app.open_plot_inspector("post", "cells")
     assert app.server.state.post_analysis_inspector_min_height == 0
 
