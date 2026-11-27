@@ -59,11 +59,13 @@ class BoundedProposalTests(unittest.TestCase):
             (62, (4, 5, 6, 90, 90, 90)),
             (14, (4, 5, 6, 106, 90, 90)),
             (14, (4, 5, 6, 90, 106, 90)),
+            (14, (4, 5, 6, 90, 150, 90)),
             (14, (4, 5, 6, 90, 90, 106)),
             (194, (4, 4, 6, 90, 90, 120)),
             (166, (4, 4, 6, 90, 90, 120)),
             (166, (5, 5, 5, 75, 75, 75)),
             (2, (4, 5, 6, 80, 95, 110)),
+            (2, (4, 5, 6, 30, 80, 80)),
         ]
         for group, cell in examples:
             with self.subTest(group=group, cell=cell):
@@ -119,6 +121,15 @@ class BoundedProposalTests(unittest.TestCase):
         for kwargs in ({'reps': 0}, {'length': -1}, {'angle': float('nan')}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 self.propose((4, 5, 6, 80, 95, 110), 2, **kwargs)
+
+    def test_invalid_metric_is_rejected_instead_of_clipped(self):
+        source = Structure(Lattice.from_parameters(4, 5, 6, 80, 95, 110), ["Si"], [[0, 0, 0]])
+        constraints = N.infer_constraints(source, 2)
+        names = N._free_param_names(constraints)
+        for values in ([4, 5, 6, 80, 80, 170], [4, 5, 6, 90, 180, 90],
+                       [0, 5, 6, 90, 90, 90], [4, 5, 6, 90, float('nan'), 90]):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                N._apply_params_from_vector(source.lattice, constraints, names, values)
 
 
 if __name__ == '__main__':

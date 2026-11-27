@@ -809,11 +809,18 @@ def _apply_params_from_vector(base: Lattice, cons: LatticeConstraints,
     if not cons.free_beta  and cons.beta0  is not None: be = float(cons.beta0)
     if not cons.free_gamma and cons.gamma0 is not None: ga = float(cons.gamma0)
 
-    al = float(np.clip(al, 40.0, 140.0))
-    be = float(np.clip(be,  40.0, 140.0))
-    ga = float(np.clip(ga,  40.0, 140.0))
-
-    return Lattice.from_parameters(a, b, c, al, be, ga)
+    values = np.asarray([a, b, c, al, be, ga], dtype=float)
+    if (not np.all(np.isfinite(values)) or np.any(values[:3] <= 0)
+            or np.any(values[3:] <= 0) or np.any(values[3:] >= 180)):
+        raise ValueError("Lattice parameters must define a finite positive cell")
+    ca, cb, cg = np.cos(np.deg2rad(values[3:]))
+    gram = np.array([[1., cg, cb], [cg, 1., ca], [cb, ca, 1.]])
+    if np.min(np.linalg.eigvalsh(gram)) <= 0:
+        raise ValueError("Lattice angles define a singular or non-positive metric")
+    lattice = Lattice.from_parameters(a, b, c, al, be, ga)
+    if not np.all(np.isfinite(lattice.matrix)) or not lattice.volume > 0:
+        raise ValueError("Lattice metric is not finite and positive")
+    return lattice
 
 def _within_lattice_tolerances(base_lat: Lattice,
                                cand_lat: Lattice,
