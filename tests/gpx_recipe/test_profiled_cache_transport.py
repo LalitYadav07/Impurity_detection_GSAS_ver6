@@ -16,7 +16,8 @@ def make_cache(root, protocol, identity='d'*64, candidate='mag:fixture'):
     relative='_profiled_cache/'+identity+'.npz'
     target=root/relative;target.parent.mkdir(parents=True,exist_ok=True)
     np.savez_compressed(target,identity=identity,offset=np.zeros(5),maps=np.ones((1,3,1)),
-        nuclear=np.ones(5),quadratic=np.ones((5,1,1)),background=np.ones((5,1)),linear_error=0.)
+        nuclear=np.ones(5),quadratic=np.ones((5,1,1)),background=np.ones((5,1)),linear_error=0.,
+        construction=cache.CONSTRUCTION,reference_scale=1.)
     return dict(schema=cache.SCHEMA,protocol_sha256=digest(protocol),entries=[dict(
         identity=identity,candidate=candidate,path=relative,sha256=file_sha(target))])
 
@@ -82,3 +83,17 @@ def test_archive_expansion_is_bounded_before_array_load(tmp_path,monkeypatch):
     p=make_protocol(tmp_path/'source');manifest=make_cache(tmp_path/'hints',p)
     monkeypatch.setattr(cache,'MAX_BYTES',1000)
     assert not cache.bounded_npz(tmp_path/'hints'/manifest['entries'][0]['path'],'d'*64)
+
+
+@pytest.mark.parametrize('damage',['legacy','old_version','zero','negative','nan','wrong_type'])
+def test_legacy_arithmetic_or_invalid_reference_scale_is_never_reused(tmp_path,damage):
+    p=make_protocol(tmp_path/'source');root=tmp_path/'hints';manifest=make_cache(root,p)
+    row=manifest['entries'][0];path=root/row['path']
+    with np.load(path,allow_pickle=False)as data:values={k:data[k]for k in data.files}
+    if damage=='legacy':values.pop('construction');values.pop('reference_scale')
+    elif damage=='old_version':values['construction']='unit-scale-difference/v0'
+    else:values['reference_scale']={'zero':0.,'negative':-1.,'nan':np.nan,'wrong_type':True}[damage]
+    np.savez_compressed(path,**values);row['sha256']=file_sha(path)
+    assert not cache.bounded_npz(path,row['identity'])
+    accepted,rejected=cache.restore(manifest,p,root,tmp_path/'target')
+    assert accepted==[]and rejected==[row['candidate']]

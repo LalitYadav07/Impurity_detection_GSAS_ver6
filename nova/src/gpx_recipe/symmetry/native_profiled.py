@@ -26,13 +26,24 @@ class _CacheMiss(Exception):
 
 class _CompilerObjective:
     """Present the same weighted native residual to the shared compiler."""
-    def __init__(self, native, background):
+    def __init__(self, native, background, *, reference_scale=1.):
         self.native=native;self.background=background;self.numerical_indices=[]
+        self.reference_scale=_construction_scale(reference_scale)
 
     def profile(self, moments, jacobian=False):
-        value=self.native.residual(moments,1.,self.background)
+        value=self.native.residual(moments,self.reference_scale,self.background)/self.reference_scale
         if not jacobian:return value
-        return value,self.native.magnetic_jacobian(moments,1.,self.background)
+        return value,self.native.magnetic_jacobian(moments,self.reference_scale,self.background)/self.reference_scale
+
+
+def _construction_scale(value):
+    """Use the physical source scale while retaining unit-scale coefficients."""
+    if isinstance(value,(bool,np.bool_)):
+        raise ValueError('A positive finite source scale is required for native coefficient construction')
+    result=float(value)
+    if not np.isfinite(result) or result<=0:
+        raise ValueError('A positive finite source scale is required for native coefficient construction')
+    return result
 
 
 class NativeMagneticStartingPoint:
@@ -205,11 +216,19 @@ class NativeMagneticStartingPoint:
     def _build(self,*,heldouts=4,cache_path=None,cache_identity=None,skip_cache=False,
                use_derivative=None,compiler_note='',cache_only=False,factor_cache=None,background_basis=True):
         started=time.monotonic();dimension=len(self.moment_indices);nb=len(self.background_indices)
+        reference_scale=_construction_scale(self.source_scale)
+        from .profiled_cache import CONSTRUCTION
         # GetAtomFXU replaces exact zero components with 1e-8. An evenly
         # spaced anchor can contain 1.0, so a minus-unit interpolation probe
         # would cross that artificial discontinuity. Avoid integral anchors.
         anchor=np.random.default_rng(77831).uniform(.6,1.6,dimension);zero_bg=np.zeros(nb)
         offset=self.residual(anchor,0.,zero_bg)
+        # Subtract the observation-containing offset while the calculated
+        # signal is at its physical magnitude, then return to the same unit
+        # coefficients used by the objective. Unit-scale subtraction can lose
+        # significant digits before a large source scale amplifies the error.
+        def unit_signal(moments):
+            return (self.residual(moments,reference_scale,zero_bg)-offset)/reference_scale
         cached=None;cache_note=''
         if cache_path is not None and cache_identity and not skip_cache:
             try:
@@ -218,6 +237,7 @@ class NativeMagneticStartingPoint:
                 if bounded_npz(target, cache_identity):
                     with np.load(target,allow_pickle=False) as data:
                         if (str(data['identity'])==cache_identity and
+                                data['reference_scale'].item()==reference_scale and
                                 np.array_equal(data['offset'],offset) and
                                 np.array_equal(data['maps'],self.cartesian_maps) and
                                 data['quadratic'].shape==(len(offset),dimension,dimension) and
@@ -232,7 +252,7 @@ class NativeMagneticStartingPoint:
         if cached is None and use_derivative is None:
             try:
                 from ..live.native_reflection import compile_reflection_quadratic
-                self.residual(anchor,1.,zero_bg)
+                self.residual(anchor,reference_scale,zero_bg)
                 physical,proof=compile_reflection_quadratic(math=self.math,lattice=self.lattice,
                     histogram=self.histogram,phases=self.phases,histdict=self.args[2],
                     parameters=self.parms,controls=self.args[4],basis=self.moment_basis,
@@ -244,10 +264,10 @@ class NativeMagneticStartingPoint:
                         or not np.isfinite(weights[~self.residual_mask]).all()
                         or np.any(weights[~self.residual_mask]<=0)):
                     raise ValueError('Native reflection weights/masks differ from the measured residual')
-                quadratic=physical[~self.residual_mask]*np.sqrt(weights[~self.residual_mask]*factor)[:,None,None]
-                f0=self.residual(anchor,1.,zero_bg)-offset
+                quadratic=(physical[~self.residual_mask]/reference_scale)*np.sqrt(weights[~self.residual_mask]*factor)[:,None,None]
+                f0=unit_signal(anchor)
                 nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
-                linear=self.magnetic_jacobian(anchor,1.,zero_bg).T
+                linear=self.magnetic_jacobian(anchor,reference_scale,zero_bg).T/reference_scale
                 linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
                 if not np.isfinite(linear_error) or linear_error>1e-8:
                     raise ValueError('Native reflection response fails the independent derivative check')
@@ -259,27 +279,27 @@ class NativeMagneticStartingPoint:
         if cached is None and compilation is None and (use_derivative is True or (use_derivative is None and dimension>=12)):
             try:
                 from ..live.native_kernel_policy import compile_native_magnetic_kernel
-                compiled=compile_native_magnetic_kernel(_CompilerObjective(self,zero_bg),anchor,
+                compiled=compile_native_magnetic_kernel(_CompilerObjective(self,zero_bg,reference_scale=reference_scale),anchor,
                     list(range(dimension)),method='derivative',checks=4)
                 quadratic=compiled['quadratic'].transpose(2,0,1)
-                nuclear=compiled['base']-offset
-                f0=self.residual(anchor,1.,zero_bg)-offset
-                linear=self.magnetic_jacobian(anchor,1.,zero_bg).T
+                nuclear=compiled['base']-offset/reference_scale
+                f0=unit_signal(anchor)
+                linear=self.magnetic_jacobian(anchor,reference_scale,zero_bg).T/reference_scale
                 linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
                 compiler='native_derivatives';compilation=compiled['diagnostics']
             except (ValueError,FloatingPointError,np.linalg.LinAlgError) as exc:
                 compiler_note=str(exc);compilation=None;compiler='native_profiles'
         if cached is None and compilation is None:
-            f0=self.residual(anchor,1.,zero_bg)-offset
+            f0=unit_signal(anchor)
             quadratic=np.zeros((len(f0),dimension,dimension));linear=np.zeros((len(f0),dimension));plus=[]
             for i in range(dimension):
                 step=np.eye(dimension)[i]
-                fp=self.residual(anchor+step,1.,zero_bg)-offset
-                fm=self.residual(anchor-step,1.,zero_bg)-offset
+                fp=unit_signal(anchor+step)
+                fm=unit_signal(anchor-step)
                 plus.append(fp);quadratic[:,i,i]=(fp+fm-2*f0)/2;linear[:,i]=(fp-fm)/2
             for i in range(dimension):
                 for j in range(i+1,dimension):
-                    value=self.residual(anchor+np.eye(dimension)[i]+np.eye(dimension)[j],1.,zero_bg)-offset
+                    value=unit_signal(anchor+np.eye(dimension)[i]+np.eye(dimension)[j])
                     quadratic[:,i,j]=quadratic[:,j,i]=(value-plus[i]-plus[j]+f0)/2
             nuclear=f0-np.einsum('i,nij,j->n',anchor,quadratic,anchor)
             linear_error=float(np.max(np.abs(linear-2*np.einsum('nij,j->ni',quadratic,anchor)))/max(1.,float(np.max(np.abs(f0)))))
@@ -362,7 +382,8 @@ class NativeMagneticStartingPoint:
                 target.parent.mkdir(parents=True,exist_ok=True)
                 with temporary.open('wb') as stream:
                     np.savez_compressed(stream,identity=cache_identity,offset=offset,maps=self.cartesian_maps,
-                        nuclear=nuclear,quadratic=quadratic,background=background,linear_error=linear_error)
+                        nuclear=nuclear,quadratic=quadratic,background=background,linear_error=linear_error,
+                        construction=CONSTRUCTION,reference_scale=reference_scale)
                 temporary.replace(target)
             except OSError as exc:cache_note=type(exc).__name__
             finally:temporary.unlink(missing_ok=True)
@@ -373,6 +394,9 @@ class NativeMagneticStartingPoint:
             native_calls=self.calls,native_derivative_calls=self.derivative_calls,
             exact_native_peak_reuse=self.peak_memo.diagnostics(),
             compiler=compiler,compiler_note=compiler_note,compiler_diagnostics=compilation,
+            coefficient_construction=dict(version=CONSTRUCTION,reference_scale=reference_scale,
+                units='unit common histogram scale',
+                method='checked cached coefficients' if cached is not None else 'source-scale native differencing'),
             background_compiler=background_proof,
             heldout_relative_errors=errors,linear_identity_error=linear_error,
             qualification_reuse=dict(owned_process=prior_checks is not None,

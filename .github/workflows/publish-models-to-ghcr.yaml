@@ -229,6 +229,7 @@ jobs:
             /validation/tests/gpx_recipe/test_native_forward.py \
             /validation/tests/gpx_recipe/test_profiled_magnetic.py \
             /validation/tests/gpx_recipe/test_native_objective_diagnostics.py \
+            /validation/tests/gpx_recipe/test_profiled_scale_conditioning.py \
             /validation/tests/gpx_recipe/test_grouped_profile_receipts.py \
             /validation/tests/gpx_recipe/test_grouped_native_parallelism.py \
             /validation/tests/gpx_recipe/test_prepared_magnetic_capture.py \

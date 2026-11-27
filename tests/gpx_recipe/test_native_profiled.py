@@ -265,3 +265,53 @@ def test_large_basis_automatically_uses_shared_reflection_compiler(tmp_path):
     assert model.dimension==12
     assert proof['compiler']=='native_reflection_amplitudes',proof
     assert max(proof['heldout_relative_errors'])<1e-8
+
+
+@pytest.mark.parametrize('target_scale,qualified',[(5907124.940466692,True),(1e-8,False)])
+def test_physical_scale_gauge_preserves_native_objective_near_true_point(tmp_path,target_scale,qualified):
+    project,path=artificial_project(tmp_path,sites=4,masked=True,
+        scale_free=False,background_free=False,npoints=701)
+    histogram=project.histograms()[0]
+    original=np.asarray(MAIN.DoNoFit(str(path),histogram.name),float)
+    scale=histogram.data['Sample Parameters']['Scale']
+    ratio=target_scale/scale[0];scale[0]=target_scale
+    for phase in project.phases():phase.data['Histograms'][histogram.name]['Scale'][0]/=ratio
+    project.save()
+    np.testing.assert_allclose(MAIN.DoNoFit(str(path),histogram.name),original,rtol=1e-12,atol=1e-8)
+    before=hashlib.sha256(path.read_bytes()).hexdigest()
+    context=NativeMagneticStartingPoint(path,refine_scale=False,refine_background=False,maximum_moment=9.)
+    if not qualified:
+        # The extreme inverse phase/common-scale gauge has an identical
+        # saved curve, but even the original native compiler fails its
+        # independent random profiles (measured max error 1.70e-4). Keep
+        # the stricter native rejection; algebraic scale equivalence alone
+        # is not permission to accept unqualified native calculations.
+        with pytest.raises(ValueError,match='held-out quadratic identity checks'):
+            context.build()
+        assert hashlib.sha256(path.read_bytes()).hexdigest()==before
+        return
+    model,proof=context.build()
+    truth=np.tile([-1.7,-2.1,-1.2],4);truth[:3]=[1.7,2.1,1.2]
+    direct=context.residual(truth,target_scale,np.empty(0))
+    assert model.heldout_error(truth,target_scale,np.empty(0),direct)<=1e-8
+    assert proof['coefficient_construction']['reference_scale']==target_scale
+    assert hashlib.sha256(path.read_bytes()).hexdigest()==before
+
+
+@pytest.mark.parametrize('damage',['legacy_arithmetic','reference_scale'])
+def test_old_or_wrong_scale_cache_rebuilds_before_reuse(tmp_path,damage):
+    _,path=artificial_project(tmp_path,npoints=301)
+    target=tmp_path/'objective.npz'
+    context=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    context.build(cache_path=target,cache_identity='same-cache-label')
+    with np.load(target,allow_pickle=False)as archive:values={k:archive[k]for k in archive.files}
+    if damage=='legacy_arithmetic':values.pop('construction');values.pop('reference_scale')
+    else:values['reference_scale']*=2.
+    np.savez_compressed(target,**values)
+    fresh=NativeMagneticStartingPoint(path,refine_scale=True,refine_background=True,maximum_moment=6.)
+    _,proof=fresh.build(cache_path=target,cache_identity='same-cache-label')
+    assert proof['cache_hit'] is False
+    assert proof['native_calls']>2
+    with np.load(target,allow_pickle=False)as archive:
+        assert str(archive['construction'])=='source-scale-native-coefficients/v1'
+        assert float(archive['reference_scale'])==fresh.source_scale

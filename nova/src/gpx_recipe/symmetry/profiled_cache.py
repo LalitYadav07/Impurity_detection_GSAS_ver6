@@ -17,9 +17,11 @@ from .compiler import confined, file_sha
 from .contracts import digest
 
 SCHEMA = 'radar-profiled-cache/v1'
+CONSTRUCTION = 'source-scale-native-coefficients/v1'
 MAX_BYTES = 128 * 1024 * 1024
 MEMBERS = {'identity.npy', 'offset.npy', 'maps.npy', 'nuclear.npy',
-           'quadratic.npy', 'background.npy', 'linear_error.npy'}
+           'quadratic.npy', 'background.npy', 'linear_error.npy',
+           'construction.npy', 'reference_scale.npy'}
 
 
 def validate_manifest(document, protocol):
@@ -55,7 +57,10 @@ def bounded_npz(path, identity):
                     or sum(m.file_size for m in members) > MAX_BYTES):
                 return False
         with np.load(path, allow_pickle=False) as data:
-            return data['identity'].shape == () and str(data['identity']) == identity
+            return (data['identity'].shape == () and str(data['identity']) == identity
+                    and data['construction'].shape == () and str(data['construction']) == CONSTRUCTION
+                    and data['reference_scale'].shape == () and data['reference_scale'].dtype.kind == 'f'
+                    and np.isfinite(data['reference_scale']).item() and data['reference_scale'].item() > 0)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError):
         return False
 

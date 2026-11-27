@@ -23,7 +23,8 @@ def linked(tmp_path):
     (reference/'job.json').write_text(json.dumps(common))
     np.savez_compressed(data/'kernel.npz',identity=identity,offset=np.array([-3.,-4.]),
         nuclear=np.ones(2),quadratic=np.array([[[1.]],[[2.]]]),background=np.empty((2,0)),
-        maps=np.array([[[1.],[0.],[0.]]]),linear_error=0.)
+        maps=np.array([[[1.],[0.],[0.]]]),linear_error=0.,
+        construction='source-scale-native-coefficients/v1',reference_scale=1.)
     kernel=dict(owner=owner,identity=identity,sha256=file_sha(data/'kernel.npz'))
     (data/'kernel.json').write_text(json.dumps(dict(schema='radar-profiled-group-kernel/v1',
         candidate_id='mag:test',protocol_sha256=protocol,kernel=kernel,normalization=25.,
