@@ -34,6 +34,44 @@ def _load_cif_structure_relaxed(cif_path: str | Path) -> Structure:
     """Retain the compatibility entry point, with strict/explicit review policy."""
     from cif_occupancy import load_authorized_structure
     return load_authorized_structure(cif_path)
+
+
+def _declared_cif_space_group(cif_path: str | Path) -> Optional[int]:
+    """Read the symmetry of the actual CIF, not its catalog classification.
+
+    A relaxed primitive CIF can deliberately declare P1/P-1 while a catalog
+    identifies its nearby higher-symmetry parent. Applying the parent's
+    conventional-cell metric to that CIF changes its diffraction pattern.
+    """
+    import CifFile
+    from pymatgen.symmetry.groups import SpaceGroup
+    document = CifFile.ReadCif(str(cif_path))
+    blocks = [document[key] for key in document.keys()
+              if '_atom_site_fract_x' in document[key]]
+    if len(blocks) != 1:
+        raise ValueError('Lattice nudging requires one structural CIF block')
+    block = blocks[0]
+    numbers = [int(block[tag]) for tag in
+               ('_space_group_IT_number', '_symmetry_Int_Tables_number') if tag in block]
+    if numbers and (len(set(numbers)) != 1 or not 1 <= numbers[0] <= 230):
+        raise ValueError('Conflicting or invalid CIF space-group numbers')
+    symbols = [str(block[tag]).strip() for tag in
+               ('_space_group_name_H-M_alt', '_symmetry_space_group_name_H-M') if tag in block]
+    resolved = []
+    for symbol in symbols:
+        try:
+            resolved.append(SpaceGroup(symbol).int_number)
+        except ValueError:
+            # Some supported native settings use aliases absent from
+            # pymatgen. Their explicit international number still suffices.
+            if not numbers:
+                raise ValueError('Unrecognized CIF space-group symbol for lattice constraints') from None
+    if len(set(resolved)) != 1:
+        if resolved:
+            raise ValueError('Conflicting CIF space-group symbols')
+    if numbers and resolved and numbers[0] != resolved[0]:
+        raise ValueError('CIF space-group number and symbol disagree')
+    return numbers[0] if numbers else (resolved[0] if resolved else None)
 try:
     from xray_doublet import apply_doublet_to_peaks, describe_doublet, is_active_for
 except Exception:
@@ -1317,6 +1355,37 @@ class LatticeNudger:
         self._cif_source_cache = {}
         self._structure_source_keys = {}
 
+    def _constraint_space_group(self, pid: str, structure: Structure) -> Optional[int]:
+        catalog_number = None
+        try:
+            catalog_number = self.db.get_space_group_number(pid)
+        except Exception:
+            pass
+        source = getattr(self, '_cif_source_cache', {}).get(pid)
+        declared = _declared_cif_space_group(source) if source else None
+        number = declared if declared is not None else catalog_number
+        basis = 'declared source CIF' if declared is not None else 'catalog metadata'
+        if number is None:
+            try:
+                from neutron_fingerprints import isotope_preserving_space_group_info
+                _, number = isotope_preserving_space_group_info(structure, symprec=1e-3, angle_tolerance=-1.0)
+                basis = 'structure symmetry detected at 0.001 angstrom'
+            except Exception:
+                basis = 'unknown; unconstrained metric'
+        mismatch = declared is not None and catalog_number is not None and int(declared) != int(catalog_number)
+        if mismatch:
+            logger.warning('%s: catalog SG %s differs from source CIF SG %s; lattice nudging uses the declared source setting, without symmetrizing atoms.',
+                           pid, catalog_number, declared)
+        if not hasattr(self, '_constraint_provenance'):
+            self._constraint_provenance = {}
+        self._constraint_provenance[pid] = {
+            'constraint_space_group_number': int(number) if number is not None else None,
+            'catalog_space_group_number': int(catalog_number) if catalog_number is not None else None,
+            'constraint_basis': basis,
+            'catalog_source_symmetry_mismatch': mismatch,
+        }
+        return number
+
     def _structure_for_pid(self, pid: str) -> Structure:
         from cif_occupancy import cache_identity
         source = getattr(self, "_cif_source_cache", {}).get(pid)
@@ -1432,6 +1501,7 @@ class LatticeNudger:
             Path(path + ".nudge.json").write_text(json.dumps({
                 "source_sha256": proof['source_sha256'],
                 "source_cif": retained.relative_to(Path(out_dir)).as_posix(),
+                **getattr(self, '_constraint_provenance', {}).get(pid, {}),
                 "operation": "lattice only; source symmetry, fractional sites and occupancies retained",
                 "cell": list(structure.lattice.parameters),
             }, indent=2) + "\n")
@@ -1620,17 +1690,7 @@ class LatticeNudger:
         base_struct = self._structure_for_pid(pid)
         base_lat = base_struct.lattice
 
-        sgnum = None
-        try:
-            sgnum = self.db.get_space_group_number(pid)
-        except Exception:
-            pass
-        if sgnum is None:
-            try:
-                from neutron_fingerprints import isotope_preserving_space_group_info
-                _, sgnum = isotope_preserving_space_group_info(base_struct, symprec=1e-2, angle_tolerance=-1.0)
-            except Exception:
-                sgnum = None
+        sgnum = self._constraint_space_group(pid, base_struct)
         cons = infer_constraints(base_struct, sgnum)
 
         if _DEBUG:
