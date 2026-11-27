@@ -3103,6 +3103,7 @@ class UnifiedPipeline:
         # Main phase CIF and name
         main_cif = _expand(ds.get("main_cif"))
         user_supplied_main_cif = bool(main_cif)
+        blind_main_collapse_events: List[Dict[str, Any]] = []
         if (self.top_cfg.get('tof_profile') or {}).get('mode','fixed') != 'fixed' and not user_supplied_main_cif:
             raise ValueError('TOF profile adjustment requires a supplied main-phase CIF')
         main_phase_name = ds.get("main_phase_name") or "auto"
@@ -4398,6 +4399,7 @@ class UnifiedPipeline:
                         final_polish_cycles=int(ds.get("polish_final_cycles", self.top_cfg.get("polish_final_cycles", 0))),
                         skip_fresh_lst_regen=bool(ds.get("polish_skip_fresh_lst_regen", self.top_cfg.get("polish_skip_fresh_lst_regen", True))),
                         trace_path=polish_trace,
+                        main_collapse_evidence=None if user_supplied_main_cif else blind_main_collapse_events,
                     )
 
                     from gsas_main_phase_refiner import reject_gpx_checkpoint
@@ -4640,6 +4642,7 @@ class UnifiedPipeline:
                             final_polish_cycles=int(ds.get("polish_final_cycles", self.top_cfg.get("polish_final_cycles", 0))),
                             skip_fresh_lst_regen=bool(ds.get("polish_skip_fresh_lst_regen", self.top_cfg.get("polish_skip_fresh_lst_regen", True))),
                             trace_path=final_main_trace,
+                            main_collapse_evidence=None if user_supplied_main_cif else blind_main_collapse_events,
                         )
                         if not math.isfinite(float(rwp_final_main)) or float(rwp_final_main) > float(kept_rwp) + 1e-6:
                             raise RuntimeError(f"Final main-phase polish worsened Rwp {kept_rwp} -> {rwp_final_main}")
@@ -4685,6 +4688,7 @@ class UnifiedPipeline:
                             target_phase_names=[main_phase_name, *accepted],
                             polish_strategy="legacy", refine_main_cell=True,
                             refine_existing_cells=True, stabilization_cycles=0,
+                            main_collapse_evidence=None if user_supplied_main_cif else blind_main_collapse_events,
                         )
                         if not math.isfinite(float(rwp_joint)) or float(rwp_joint) > float(kept_rwp) + 1e-6:
                             raise RuntimeError(f"Final joint-cell polish worsened Rwp {kept_rwp} -> {rwp_joint}")
@@ -4697,6 +4701,47 @@ class UnifiedPipeline:
                         from gsas_main_phase_refiner import reject_gpx_checkpoint
                         reject_gpx_checkpoint(joint_final)
                         print(f"[WARN] Final joint-cell refinement failed; retaining the accepted model: {exc}")
+
+            # A blind bootstrap anchor is a hypothesis, not a user assertion.
+            # After all ordinary guarded polish attempts, allow at most one
+            # independent two-phase -> single-phase native comparison. Never
+            # accept the collapsed intermediate state or relax its guards.
+            if not user_supplied_main_cif and blind_main_collapse_events:
+                from blind_main_reduction import promotion_values, try_reduced_main
+                reduction_dir = Path(technical_dir) / 'Blind_Main_Reduction'
+                reduction = try_reduced_main(
+                    kept_gpx, reduction_dir, main_phase_name,
+                    blind_main_collapse_events, user_supplied_main=False)
+                if reduction.get('adopted'):
+                    try:
+                        promoted = promotion_values(reduction, main_phase_name, accepted, labels)
+                    except ValueError as exc:
+                        reduction.update(adopted=False, reason='promotion_bookkeeping_rejected', error=str(exc))
+                        (reduction_dir / 'reduced-main.json').write_text(json.dumps(reduction, indent=2)+'\n')
+                self.manifest.add_artifact(str(reduction_dir / 'reduced-main.json'))
+                self.manifest.update_metrics({'blind_main_reduction': reduction})
+                if reduction.get('adopted'):
+                    # Commit all final-model identity bookkeeping together.
+                    previous_main = main_phase_name
+                    # The old joint model remains auditable, but must not be
+                    # published under a second "final accepted" identity.
+                    from gsas_main_phase_refiner import reject_gpx_checkpoint
+                    superseded_joint = Path(joint_dir) / 'seq_final_joint_polished.gpx'
+                    if superseded_joint.exists():
+                        reject_gpx_checkpoint(str(superseded_joint))
+                        reduction['superseded_final_joint'] = str(superseded_joint.with_suffix('.rejected.gpx'))
+                        (reduction_dir / 'reduced-main.json').write_text(json.dumps(reduction, indent=2)+'\n')
+                    (kept_gpx, kept_rwp, fractions_kept, main_phase_name,
+                     main_cif, accepted, labels) = promoted
+                    self.manifest.add_artifact(kept_gpx)
+                    self.manifest.add_artifact(main_cif)
+                    final_plot = str(Path(plots_dir) / 'seq_final_joint_accepted_model.png')
+                    plot_gpx_fit_with_ticks(kept_gpx, final_plot, phase_labels=labels)
+                    self.manifest.add_artifact(final_plot)
+                    print(f'[blind-main] Independent reduced model promoted {main_phase_name}; '
+                          f'removed {previous_main}; Rwp={kept_rwp:.6f}%')
+                else:
+                    print(f"[blind-main] Retained original checkpoint: {reduction['reason']}")
 
             # --------------------------------------------------------------------
             # FINAL SUMMARY & CSV

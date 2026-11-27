@@ -2444,6 +2444,7 @@ def joint_refine_polish(
     final_polish_cycles: int = 0,
     skip_fresh_lst_regen: bool = True,
     trace_path: Optional[str] = None,
+    main_collapse_evidence: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Dict[str, Dict[str, float]], float]:
     """
     Transactional polish refinement with strict checkpoint integrity.
@@ -2785,6 +2786,19 @@ def joint_refine_polish(
         required_names: Optional[List[str]] = None,
     ) -> Tuple[bool, Dict[str, Dict[str, float]], float]:
         results, rwp = _final_readout(proj, _lst_path(gpx_path), hist_name)
+        if main_collapse_evidence is not None:
+            # A disappeared blind anchor proposes a separate hypothesis. This
+            # never changes the acceptance/collapse rules for this trial.
+            try:
+                from blind_main_reduction import collapse_evidence
+                parsed = (_parse_ext or parse_gsas_lst)(_lst_path(gpx_path), hist_name)
+                evidence = collapse_evidence(proj, hist_name, main_phase_name, parsed, label=stage)
+                if evidence is not None:
+                    import hashlib
+                    evidence['source_gpx_sha256'] = hashlib.sha256(Path(gpx_path).read_bytes()).hexdigest()
+                    main_collapse_evidence.append(evidence)
+            except Exception as exc:
+                logger.info('[polish] No authoritative main-collapse evidence: %s', exc)
         weights = _weight_map(results)
         reasons: List[str] = []
 

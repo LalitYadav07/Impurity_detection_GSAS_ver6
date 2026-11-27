@@ -1054,6 +1054,22 @@ def collect_outputs(
         collection_records["tables"].append(file_record(lattice_path, role="table", root=portal))
     manifest_path = _find_suffix(run_root, "run_manifest.json")
     manifest = read_json(manifest_path) if manifest_path else {}
+    reduction = (manifest.get('metrics') or {}).get('blind_main_reduction') or {}
+    if reduction.get('attempted'):
+        if reduction.get('adopted'):
+            message = ('The blind main-phase guess was replaced after an independently checked reduced-model fit: '
+                       f"{reduction.get('main_before')} -> {reduction.get('main_after')}. "
+                       'This model change requires scientific review; it does not establish phase identity.')
+            if reduction.get('cell_refined') is False:
+                message += ' The cell trial did not qualify; the retained fit refines scale/background with the cell held fixed.'
+        else:
+            message = ('The blind main-phase guess vanished in a trial, but the independent reduced-model check '
+                       'did not qualify. The earlier checkpoint was retained; review the phase hypothesis.')
+        scientific_warnings.append({'code': 'blind_main_hypothesis_review', 'message': message,
+                                    'adopted': bool(reduction.get('adopted')),
+                                    'retained_stage': reduction.get('retained_stage'),
+                                    'cell_refined': reduction.get('cell_refined'),
+                                    'reason': reduction.get('reason')})
     if isinstance(input_provenance, dict):
         scientific_warnings.extend(input_provenance.get("warnings") or [])
     handoff_issues = sorted({item['acquisition_handoff']['status']
