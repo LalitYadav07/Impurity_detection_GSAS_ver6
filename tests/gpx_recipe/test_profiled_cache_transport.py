@@ -52,6 +52,30 @@ def test_two_fresh_chunks_reuse_only_sealed_source_and_candidate(tmp_path):
     assert file_sha(source/'source.gpx')==original
 
 
+def test_legacy_optional_cache_is_discarded_without_rejecting_the_chunk(tmp_path):
+    source=tmp_path/'source';p=make_protocol(source)
+    p['policy'].update(magnetic_optimizer='profiled_quadratic',optimizer_iterations=100,moment_model='symmetry_allowed')
+    p['implementation_sha256']=package_signature();p=validate_protocol(p)
+    uid=trial_id(p,*[(c['id'],s['id']) for c,s in iter_trials(p)][0])
+    manifest=make_cache(source,p);entry=manifest['entries'][0];path=source/entry['path']
+    with np.load(path,allow_pickle=False) as archive:
+        values={k:archive[k] for k in archive.files if k not in {'construction','reference_scale'}}
+    np.savez_compressed(path,**values);entry['sha256']=file_sha(path)
+    original=file_sha(source/'source.gpx');calls=[]
+    def runner(directory,**_):
+        calls.append(directory)
+        captured=directory.parent.parent/'inputs'/digest(p)
+        assert not (captured/entry['path']).exists()
+        return dict(state='finished',status='inadequate_fit',wall_seconds=1.)
+    result=execute_chunk(dict(schema='radar-model-chunk/v1',protocol=p,protocol_sha256=digest(p),
+        trials=[uid],workers=1,dispatch_key='a'*24,seconds=240,profiled_cache=manifest),
+        source,tmp_path/'execution',runner=runner,environ={})
+    assert len(calls)==1 and result['trials'][0]['id']==uid
+    assert result['discarded_cache_candidates']==[entry['candidate']]
+    assert result['profiled_cache']['entries']==[]
+    assert file_sha(source/'source.gpx')==original
+
+
 @pytest.mark.parametrize('mutation',['protocol','candidate','traversal','duplicate','unknown'])
 def test_cross_scope_and_unsafe_cache_manifest_rejected_before_copy(tmp_path,mutation):
     p=make_protocol(tmp_path/'source');manifest=make_cache(tmp_path/'hints',p)

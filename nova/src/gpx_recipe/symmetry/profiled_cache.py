@@ -22,6 +22,7 @@ MAX_BYTES = 128 * 1024 * 1024
 MEMBERS = {'identity.npy', 'offset.npy', 'maps.npy', 'nuclear.npy',
            'quadratic.npy', 'background.npy', 'linear_error.npy',
            'construction.npy', 'reference_scale.npy'}
+_LEGACY_MEMBERS = MEMBERS - {'construction.npy', 'reference_scale.npy'}
 
 
 def validate_manifest(document, protocol):
@@ -46,6 +47,21 @@ def validate_manifest(document, protocol):
 
 def bounded_npz(path, identity):
     """Reject oversized/foreign/pickled archives before native array loading."""
+    return _bounded_npz(path, identity, legacy_archive=False)
+
+
+def bounded_archive_npz(path, identity):
+    """Read a hash-bound historical result, never qualify an optimizer hint.
+
+    Older recorded equivalence proofs use the seven-member coefficient
+    layout. Their recorded native representative still has to be checked by
+    the archive caller. This path does not admit them to current execution;
+    restore/export and native compilation always use bounded_npz instead.
+    """
+    return _bounded_npz(path, identity, legacy_archive=True)
+
+
+def _bounded_npz(path, identity, *, legacy_archive):
     import numpy as np
     path = Path(path)
     try:
@@ -53,12 +69,17 @@ def bounded_npz(path, identity):
             return False
         with zipfile.ZipFile(path) as archive:
             members = archive.infolist()
-            if ({m.filename for m in members} != MEMBERS or len(members) != len(MEMBERS)
+            names = {m.filename for m in members}
+            legacy = legacy_archive and names == _LEGACY_MEMBERS
+            if ((names != MEMBERS and not legacy) or len(members) != len(names)
                     or sum(m.file_size for m in members) > MAX_BYTES):
                 return False
         with np.load(path, allow_pickle=False) as data:
-            return (data['identity'].shape == () and str(data['identity']) == identity
-                    and data['construction'].shape == () and str(data['construction']) == CONSTRUCTION
+            if data['identity'].shape != () or str(data['identity']) != identity:
+                return False
+            if legacy:
+                return True
+            return (data['construction'].shape == () and str(data['construction']) == CONSTRUCTION
                     and data['reference_scale'].shape == () and data['reference_scale'].dtype.kind == 'f'
                     and np.isfinite(data['reference_scale']).item() and data['reference_scale'].item() > 0)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError):

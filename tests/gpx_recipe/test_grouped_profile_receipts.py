@@ -50,6 +50,56 @@ def check(linked):
     return verify_equivalent(directory,result,job,lambda *_:native)
 
 
+def legacy_kernel(linked):
+    """A sealed historical result, not a newly approved optimizer input."""
+    _,result,_,_,_,data=linked
+    with np.load(data/'kernel.npz',allow_pickle=False) as archive:
+        values={k:archive[k] for k in archive.files if k not in {'construction','reference_scale'}}
+    np.savez_compressed(data/'kernel.npz',**values)
+    reseal_kernel(linked)
+    return values
+
+
+def reseal_kernel(linked):
+    _,result,_,_,_,data=linked
+    metadata=json.loads((data/'kernel.json').read_text())
+    metadata['kernel']['sha256']=file_sha(data/'kernel.npz')
+    (data/'kernel.json').write_text(json.dumps(metadata))
+    result['group_kernel']['sha256']=metadata['kernel']['sha256']
+    result['group_kernel']['metadata_sha256']=file_sha(data/'kernel.json')
+
+
+def test_legacy_hash_bound_equivalence_stays_readable_but_is_not_a_current_cache(linked):
+    from gpx_recipe.symmetry.profiled_cache import bounded_npz,bounded_archive_npz
+    legacy_kernel(linked)
+    check(linked)
+    _,result,_,_,_,data=linked
+    assert bounded_archive_npz(data/'kernel.npz',result['group_kernel']['identity'])
+    assert not bounded_npz(data/'kernel.npz',result['group_kernel']['identity'])
+    assert result['effects_verified'] is False
+
+
+@pytest.mark.parametrize('damage',['identity','extra_member','pickle','corrupt','unsealed'])
+def test_legacy_archive_still_requires_intact_matching_native_evidence(linked,damage):
+    values=legacy_kernel(linked);data=linked[-1]
+    if damage=='identity':values['identity']='f'*64
+    elif damage=='extra_member':values['unrecognized']=np.zeros(1)
+    elif damage=='pickle':values['offset']=np.array([{}],dtype=object)
+    if damage in {'identity','extra_member','pickle'}:
+        np.savez_compressed(data/'kernel.npz',**values)
+    else:(data/'kernel.npz').write_bytes(b'invalid archive')
+    if damage!='unsealed':reseal_kernel(linked)
+    with pytest.raises(ValueError):check(linked)
+
+
+def test_current_archive_cannot_fall_back_to_legacy_validation(linked):
+    data=linked[-1]
+    with np.load(data/'kernel.npz',allow_pickle=False) as archive:values={k:archive[k] for k in archive.files}
+    values['construction']='unknown-construction'
+    np.savez_compressed(data/'kernel.npz',**values);reseal_kernel(linked)
+    with pytest.raises(ValueError,match='matching checked kernel'):check(linked)
+
+
 def test_time_reversed_screened_parameters_keep_native_reference_without_native_claim(linked):
     check(linked)
     directory,result,*_=linked

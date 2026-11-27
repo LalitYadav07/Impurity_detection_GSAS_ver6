@@ -7,7 +7,7 @@ import numpy as np
 
 from .compiler import confined, file_sha
 from .contracts import digest
-from .profiled_cache import bounded_npz
+from .profiled_cache import bounded_archive_npz
 from .profiled_groups import same_profile
 
 
@@ -74,7 +74,7 @@ def verify_equivalent(directory,result,job,verify_reference):
             or not re.fullmatch('[a-f0-9]{64}',kernel['metadata_sha256'])
             or file_sha(data/'kernel.json')!=kernel['metadata_sha256']
             or file_sha(data/'kernel.npz')!=kernel.get('sha256')
-            or not bounded_npz(data/'kernel.npz',kernel.get('identity'))):
+            or not bounded_archive_npz(data/'kernel.npz',kernel.get('identity'))):
         raise ValueError('Screened equivalence has no matching checked kernel')
     proof_name='results/optimizer-receipt.json'
     if proof_name not in native.get('files',{}):
