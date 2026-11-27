@@ -93,6 +93,35 @@ class Stage4WorkerPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'number and symbol disagree'):
                 _declared_cif_space_group(source)
 
+    def test_unknown_number_uses_valid_source_symbol(self):
+        from scripts.lattice_nudger import _declared_cif_space_group
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.cif'
+            for missing in ('?', '.'):
+                source.write_text("data_a\n_symmetry_space_group_name_H-M 'P -1'\n"
+                    f"_symmetry_Int_Tables_number {missing}\n"
+                    "loop_\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n0 0 0\n")
+                self.assertEqual(_declared_cif_space_group(source), 2)
+
+    def test_undeclared_source_does_not_borrow_catalog_symmetry(self):
+        from types import SimpleNamespace
+        from pymatgen.io.cif import CifWriter
+        lattice = Lattice.from_parameters(5.996, 5.997, 6.290, 98.59, 98.71, 119.95)
+        structure = Structure(lattice, ['Cr', 'Cl'], [[.11, .23, .37], [.29, .33, .49]])
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.cif'
+            raw = str(CifWriter(structure))
+            source.write_text('\n'.join(line for line in raw.splitlines()
+                if not line.startswith(('_symmetry_space_group_name_H-M', '_symmetry_Int_Tables_number'))))
+            database = SimpleNamespace(ensure_cif_on_disk=lambda *a, **kw: str(source),
+                                       get_space_group_number=lambda pid: 12)
+            nudger = LatticeNudger(database, fast_peak_reposition=False)
+            q = np.linspace(.5, 6., 100)
+            with patch.object(nudger, '_make_candidates_qsignature', side_effect=AssertionError('unresolved symmetry must not nudge')), \
+                 patch.object(nudger.sim, 'simulate_QI', return_value=(np.array([]), np.array([]))):
+                result = nudger.optimize_one('synthetic', q, np.ones_like(q), out_cif_dir=folder)
+            self.assertTrue(np.allclose(list(result.best_params.values()), lattice.parameters, atol=1e-10, rtol=0))
+
     def test_nudged_cif_keeps_source_symmetry_sites_and_occupancies(self):
         from types import SimpleNamespace
         import CifFile

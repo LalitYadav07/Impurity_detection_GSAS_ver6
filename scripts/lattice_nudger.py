@@ -52,11 +52,13 @@ def _declared_cif_space_group(cif_path: str | Path) -> Optional[int]:
         raise ValueError('Lattice nudging requires one structural CIF block')
     block = blocks[0]
     numbers = [int(block[tag]) for tag in
-               ('_space_group_IT_number', '_symmetry_Int_Tables_number') if tag in block]
+               ('_space_group_IT_number', '_symmetry_Int_Tables_number')
+               if tag in block and str(block[tag]).strip() not in {'?', '.'}]
     if numbers and (len(set(numbers)) != 1 or not 1 <= numbers[0] <= 230):
         raise ValueError('Conflicting or invalid CIF space-group numbers')
     symbols = [str(block[tag]).strip() for tag in
-               ('_space_group_name_H-M_alt', '_symmetry_space_group_name_H-M') if tag in block]
+               ('_space_group_name_H-M_alt', '_symmetry_space_group_name_H-M')
+               if tag in block and str(block[tag]).strip() not in {'?', '.'}]
     resolved = []
     for symbol in symbols:
         try:
@@ -1363,9 +1365,14 @@ class LatticeNudger:
             pass
         source = getattr(self, '_cif_source_cache', {}).get(pid)
         declared = _declared_cif_space_group(source) if source else None
-        number = declared if declared is not None else catalog_number
-        basis = 'declared source CIF' if declared is not None else 'catalog metadata'
-        if number is None:
+        # A present CIF without a usable declaration is not permission to
+        # impose a different catalog setting. Retain its cell unchanged until
+        # that source's symmetry is resolved.
+        hold_source_cell = source is not None and declared is None
+        number = declared if source is not None else catalog_number
+        basis = ('undeclared source symmetry; source cell held fixed' if hold_source_cell
+                 else 'declared source CIF' if declared is not None else 'catalog metadata')
+        if number is None and not hold_source_cell:
             try:
                 from neutron_fingerprints import isotope_preserving_space_group_info
                 _, number = isotope_preserving_space_group_info(structure, symprec=1e-3, angle_tolerance=-1.0)
@@ -1383,7 +1390,10 @@ class LatticeNudger:
             'catalog_space_group_number': int(catalog_number) if catalog_number is not None else None,
             'constraint_basis': basis,
             'catalog_source_symmetry_mismatch': mismatch,
+            'source_cell_held_fixed': hold_source_cell,
         }
+        if hold_source_cell:
+            logger.warning('%s: source CIF has no usable space-group declaration; lattice nudging keeps its cell unchanged instead of imposing catalog symmetry.', pid)
         return number
 
     def _structure_for_pid(self, pid: str) -> Structure:
@@ -1691,7 +1701,8 @@ class LatticeNudger:
         base_lat = base_struct.lattice
 
         sgnum = self._constraint_space_group(pid, base_struct)
-        cons = infer_constraints(base_struct, sgnum)
+        hold_source_cell = self._constraint_provenance[pid]['source_cell_held_fixed']
+        cons = infer_constraints(base_struct, 1 if hold_source_cell else sgnum)
 
         if _DEBUG:
             logger.info(f"===== Phase {pid} | SG={sgnum if sgnum is not None else 'unknown'} =====")
@@ -1727,7 +1738,8 @@ class LatticeNudger:
             if _DEBUG:
                 logger.debug(f"Crystal system={cs}; constraint window: ±{_prev_qwin:.1f}% → ±{_QWIN_PCT:.1f}%")
             t_targets = perf_counter()
-            reps_lattices = self._make_candidates_qsignature(base_struct, cons, reps=reps,samples=samples,len_tol_pct=len_tol_pct, ang_tol_deg=ang_tol_deg)
+            reps_lattices = ([base_lat] if hold_source_cell else
+                self._make_candidates_qsignature(base_struct, cons, reps=reps,samples=samples,len_tol_pct=len_tol_pct, ang_tol_deg=ang_tol_deg))
             target_s = perf_counter() - t_targets
         finally:
             _QWIN_PCT = _prev_qwin  # restore
