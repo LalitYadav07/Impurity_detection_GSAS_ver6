@@ -831,6 +831,82 @@ class SymmetryMixin(KSearchMixin):
             finally:self._finish_symmetry_preparation()
         self._refinement_schedule(inspect(),'radar-symmetry-inspect')
 
+    def use_saved_magnetic_setup(self):
+        """Load declarative setup only; a new plan and approval remain required."""
+        s=self.server.state
+        if s.sx_busy:return
+        self._symmetry_unapprove();s.sx_busy=True;s.sx_error=''
+        async def restore():
+            from .saved_magnetic_setup import load,stage
+            s.sx_busy=True;s.sx_error=''
+            s.sx_message='Checking the selected campaign catalog against this freshly inspected GPX. No discovery or refinement is being submitted.';s.flush()
+            try:
+                d=self._symmetry_draft
+                if not d or not s.sx_has_context:
+                    raise ValueError('Inspect the exact starting GPX before using a saved magnetic setup.')
+                import re
+                name=s.sx_campaign
+                if not re.fullmatch(r'campaign-[a-f0-9]{12}',name or ''):
+                    raise ValueError('Select and load a saved magnetic campaign first.')
+                root=self._symmetry_root()/name
+                if root.is_symlink() or not (root/'campaign.sqlite').is_file():
+                    raise ValueError('Load the selected saved campaign before using its setup.')
+                workspace=self._refinement_store()
+                service=self.service
+                connection=(getattr(service,'galaxy_url',None),getattr(service,'history_id',None))
+                identity=(s.rf_experiment,s.sx_start_source,s.sx_campaign)
+                def current():
+                    return (self._symmetry_draft is d and workspace is self._refinement_store()
+                        and self.service is service
+                        and connection==(getattr(service,'galaxy_url',None),getattr(service,'history_id',None))
+                        and identity==(s.rf_experiment,s.sx_start_source,s.sx_campaign)
+                        and root==self._symmetry_root()/s.sx_campaign)
+                form=digest({key:getattr(s,key,None) for key in MODEL_FIELDS})
+                setup=await asyncio.to_thread(load,self._symmetry_campaign(root),
+                    context=copy.deepcopy(d['context']),source=copy.deepcopy(d['source']),
+                    origin=model_origin(d['source'],workspace),draft_root=d['root'])
+                if (not current()
+                        or form!=digest({key:getattr(s,key,None) for key in MODEL_FIELDS})):
+                    raise ValueError('The selected source or campaign changed while its setup was checked.')
+                stage(d['root'],setup)
+                for key in ('catalog','discovery_identity','protocol','template','saved_magnetic_setup'):
+                    d.pop(key,None)
+                values=setup['settings'];self._symmetry_applying_intent=True
+                try:
+                    s.sx_kind='magnetic';s.sx_parent=values['parent'];s.sx_histogram=values['histogram']
+                    s.sx_k=', '.join(values['k']);s.sx_sites=[site['label'] for site in values['sites']]
+                    s.sx_form_factors='; '.join(site['label']+'='+site['form_factor'] for site in values['sites'])
+                    s.sx_lande='; '.join(site['label']+'='+str(site['lande_g']) for site in values['sites'])
+                    s.sx_moment_model=values['moment_model'];s.sx_magnetic_optimizer=values['magnetic_optimizer']
+                    s.sx_optimizer_iterations=values['optimizer_iterations'];s.sx_refine_scale=values['refine_histogram_scale']
+                    s.sx_refine_background=values['refine_background'];s.sx_directions=values['directions']
+                    s.sx_sign_starts=values['relative_sign_starts'];s.sx_max_moment=values['maximum_moment']
+                    s.sx_adequate=values['adequate_rwp_percent'];s.sx_cycles=values['cycles'];s.sx_mag_d_min=values['magnetic_d_min']
+                    s.sx_existing='selected';s.sx_follow_new=False;s.sx_max_scans=1;s.sx_selected_scans=[d['source_id']]
+                    s.sx_candidate_options=[dict(title=candidate_display_name(setup['catalog'],c)+' · '+c['id'][-6:],value=c['id']) for c in setup['catalog']['candidates']]
+                    s.sx_candidates=values['candidates'];s.sx_modes=[];s.sx_mode_options=[]
+                    self._symmetry_parent_changed()
+                    applied_form=digest({key:getattr(s,key,None) for key in MODEL_FIELDS})
+                    s.flush()
+                finally:self._symmetry_applying_intent=False
+                if not current() or applied_form!=digest({key:getattr(s,key,None) for key in MODEL_FIELDS}):
+                    raise ValueError('The selected source or campaign changed while its setup was applied.')
+                d.update(catalog=setup['catalog'],discovery_identity=self._discovery_identity(),
+                    saved_magnetic_setup=setup['binding'])
+                self._symmetry_unapprove();s.sx_plan_token='';s.sx_plan_summary='';s.sx_plan_candidates=[]
+                s.sx_discovered=True;s.sx_setup=True;s.sx_discovery_rows=[]
+                s.sx_discovery_scope=f"{len(setup['catalog']['candidates'])} recorded magnetic embeddings reused for this exact source and k"
+                s.sx_message='Saved magnetic setup loaded. Review the settings and build a new finite plan; previous approval and fit results are not reused. Native BNS operator checks still run before fitting.'
+            except Exception as exc:
+                s.sx_error=str(exc);s.sx_message='Saved magnetic setup was not loaded; review the error above.'
+            finally:self._finish_symmetry_preparation()
+        task=restore()
+        try:
+            scheduled=self._refinement_schedule(task,'radar-saved-magnetic-setup')
+            if scheduled is None:s.sx_busy=False;s.flush()
+        except Exception:
+            task.close();s.sx_busy=False;s.flush();raise
+
     def plan_symmetry_request(self):
         """A setup-only call; discovery and native dispatch still need review."""
         async def plan():
@@ -923,7 +999,7 @@ class SymmetryMixin(KSearchMixin):
             try:
                 d=self._symmetry_draft
                 if not d or d['source_id']!=s.sx_start_source:raise ValueError('Inspect the selected source GPX first')
-                for key in ('catalog','discovery_identity','protocol','template'):d.pop(key,None)
+                for key in ('catalog','discovery_identity','protocol','template','saved_magnetic_setup'):d.pop(key,None)
                 parent=next(p for p in d['context']['phases'] if p['name']==s.sx_parent);k=[str(Fraction(v.strip())) for v in s.sx_k.split(',')]
                 identity=self._discovery_identity();root=d['root']
                 loop=asyncio.get_running_loop()
@@ -1061,6 +1137,8 @@ class SymmetryMixin(KSearchMixin):
                     if not d.get('reference_asset'):raise ValueError('Discover candidates using the selected parent reference first')
                     settings['structural_reference']=d['reference_asset']
             settings.update(selected_optimizer_settings(s.sx_kind,s.sx_magnetic_optimizer,s.sx_optimizer_iterations))
+            from .saved_magnetic_setup import verify_binding
+            verify_binding(d,settings)
             p=build_plan(d['context'],d['catalog'],d['root'],settings);verify_inputs(p,d['root']);d.update(protocol=p,settings=settings)
             w=self._refinement_store()
             template=make_template(p,d['context'],d['source'],model_choices(w,s.rf_experiment),

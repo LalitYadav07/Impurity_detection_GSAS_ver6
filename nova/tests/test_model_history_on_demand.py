@@ -191,6 +191,8 @@ def test_interface_exposes_explicit_recovery_alongside_new_search():
     html = RadarPdNovaApp().layout.html
     assert 'Load saved campaigns' in html
     assert 'this recovers prior work without submitting new refinements' in html
+    assert 'Use saved campaign setup' in html
+    assert 'Discover finite candidates' in html
 
 
 def admission_app(kind='structural'):

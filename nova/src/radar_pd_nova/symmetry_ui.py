@@ -109,6 +109,9 @@ def model_exploration(app):
                 scan_select('Starting GPX · original or recipe checkpoint','sx_start_source','sx_start_sources',
                     placeholder='Type a run number, temperature or recipe stage',persistent_placeholder=True)
                 v.VBtn('Inspect exact parent',click=app.inspect_symmetry_source,disabled=('!sx_start_source || sx_busy',),variant='outlined')
+                v.VBtn('Use saved campaign setup',click=app.use_saved_magnetic_setup,
+                    v_if="sx_has_context && sx_kind === 'magnetic' && !!sx_campaign",
+                    disabled=('sx_busy',),variant='outlined')
             with html.Div(v_if='sx_has_context',classes='rf-toolbar'):
                 select('Exploration','sx_kind',"[{title:'Magnetic models',value:'magnetic'},{title:'Structural displacement modes',value:'structural'}]")
             with html.Details(v_if="sx_has_context && sx_kind === 'magnetic'",classes='mt-3'):
