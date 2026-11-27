@@ -60,6 +60,64 @@ def test_unchanged_completed_restore_reuses_exact_authorized_backup(tmp_path):
     assert w.state['jobs']['job']['result']['directory']=='/old/job'
 
 
+def test_rehydrated_verified_metric_rows_reuse_the_same_portable_checkpoint(tmp_path):
+    w,r,s,original=create(tmp_path)
+    stage=w.state['jobs']['job']['result']['stage_outcomes'][0]
+    stage['metric_rows']=[{'value':1}]
+    w.save()
+    assert workspace_checkpoint_fingerprint(portable_refinement_workspace(w.state))==workspace_checkpoint_fingerprint(original)
+    assert w.checkpoint()=='saved'
+    assert not s.uploads
+
+
+@pytest.mark.parametrize('change',['reference','hash','stage'])
+def test_changed_metric_artifact_identity_still_uploads(tmp_path,change):
+    w,r,s,_=create(tmp_path)
+    result=w.state['jobs']['job']['result']
+    stage=result['stage_outcomes'][0]
+    if change=='reference':stage['metric_rows_source']['artifact']='other.execution.json'
+    if change=='hash':result['files']['execution.json']='c'*64
+    if change=='stage':stage['id']='different-stage'
+    assert w.checkpoint()=='uploaded-1'
+    assert len(s.uploads)==1 and r._recovered_workspace_checkpoint is None
+
+
+def test_unreferenced_inline_metric_rows_remain_durable_changes(tmp_path):
+    w,r,s,_=create(tmp_path)
+    result=w.state['jobs']['job']['result'];result['files']={}
+    stage=result['stage_outcomes'][0];stage.pop('metric_rows_source')
+    stage['metric_rows']=[{'value':1}]
+    assert w.checkpoint()=='uploaded-1'
+    stage['metric_rows'][0]['value']=2
+    assert w.checkpoint()=='uploaded-2'
+    assert s.uploads[0]['jobs']['job']['result']['stage_outcomes'][0]['metric_rows']==[{'value':1}]
+    assert s.uploads[1]['jobs']['job']['result']['stage_outcomes'][0]['metric_rows']==[{'value':2}]
+
+
+def test_new_sources_remain_a_real_checkpoint_change(tmp_path):
+    w,r,s,_=create(tmp_path)
+    for index in range(11):
+        w.state['sources'][str(index)]={'id':str(index),'source_sha256':'b'*64}
+    assert w.checkpoint()=='uploaded-1'
+    assert len(s.uploads[0]['sources'])==12
+
+
+def test_raw_fingerprint_still_detects_hydration_for_restore_ownership():
+    original=portable_refinement_workspace(document())
+    hydrated=deepcopy(original)
+    hydrated['jobs']['job']['result']['stage_outcomes'][0]['metric_rows']=[{'value':1}]
+    assert workspace_checkpoint_fingerprint(hydrated)!=workspace_checkpoint_fingerprint(original)
+    assert workspace_checkpoint_fingerprint(portable_refinement_workspace(hydrated))==workspace_checkpoint_fingerprint(original)
+
+
+def test_hydration_does_not_bypass_failed_access_recheck(tmp_path):
+    w,r,s,_=create(tmp_path)
+    w.state['jobs']['job']['result']['stage_outcomes'][0]['metric_rows']=[{'value':1}]
+    s.metadata['accessible']=False
+    with pytest.raises(RuntimeUnavailable):w.checkpoint()
+    assert not s.uploads and w._checkpoint_hash is None
+
+
 def test_running_restore_is_changed_durable_state_and_uploads(tmp_path):
     w,r,s,original=create(tmp_path,'running');assert w.state['jobs']['job']['status']=='recovering'
     assert w.checkpoint()=='uploaded-1' and r._recovered_workspace_checkpoint is None

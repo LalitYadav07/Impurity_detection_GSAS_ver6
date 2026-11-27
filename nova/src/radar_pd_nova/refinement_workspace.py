@@ -16,7 +16,7 @@ from gpx_recipe.execution import write_json
 from .refinement_planner import make_plan
 from gpx_recipe.providers import configure_provider, provider_info, make_client
 from gpx_recipe.usage import summarize_calls
-from .refinement_runtime import RuntimeUnavailable, workspace_checkpoint_fingerprint
+from .refinement_runtime import RuntimeUnavailable, portable_refinement_workspace, workspace_checkpoint_fingerprint
 from .checkpoint_uploads import CheckpointUploadPending
 from .refinement_sources import RefinementScope, digest, retained_fallback_group
 from .refinement_messages import galaxy_refinement_activity
@@ -86,6 +86,11 @@ class RefinementWorkspace:
         # cannot overwrite the recovery order of a newer scientific receipt.
         with self._checkpoint_lock:
             with self.lock:document=copy.deepcopy(self.state)
+            # Equality must use the same payload that save_workspace persists.
+            # Verified inline tables are reconstructible from their exact
+            # execution-artifact reference; their hydration is not new state.
+            # Keep the raw fingerprint for restore_remote's ownership check.
+            document=portable_refinement_workspace(document)
             fingerprint=workspace_checkpoint_fingerprint(document)
             reuse=getattr(self.runtime,'reuse_workspace_checkpoint',None)
             if fingerprint==self._checkpoint_hash and not self._checkpoint_from_restore:
