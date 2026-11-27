@@ -742,6 +742,9 @@ def _run(source_gpx,ctx,protocol,candidate_record,seed,*,forward_only,prepare_on
         construction_seconds=time.monotonic()-stage_started,screened=screened)
 
 
+from ..live.background_derivatives import analytic_background_preflight as _analytic_background_preflight
+
+
 def _finish(ctx,protocol,candidate_record,gpx,state,*,construction_seconds,screened=None):
     """Complete the same optimizer, native objective checks and result export."""
     import math,time
@@ -783,6 +786,9 @@ def _finish(ctx,protocol,candidate_record,gpx,state,*,construction_seconds,scree
             raise TrialDisposition('unsupported',str(exc)) from exc
         ctx.save_json('optimizer-receipt.json',optimizer)
     else:
+        try:background_check=_analytic_background_preflight(gpx,selected_histograms)
+        except ValueError as exc:raise TrialDisposition('unsupported',str(exc)) from exc
+        ctx.save_json('analytic-background-preflight.json',background_check)
         gpx.do_refinements([{}])
     refinement_seconds=time.monotonic()-refinement_started
     gpx.save(str(output_gpx))

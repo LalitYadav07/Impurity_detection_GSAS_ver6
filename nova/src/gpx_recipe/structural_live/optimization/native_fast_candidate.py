@@ -52,10 +52,13 @@ class NativeFastCandidate:
         # Preserve the existing fixed higher background coefficients; only the
         # constant term is varied in this numerical prototype's declared scope.
         # Native dervRefine requires contiguous background derivative rows.
-        # Keep all of those native rows, but map only Back;0 into our external
-        # parameter vector. Higher coefficients remain exactly at native x0.
+        # Preserve inherited holds and complete only its temporary derivative
+        # rows. The external vector maps Back;0; higher terms stay at native x0.
         p.update_ids()
-        p.save();self.native=NativeReducedProfile(p.filename,refresh_cell_reflections=True)
+        p.save();self.native=NativeReducedProfile(p.filename,refresh_cell_reflections=True,
+            complete_background_derivatives=True)
+        if f':{h.id}:Back;0' not in self.native.vary:
+            raise ValueError('Source constraints hold the constant background required by structural fitting; the hold is preserved')
         self.lift=np.zeros((len(self.native.vary),self.dimension));self.scale_index=None
         for i,name in enumerate(self.native.vary):
             prefix=f'{phase.id}::nv-'

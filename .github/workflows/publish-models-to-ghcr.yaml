@@ -265,6 +265,16 @@ jobs:
           GALAXY_SLOTS=1 python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/joint-dispatch.xml \
             /validation/tests/gpx_recipe/test_native_joint_profiled_fit.py &&
           python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/joint-dispatch.xml\").findall(\".//testcase\"); assert len(cases)==2 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"The existing joint optimizer dispatch must remain compatible\""'
+      - name: Verify native derivatives with preserved background holds
+        run: |
+          docker run --rm --cpus=1 --memory=4g --entrypoint sh -v "$PWD:/validation:ro" -e GALAXY_SLOTS=1 "$IMAGE" -c '
+          python -m pip install --quiet pytest &&
+          export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/validation/tests/gpx_recipe" &&
+          export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 &&
+          python -m pytest -q -o cache_dir=/tmp/pytest-cache --junitxml=/tmp/background-rows.xml \
+            /validation/tests/gpx_recipe/test_background_derivative_rows.py \
+            /validation/tests/gpx_recipe/test_background_derivatives_native.py &&
+          python -c "import xml.etree.ElementTree as E; cases=E.parse(\"/tmp/background-rows.xml\").findall(\".//testcase\"); assert len(cases)==27 and all(c.find(\"skipped\") is None and c.find(\"failure\") is None and c.find(\"error\") is None for c in cases), \"All 27 native background derivative and hold checks must run without skips\""'
       - name: Require portable preparation and structural acquisition handoffs
         run: |
           docker run --rm --entrypoint sh -v "$PWD:/validation:ro" "$IMAGE" -c '

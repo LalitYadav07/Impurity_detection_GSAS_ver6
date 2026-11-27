@@ -146,7 +146,12 @@ def run(source_gpx,ctx,protocol,candidate,seed,*,forward_only=False):
         # Native nv-* values are changes from the nonzero start, not absolute Q.
         variable=f'{child.id}::nv-{name}';q0=seed['mode_values'][name];bound=protocol['policy']['maximum_mode']
         p.set_Controls('parmMin',-bound-q0,variable=variable);p.set_Controls('parmMax',bound-q0,variable=variable)
-    p.set_Controls('cycles',protocol['policy']['cycles']);p.save();p.do_refinements([{}]);p.save()
+    p.set_Controls('cycles',protocol['policy']['cycles']);p.save()
+    from ..live.background_derivatives import analytic_background_preflight
+    try:background_check=analytic_background_preflight(p,[h.name])
+    except ValueError as exc:raise TrialDisposition('unsupported',str(exc)) from exc
+    ctx.save_json('analytic-background-preflight.json',background_check)
+    p.do_refinements([{}]);p.save()
     cov=p.data.get('Covariance',{}).get('data',{});rvals=cov.get('Rvals',{})
     _,_,modes,_=M.CalcIsoDisp(child.data);moments=dict(zip(native_names,map(float,modes)))
     physical=all(np.isfinite(v) and abs(v)<=protocol['policy']['maximum_mode']+1e-7 for v in moments.values())

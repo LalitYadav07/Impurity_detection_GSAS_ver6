@@ -55,7 +55,8 @@ def constraint_state_signature(maps):
 
 
 class NativeReducedProfile:
-    def __init__(self, filename, *, refresh_cell_reflections=False, peak_memo_bytes=None):
+    def __init__(self, filename, *, refresh_cell_reflections=False, peak_memo_bytes=None,
+                 complete_background_derivatives=False):
         numerical_cell=False
         global _active
         from GSASII import GSASIIstrMain as main, GSASIIstrIO as stio
@@ -66,6 +67,7 @@ class NativeReducedProfile:
         self.math, self.maps, self.lattice = math, maps, lattice
         self.stio = stio
         self.refresh_cell_reflections = bool(refresh_cell_reflections)
+        self.complete_background_derivatives=bool(complete_background_derivatives)
         self.filename = str(filename)
         _active = self
         mp.InitMP(); main.ptx.pyqlmninit(); maps.InitVars()
@@ -233,7 +235,10 @@ class NativeReducedProfile:
         profile = np.concatenate([np.asarray(histograms[n]['Data'][3][sl], float) for n, sl in self.parts])
         mean = profile * self.factor
         if not jacobian: return mean
-        derivative = np.asarray(self.math.dervRefine(values, *args), float)
+        from .background_derivatives import profile_derivative
+        derivative = np.asarray(profile_derivative(self.math.dervRefine,values,args,
+            allow_projection=self.complete_background_derivatives,
+            dependent=self.maps.GetDependentVars()),float)
         if derivative.shape != (len(values), len(mean)): raise ValueError('Unexpected native Jacobian shape')
         derivative = derivative * self.factor[None, :]
         # errRefine's saved calculated array is zero in the native excluded
