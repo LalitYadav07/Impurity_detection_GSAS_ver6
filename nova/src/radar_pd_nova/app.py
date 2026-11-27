@@ -8141,6 +8141,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         # A metadata copy can still carry local paths from the replaced source.
         return refreshed.model_copy(deep=True, update={
             "output_dir": None, "cache_manifest": None, "result_status": ResultStatus.NOT_REQUESTED,
+            "result_load_profile": {},
             "publication_job_id": None, "publication_status": None, "publication_target": None,
             "published_output_dir": None, "publish_message": "",
         })

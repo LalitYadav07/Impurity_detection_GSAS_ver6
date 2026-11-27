@@ -34,9 +34,13 @@ class ResultTransfers:
         self.files = {}
         self.bytes = 0
         self.closed = False
+        self.close_requested = False
+        self.active = 0
 
     def download(self, identifier, destination, metadata, maximum_bytes, fetch, *, subject):
         """Return False when the ordinary downloader must handle this file."""
+        if metadata.get('accessible') is False:
+            raise ValueError('Galaxy dataset is not accessible')
         size = metadata.get('file_size')
         if (subject not in self.SUBJECTS or metadata.get('id') != identifier
                 or metadata.get('history_id') != self.history_id
@@ -49,7 +53,7 @@ class ResultTransfers:
         identity = (identifier, self.history_id)
         revision = (metadata.get('update_time'), metadata.get('uuid'))
         with self.lock:
-            if self.closed:
+            if self.closed or self.close_requested:
                 return False
             entry = self.files.get(identity)
             if entry is not None:
@@ -65,6 +69,19 @@ class ResultTransfers:
                 entry = dict(future=Future(), revision=revision, size=size, path=self.root/uuid.uuid4().hex)
                 self.files[identity] = entry
                 owner = True
+            self.active += 1
+        try:
+            return self._complete_download(entry, size, destination, fetch, owner)
+        finally:
+            with self.lock:
+                self.active -= 1
+                cleanup = self.close_requested and not self.active and not self.closed
+                if cleanup:
+                    self.closed = True
+            if cleanup:
+                shutil.rmtree(self.root, ignore_errors=True)
+
+    def _complete_download(self, entry, size, destination, fetch, owner):
         if owner:
             try:
                 fetch(entry['path'])
@@ -105,11 +122,10 @@ class ResultTransfers:
         return True
 
     def close(self):
-        """Called after both owning preview and canonical tasks have settled."""
+        """Defer deletion until uncancellable worker threads finish copying."""
         with self.lock:
-            if self.closed:
-                return
-            if any(not entry['future'].done() for entry in self.files.values()):
+            self.close_requested = True
+            if self.closed or self.active:
                 return
             self.closed = True
         shutil.rmtree(self.root, ignore_errors=True)

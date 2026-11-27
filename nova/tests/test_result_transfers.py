@@ -1,5 +1,6 @@
 """A private transfer shared by preview/enrichment cannot mix jobs or revisions."""
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import threading
 from pathlib import Path
 
@@ -147,6 +148,18 @@ def test_reused_bytes_still_respect_preview_budget(tmp_path):
     cache.close()
 
 
+@pytest.mark.parametrize('prior_read',[False,True])
+def test_explicit_access_denial_never_borrows_cached_bytes(tmp_path,prior_read):
+    cache=ResultTransfers(tmp_path,'history');calls=[]
+    def fetch(path):calls.append(1);path.write_bytes(b'synthetic')
+    if prior_read:
+        cache.download('dataset',tmp_path/'allowed',metadata(accessible=True),None,fetch,subject='summary')
+    with pytest.raises(ValueError,match='not accessible'):
+        cache.download('dataset',tmp_path/'denied',metadata(accessible=False),None,fetch,subject='summary')
+    assert len(calls)==int(prior_read) and not (tmp_path/'denied').exists()
+    cache.close()
+
+
 def test_oversized_response_stops_at_declared_size_without_reading_rest(tmp_path,monkeypatch):
     service=GalaxyService('https://example.invalid','secret','history',output_root=tmp_path)
     trace=ResultLoadTrace('job');trace.transfers=ResultTransfers(tmp_path,'history',service=service)
@@ -161,3 +174,42 @@ def test_oversized_response_stops_at_declared_size_without_reading_rest(tmp_path
         service._download_dataset('dataset',tmp_path/'result',metadata=metadata())
     assert not (tmp_path/'result').exists()
     trace.transfers.close()
+
+
+@pytest.mark.parametrize('blocked_stage',['fetch','copy'])
+def test_cancelled_to_thread_defers_cleanup_until_worker_and_copy_finish(tmp_path,monkeypatch,blocked_stage):
+    import radar_pd_nova.result_transfers as module
+    cache=ResultTransfers(tmp_path,'history')
+    entered,release,finished=threading.Event(),threading.Event(),threading.Event()
+    errors=[]
+    def gate():
+        entered.set();assert release.wait(3)
+    def fetch(path):
+        if blocked_stage=='fetch':gate()
+        path.write_bytes(b'synthetic')
+    original_copy=module.shutil.copyfile
+    def copy(source,destination):
+        if blocked_stage=='copy':gate()
+        return original_copy(source,destination)
+    monkeypatch.setattr(module.shutil,'copyfile',copy)
+    def worker():
+        try:cache.download('dataset',tmp_path/'result',metadata(),None,fetch,subject='summary')
+        except BaseException as exc:errors.append(exc)
+        finally:finished.set()
+    async def run():
+        task=asyncio.create_task(asyncio.to_thread(worker))
+        assert await asyncio.to_thread(entered.wait,2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):await task
+        cache.close()
+        assert cache.root.exists() and cache.active==1 and not cache.closed
+        assert cache.close_requested
+        if blocked_stage=='copy':assert next(iter(cache.files.values()))['future'].done()
+        try:
+            assert not cache.download('another',tmp_path/'late', {**metadata(),'id':'another'}, None,
+                lambda path:pytest.fail('Closing cache cannot admit another transfer'),subject='summary')
+        finally:release.set()
+        assert await asyncio.to_thread(finished.wait,2)
+        assert cache.closed and cache.active==0 and not cache.root.exists()
+        assert not errors and (tmp_path/'result').read_bytes()==b'synthetic'
+    asyncio.run(run())

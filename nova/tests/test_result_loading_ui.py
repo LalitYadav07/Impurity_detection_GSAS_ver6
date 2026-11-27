@@ -1,5 +1,6 @@
 """Timing progress follows the same source/selection owner as the result."""
 import asyncio
+import pytest
 
 from radar_pd_nova.result_loading import measure
 from test_fit_first_opening import setup_preview, until
@@ -46,3 +47,15 @@ def test_old_progress_after_selection_change_cannot_replace_new_selection(tmp_pa
         assert app.server.state.selected_result_load_elapsed=='New selection owns this value'
         assert not app.server.state.selected_result_load_rows
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('replacement',[False,True])
+def test_loading_profile_follows_artifact_identity_on_metadata_refresh(tmp_path,replacement):
+    app,row,*_=setup_preview(tmp_path)
+    row.output_dir=str(tmp_path/'canonical')
+    row.result_load_profile={'trace_id':'old-attempt'}
+    refreshed=row.model_copy(deep=True)
+    if replacement:refreshed.output_dataset_ids['summary']='replacement-summary'
+    else:refreshed.output_dataset_ids['plots']='additional-plots'
+    merged=app._merge_refreshed_result(refreshed,row)
+    assert merged.result_load_profile==({} if replacement else {'trace_id':'old-attempt'})
