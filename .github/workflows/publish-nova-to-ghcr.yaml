@@ -226,12 +226,17 @@ jobs:
           cd /tmp
           for test_file in \
             test_result_preview.py \
+            test_result_loading.py \
+            test_result_transfers.py \
+            test_result_transfer_integration.py \
+            test_result_loading_ui.py \
             test_fit_first_opening.py \
             test_result_render_commit.py \
             test_result_preview_native_authority.py \
             test_result_transactions.py \
             test_history_result_opening.py \
-            test_result_opening.py; do
+            test_result_opening.py \
+            test_model_plan_notice.py; do
             PYTHONPATH=/src/src:/validation-tests:/scientific-test-support python -m pytest -q \
               -o cache_dir=/tmp/pytest-cache --junitxml="/receipts/${test_file%.py}.xml" \
               "/validation-tests/$test_file"

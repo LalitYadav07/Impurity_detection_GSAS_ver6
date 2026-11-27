@@ -30,6 +30,8 @@ import yaml
 from .feedback_ui import FeedbackMixin
 from .configuration import config_from_contract, load_configuration
 from .run_timing import run_elapsed_label
+from .result_loading import ResultLoadTrace, measure
+from .result_transfers import ResultTransfers
 from .setup_forms import configuration_from_form, configuration_form_values, CONFIG_FORM_FIELDS
 from .setup_ui import SetupEditorMixin
 from .live_setup import LiveSetupMixin, _StagingCancelled
@@ -577,6 +579,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.selected_run_loading = False
         state.selected_result_load_error = ''
         state.selected_result_load_message = ''
+        state.selected_result_load_rows = []
+        state.selected_result_load_elapsed = ''
         state.selected_run_elapsed = "-"
         state.monitor_stages = []
         state.summary_cards = []
@@ -1321,6 +1325,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             "selected_run_message": "", "selected_run_console": "",
             "selected_run_loading": False, "selected_result_load_error": "",
             "selected_result_load_message": "", "selected_run_elapsed": "-",
+            "selected_result_load_rows": [], "selected_result_load_elapsed": "",
             "monitor_stages": [], "run_provenance_rows": [],
             "viewed_run_mode": "", "viewed_run_name": "",
             "viewed_configuration": "", "last_log": "",
@@ -2985,6 +2990,14 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 vuetify.VProgressLinear(v_if="selected_run_loading", indeterminate=True, height=3, color="#15543c")
                 vuetify.VAlert(v_if="!!selected_result_load_error", text=("selected_result_load_error",),
                     type="error", variant="tonal", density="compact", classes="mb-2")
+                with html.Details(v_if="selected_result_load_rows.length", classes="radar-science-notes mb-2"):
+                    html.Summary("Result loading details · {{ selected_result_load_elapsed }}")
+                    html.P("Measured in this viewer. Concurrent stages overlap; browser paint time is not measured.")
+                    vuetify.VDataTable(
+                        headers=("[{title:'Path',key:'branch'},{title:'Stage',key:'stage'},{title:'Calls',key:'count'},{title:'Wall seconds',key:'seconds'},{title:'Transferred',key:'transferred'},{title:'Status',key:'status'}]",),
+                        items=("selected_result_load_rows",), density="compact", hide_default_footer=True,
+                        items_per_page=-1,
+                    )
                 vuetify.VAlert(v_if="live_launch_busy",
                     title=("powgen_results_refresh_busy ? 'Refreshing saved results' : 'Preparing Live analysis'",),
                     text=("powgen_results_refresh_busy ? powgen_message : (live_test_message || powgen_message)",),
@@ -5332,6 +5345,12 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         def owns_selection():
             return self._result_open_current(owner, expected, service, identity, controller, run_id, context=context)
         preview_shown = False
+        trace = None
+        def load_progress(current):
+            nonlocal trace
+            trace = current
+            if owns_selection():
+                self._result_loading_progress(current)
         def preview_ready(preview):
             nonlocal preview_shown
             if owns_selection() and state.workspace_view == 'experiment':
@@ -5340,6 +5359,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     state.active_page = 'results'
                     state.workspace_view = 'results'
                     state.flush()
+            return preview_shown and state.result_owner_uid == expected.uid and state.result_preview
         try:
             if record.status != RunStatus.OK or not record.output_dataset_ids:
                 record = await asyncio.to_thread(service.refresh, record.model_copy(deep=True))
@@ -5362,7 +5382,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             state.selected_result_load_message = f'Opening {record.name}: downloading fit plots and saved projects…'
             state.flush()
             async with self._shared_result_read(record, record.model_copy(deep=True), service,
-                                                context=context, preview_ready=preview_ready) as loaded:
+                                                context=context, preview_ready=preview_ready,
+                                                load_progress=load_progress) as loaded:
                 if loaded is not None:
                     identity = self._completed_result_identity(expected, loaded, service, identity, context)
                 if loaded is None or not owns_selection():
@@ -5380,9 +5401,14 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 if preview_shown and loaded.result_status != ResultStatus.READY:
                     self._result_preview_enrichment_failed(loaded.message)
                     return
-                self._load_results(loaded)
+                with trace.activate("display"), measure("view_prepare"):
+                    self._load_results(loaded)
                 if not owns_selection():
                     return
+                if state.result_owner_uid == loaded.uid:
+                    trace.mark("canonical_display_queued")
+                loaded.result_load_profile = trace.profile()
+                load_progress(trace)
                 state.active_page = 'results'
                 if not preview_shown:
                     state.workspace_view = 'results'
@@ -7654,6 +7680,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             self._opening_run_uid = None
             state.selected_run_loading = False
             state.selected_result_load_message = ""
+        if previous_run_uid != record.uid:
+            state.selected_result_load_rows = []
+            state.selected_result_load_elapsed = ""
         if previous_result_uid != record.uid:
             self._reset_result_state()
         state.selected_run_uid = record.uid
@@ -8018,6 +8047,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.selected_run_loading = True
         state.selected_run_message = ""
         state.selected_result_load_error = ""
+        state.selected_result_load_rows = []
+        state.selected_result_load_elapsed = ""
         state.selected_result_load_message = (
             f"Refreshing {record.name}: checking its published result…" if refresh
             else f"Opening {record.name}: downloading fit plots and saved projects…")
@@ -8092,7 +8123,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         """Merge downloaded artifacts into fresh metadata without sharing mutable records."""
         result = target.model_copy(deep=True)
         if cached.output_dir:
-            for name in ("output_dir", "result_status", "cache_manifest"):
+            for name in ("output_dir", "result_status", "cache_manifest", "result_load_profile"):
                 setattr(result, name, deepcopy(getattr(cached, name)))
             result.output_dataset_ids.update(cached.output_dataset_ids)
             if result.status == RunStatus.OK:
@@ -8164,7 +8195,8 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             "output_dir": str(preview.root), "output_dataset_ids": published,
             "cache_manifest": None, "result_status": ResultStatus.COLLECTING})
         self._remember_incomplete_result(record, service, context, source)
-        self._load_results(private, local_only=True, preview=True)
+        with measure("view_prepare"):
+            self._load_results(private, local_only=True, preview=True)
         self.server.state.selected_result_load_message = self.server.state.result_readiness_message
         self.server.state.flush()
         return True
@@ -8202,10 +8234,22 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         state.selected_result_load_error = str(message)
         state.flush()
 
+    def _result_loading_progress(self, trace: ResultLoadTrace) -> None:
+        """The caller checks selection ownership before exposing measurements."""
+        try:
+            state = self.server.state
+            state.selected_result_load_rows = trace.rows()
+            state.selected_result_load_elapsed = f"{trace.snapshot()['elapsed_seconds']:.1f} s observed"
+            state.flush()
+        except Exception:
+            # Optional diagnostics must not fail a verified result transfer or
+            # revoke its presentation if the client disconnects during a push.
+            pass
+
     @asynccontextmanager
     async def _shared_result_read(self, original: RunRecord, captured: RunRecord,
                                   service: Any, *, context: object, force: bool = False,
-                                  preview_ready: Any = None):
+                                  preview_ready: Any = None, load_progress: Any = None):
         """Share a private archive/publication transaction across every waiter."""
         identity = self._result_source_identity(captured)
         read_entry = None
@@ -8221,14 +8265,24 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     or entry[4]["context"] is not context)
             previous = entry if reusable and force and not entry[4]["force"] else None
             if not reusable or previous is not None:
+                trace = ResultLoadTrace(captured.galaxy_job_id or captured.uid)
+                root = getattr(service, "output_root", None)
+                if root is not None:
+                    try:
+                        trace.transfers = ResultTransfers(Path(root), captured.history_id, service=service)
+                    except OSError:
+                        pass  # Optional transfer reuse never prevents an ordinary read.
                 async def collect() -> RunRecord | None:
                     prior = None
                     if previous is not None:
                         try:
-                            prior = await asyncio.shield(previous[2])
+                            with trace.activate("complete"), measure("canonical_wait"):
+                                prior = await asyncio.shield(previous[2])
                         except Exception:
                             pass  # An explicit forced reload can retry a failed ordinary read.
-                    async with self._history_result_download_lock:
+                    with trace.activate("complete"), measure("canonical_wait"):
+                        await self._history_result_download_lock.acquire()
+                    try:
                         source = identity
                         if prior is not None:
                             source = self._completed_result_identity(original, prior, service, source, context)
@@ -8240,32 +8294,60 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         collect_results = service.collect_results
                         if not force and not private.output_dir:
                             collect_results = getattr(service, "collect_results_for_display", collect_results)
-                        if force:
-                            private = await asyncio.to_thread(collect_results, private, force=True)
-                        elif not private.output_dir:
-                            private = await asyncio.to_thread(collect_results, private)
-                        else:
-                            repair = getattr(service, "repair_result_cache", None)
-                            if callable(repair):
-                                private = await asyncio.to_thread(repair, private)
+                        with trace.activate("complete"):
+                            if force:
+                                private = await asyncio.to_thread(collect_results, private, force=True)
+                            elif not private.output_dir:
+                                private = await asyncio.to_thread(collect_results, private)
+                            else:
+                                repair = getattr(service, "repair_result_cache", None)
+                                if callable(repair):
+                                    private = await asyncio.to_thread(repair, private)
                         if not private.output_dir or (force and private.result_status == ResultStatus.ERROR):
                             raise RuntimeError(private.message or "Galaxy result collection is not ready; try opening this run again")
+                    finally:
+                        self._history_result_download_lock.release()
                     if not self._result_source_current(original, service, source, context=context):
                         return None
                     if not self._result_sources_compatible(source, self._result_source_identity(private)):
                         return None
                     if private.result_status == ResultStatus.READY:
-                        private = await asyncio.to_thread(
-                            self._publish_results_if_requested, private, service=service,
-                            context=context, source_identity=source)
+                        with trace.activate("complete"), measure("export"):
+                            private = await asyncio.to_thread(
+                                self._publish_results_if_requested, private, service=service,
+                                context=context, source_identity=source)
+                    trace.mark("canonical_ready" if private.result_status == ResultStatus.READY else "canonical_incomplete")
+                    private.result_load_profile = trace.profile()
                     entry[4]["identities"].append(self._result_source_identity(private))
                     return private
                 entry = downloads[original.uid] = (
                     original, service, asyncio.create_task(collect()), identity,
-                    {"waiters": 0, "force": force, "context": context, "identities": [identity]})
+                    {"waiters": 0, "force": force, "context": context, "identities": [identity], "trace": trace})
                 entry[2].add_done_callback(lambda done: self._prune_history_result_download(original.uid, entry))
+            def settled(_=None):
+                tasks = [entry[2], entry[4].get("preview")]
+                if all(task is None or task.done() for task in tasks):
+                    if entry[4]["trace"].transfers is not None:
+                        entry[4]["trace"].transfers.close()
+                    root = getattr(service, "output_root", None)
+                    if root is not None:
+                        entry[4]["trace"].persist(Path(root))
+            entry[2].add_done_callback(settled)
             read_entry = entry
+            trace = entry[4]["trace"]
+            if preview_ready is not None or load_progress is not None:
+                trace.mark("open_requested")
             entry[4]["waiters"] += 1
+            def progress():
+                if load_progress is not None:
+                    load_progress(trace)
+            async def wait_for(*tasks):
+                while True:
+                    progress()
+                    done, _ = await asyncio.wait(tasks, timeout=1., return_when=asyncio.FIRST_COMPLETED)
+                    if done:
+                        progress()
+                        return done
             if preview_ready is not None and not force and not captured.output_dir:
                 if self._result_source_current(original, service, identity, context=context):
                     self._remember_incomplete_result(original, service, context, identity)
@@ -8275,32 +8357,43 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                         from .result_preview import collect_result_preview
                         if not self._result_source_current(original, service, identity, context=context):
                             return None
-                        return await asyncio.to_thread(collect_result_preview, service, captured.model_copy(deep=True))
+                        with trace.activate("preview"):
+                            return await asyncio.to_thread(collect_result_preview, service, captured.model_copy(deep=True))
                     preview = entry[4]["preview"] = asyncio.create_task(read_preview())
                     # Preview failure falls back to the canonical collector;
                     # it is never a failure of the scientific job.
                     preview.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-                done, _ = await asyncio.wait((entry[2], preview), return_when=asyncio.FIRST_COMPLETED)
+                    preview.add_done_callback(settled)
+                done = await wait_for(entry[2], preview)
                 full_succeeded = (entry[2] in done and not entry[2].cancelled()
                                   and entry[2].exception() is None and entry[2].result() is not None
                                   and entry[2].result().result_status == ResultStatus.READY)
                 if not full_succeeded:
                     try:
+                        await wait_for(preview)
                         prepared = await asyncio.shield(preview)
                     except Exception:
                         prepared = None
                     if prepared is not None:
                         try:
-                            preview_ready(prepared)
+                            with trace.activate("preview"):
+                                presented = preview_ready(prepared)
+                            if presented:
+                                trace.mark("preview_display_queued")
                         except Exception:
                             # A partial renderer must not abandon the already
                             # running canonical result transaction.
                             pass
+            await wait_for(entry[2])
             record = await asyncio.shield(entry[2])
             yield record
         finally:
             if read_entry is not None:
                 read_entry[4]["waiters"] -= 1
+                if read_entry[4]["waiters"] == 0:
+                    root = getattr(service, "output_root", None)
+                    if root is not None:
+                        read_entry[4]["trace"].persist(Path(root))
                 self._prune_history_result_download(original.uid, read_entry)
 
     async def _open_record_results_async(self, original: RunRecord, captured: RunRecord,
@@ -8312,10 +8405,17 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         def owns_selection():
             return self._result_open_current(owner, expected, service, identity, context=context)
         preview_shown = False
+        trace = None
+        def load_progress(current):
+            nonlocal trace
+            trace = current
+            if owns_selection():
+                self._result_loading_progress(current)
         def preview_ready(preview):
             nonlocal preview_shown
             if owns_selection() and state.workspace_view in {'results', 'plots', 'files'}:
                 preview_shown = self._display_result_preview(expected, preview, service, identity, context)
+            return preview_shown and state.result_owner_uid == expected.uid and state.result_preview
         try:
             if refresh:
                 record = await asyncio.to_thread(service.refresh, captured)
@@ -8339,7 +8439,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                     return
                 captured = record.model_copy(deep=True)
             async with self._shared_result_read(expected, captured, service, context=context,
-                                                force=force, preview_ready=preview_ready) as record:
+                                                force=force, preview_ready=preview_ready, load_progress=load_progress) as record:
                 if record is not None:
                     identity = self._completed_result_identity(expected, record, service, identity, context)
                 if record is None or not owns_selection():
@@ -8357,9 +8457,14 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 if preview_shown and record.result_status != ResultStatus.READY:
                     self._result_preview_enrichment_failed(record.message)
                     return
-                self._load_results(record)
+                with trace.activate("display"), measure("view_prepare"):
+                    self._load_results(record)
                 if not owns_selection():
                     return
+                if state.result_owner_uid == record.uid:
+                    trace.mark("canonical_display_queued")
+                record.result_load_profile = trace.profile()
+                load_progress(trace)
                 state.active_page = "results"
                 state.notice = (record.message if record.result_status == ResultStatus.STALE else
                                 f"Reloaded the canonical result archive for {record.name}." if force else
@@ -8459,11 +8564,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         # Widget transport can flush callbacks or fail. Keep the working view
         # and its gates until both replacement figures have been accepted.
         if self._primary_plot_widget is not None:
-            self._primary_plot_widget.update(figure)
+            with measure("view_transport"):
+                self._primary_plot_widget.update(figure)
         if not current():
             return
         if self._plot_widget is not None:
-            self._plot_widget.update(figure)
+            with measure("view_transport"):
+                self._plot_widget.update(figure)
         if not current():
             return
         self._reset_result_state()

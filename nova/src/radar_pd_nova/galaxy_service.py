@@ -27,6 +27,7 @@ import yaml
 
 from .configuration import config_from_contract, delivery_from_contract, dump_configuration
 from .run_timing import galaxy_terminal_timestamp
+from .result_loading import measure, subject, submit_context, transfer_slot, shared_transfers
 from .facility import build_facility_export_path
 from .models import (
     AnalysisConfig,
@@ -1075,15 +1076,16 @@ class GalaxyService:
     def _job_details(self, uid: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
         """Fetch the durable Galaxy job record used to recover a NOVA session."""
 
-        response = requests.get(
-            f"{self.galaxy_url}/api/jobs/{uid}",
-            headers=self._headers,
-            params={"full": "true"},
-            allow_redirects=False,
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        with measure("job_metadata"):
+            response = requests.get(
+                f"{self.galaxy_url}/api/jobs/{uid}",
+                headers=self._headers,
+                params={"full": "true"},
+                allow_redirects=False,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
         details = dict(fallback or {})
         if isinstance(payload, dict):
             details.update(payload)
@@ -1091,6 +1093,10 @@ class GalaxyService:
 
     def job_output_ids(self, job_id: str) -> dict[str, str]:
         """Fetch authoritative dataset and collection associations for one job."""
+        with measure("associations"):
+            return self._fetch_job_output_ids(job_id)
+
+    def _fetch_job_output_ids(self, job_id: str) -> dict[str, str]:
 
         response = requests.get(
             f"{self.galaxy_url}/api/jobs/{job_id}/outputs",
@@ -1263,7 +1269,8 @@ class GalaxyService:
         identifier = str(dataset_id)
         if not re.fullmatch(r'[A-Za-z0-9_-]+', identifier):
             raise ValueError('Invalid Galaxy dataset identifier')
-        metadata = self._dataset_metadata(identifier) if metadata is None else metadata
+        if metadata is None:
+            metadata = self._dataset_metadata(identifier)
         if metadata.get('id', identifier) != identifier:
             raise ValueError('Galaxy download metadata identifies a different dataset')
         advertised = metadata.get('download_url')
@@ -1299,26 +1306,40 @@ class GalaxyService:
 
         if maximum_bytes is not None and (type(maximum_bytes) is not int or maximum_bytes < 1):
             raise ValueError('A download byte budget must be a positive integer')
-        response = requests.get(
-            self._dataset_download_url(dataset_id, metadata=metadata),
-            headers=self._headers,
-            params={"raw": "true"},
-            timeout=120,
-            stream=True,
-        )
+        transfers, current_subject = shared_transfers()
+        if (transfers is not None and (transfers.service is None or transfers.service is self)
+                and current_subject in transfers.SUBJECTS):
+            if metadata is None:
+                metadata = self._dataset_metadata(dataset_id)
+            if transfers.download(dataset_id, destination, metadata, maximum_bytes,
+                    lambda target: self._download_dataset_raw(dataset_id, target,
+                        maximum_bytes=(metadata['file_size'] if maximum_bytes is None else
+                                       min(maximum_bytes, metadata['file_size'])),
+                        metadata=metadata), subject=current_subject):
+                return
+        self._download_dataset_raw(dataset_id, destination, maximum_bytes=maximum_bytes, metadata=metadata)
+
+    def _download_dataset_raw(self, dataset_id: str, destination: Path, *, maximum_bytes: int | None = None,
+                              metadata: Mapping[str, Any] | None = None) -> None:
+        url = self._dataset_download_url(dataset_id, metadata=metadata)
+        with measure("response_headers"):
+            response = requests.get(url, headers=self._headers,
+                params={"raw": "true"}, timeout=120, stream=True)
         destination=Path(destination)
         temporary=destination.with_name(destination.name+'.'+uuid.uuid4().hex+'.partial')
         try:
-            response.raise_for_status()
             destination.parent.mkdir(parents=True, exist_ok=True)
             count = 0
-            with temporary.open("xb") as handle:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        count += len(chunk)
-                        if maximum_bytes is not None and count > maximum_bytes:
-                            raise ValueError('Galaxy dataset exceeds its download byte budget')
-                        handle.write(chunk)
+            with measure("response_body") as timing:
+                response.raise_for_status()
+                with temporary.open("xb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            count += len(chunk)
+                            timing["bytes"] = count
+                            if maximum_bytes is not None and count > maximum_bytes:
+                                raise ValueError('Galaxy dataset exceeds its download byte budget')
+                            handle.write(chunk)
             temporary.replace(destination)
         finally:
             temporary.unlink(missing_ok=True)
@@ -1329,8 +1350,8 @@ class GalaxyService:
         """Bound independent REST transfers across collectors in this session."""
         if not items:
             return {}
-        def download(identifier: str, destination: Path) -> None:
-            with self._result_download_slots:
+        def download(name: str, identifier: str, destination: Path) -> None:
+            with subject(name), transfer_slot(self._result_download_slots):
                 if collections:
                     self._download_collection(identifier, destination)
                 else:
@@ -1338,7 +1359,7 @@ class GalaxyService:
         outcomes: dict[str, Exception | None] = {}
         limit = getattr(self._result_prefetch_context, "limit", 4)
         with ThreadPoolExecutor(max_workers=min(limit, len(items)), thread_name_prefix="radar-results") as pool:
-            futures = {pool.submit(download, *item): name for name, item in items.items()}
+            futures = {submit_context(pool, download, name, *item): name for name, item in items.items()}
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -1356,12 +1377,13 @@ class GalaxyService:
         Galaxy archive contract.
         """
 
-        response = requests.get(
-            f"{self.galaxy_url}/api/dataset_collections/{collection_id}",
-            headers=self._headers, params={"view": "element"}, timeout=30,
-        )
-        response.raise_for_status()
-        collection = response.json()
+        with measure("collection_metadata"):
+            response = requests.get(
+                f"{self.galaxy_url}/api/dataset_collections/{collection_id}",
+                headers=self._headers, params={"view": "element"}, timeout=30,
+            )
+            response.raise_for_status()
+            collection = response.json()
         elements = collection.get('elements') if isinstance(collection, dict) else None
         flat = (isinstance(collection, dict) and collection.get('collection_type') == 'list'
                 and isinstance(elements, list) and len(elements) <= 2048
@@ -1418,13 +1440,14 @@ class GalaxyService:
             archive.unlink(missing_ok=True)
 
     def _dataset_metadata(self, dataset_id: str) -> dict[str, Any]:
-        response = requests.get(
-            f"{self.galaxy_url}/api/datasets/{dataset_id}",
-            headers=self._headers,
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        with measure("dataset_metadata"):
+            response = requests.get(
+                f"{self.galaxy_url}/api/datasets/{dataset_id}",
+                headers=self._headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
         return payload if isinstance(payload, dict) else {}
 
     @staticmethod
@@ -2937,16 +2960,23 @@ class GalaxyService:
         record.result_status = ResultStatus.COLLECTING
         current_manifest = None
         try:
+            known_outputs = {}
             try:
                 job = self._job_details(job_id)
-                record.output_dataset_ids.update(self._job_output_ids(job))
+                known_outputs = self._job_output_ids(job)
+                record.output_dataset_ids.update(known_outputs)
             except Exception:
                 pass
             try:
-                # Galaxy's full job record may omit output collections. Resolve
-                # those associations while results are collected in the
-                # background, not while the result page is being rendered.
-                record.output_dataset_ids.update(self.job_output_ids(job_id))
+                # Monitor publications declare only plots and GPX collections.
+                # When the authoritative full job already includes both, a
+                # broad History scan for deliberately absent tables/CIFs/logs
+                # cannot add a required output. Preserve the legacy lookup
+                # whenever either association is missing.
+                complete_monitor = (record.output_profile == "monitor"
+                                    and {"summary", "plots", "gpx_projects"} <= known_outputs.keys())
+                if not complete_monitor:
+                    record.output_dataset_ids.update(self.job_output_ids(job_id))
             except Exception:
                 pass
 
@@ -3040,7 +3070,8 @@ class GalaxyService:
                     members[name] = [target.relative_to(staging).as_posix()]
             if archive_path is not None:
                 try:
-                    _extract_results_archive(archive_path, staging)
+                    with measure("archive_extract"):
+                        _extract_results_archive(archive_path, staging)
                     usable_downloads += 1
                     archive_extracted = True
                     complete["results_archive"] = output_ids["results_archive"]
@@ -3115,8 +3146,9 @@ class GalaxyService:
                 schema="radar-pd-cache-artifacts/v1", complete=complete, members=members, failures=failures)), encoding="utf-8")
             (staging / _REFRESH_RECEIPT).unlink(missing_ok=True)
             self._ensure_plot_observation(record, staging, allow_download=False)
-            with self._lock:
-                _replace_result_directory(staging, destination)
+            with measure("cache_publish"):
+                with self._lock:
+                    _replace_result_directory(staging, destination)
             record.output_dataset_ids.update(output_ids)
             record.output_dir = str(destination)
             record.status = record.analysis_status or RunStatus.OK
@@ -3154,8 +3186,9 @@ class GalaxyService:
         return record
 
     def _ensure_plot_observation(self, record: RunRecord, root: Path, *, allow_download: bool = True) -> None:
-        self._bind_plot_observation(
-            record, root, fetch=self.cache_pattern_observation if allow_download else None)
+        with measure("observation_check"):
+            self._bind_plot_observation(
+                record, root, fetch=self.cache_pattern_observation if allow_download else None)
 
     @staticmethod
     def _bind_plot_observation(record: RunRecord, root: Path, *, fetch: Callable | None = None) -> None:

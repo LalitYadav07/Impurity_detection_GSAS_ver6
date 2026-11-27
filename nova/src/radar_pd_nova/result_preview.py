@@ -26,6 +26,7 @@ from .results import (
 )
 from .scan_interpretation import MAX_BYTES as MAX_OBSERVATION_BYTES
 from .tool_ids import tool_id
+from .result_loading import measure, subject, submit_context, transfer_slot
 
 
 PREVIEW_RECEIPT = ".radar-pd-preview.json"
@@ -88,7 +89,7 @@ class _Transfers:
                  metadata: Mapping[str, Any] | None = None) -> None:
         identifier = _identifier(identifier)
         if metadata is None or metadata.get("history_id") is None or metadata.get("file_size") is None:
-            with self.service._result_download_slots:
+            with transfer_slot(self.service._result_download_slots):
                 current = self.service._dataset_metadata(identifier)
             if metadata is not None and current.get("id") != metadata.get("id"):
                 raise ValueError("Galaxy preview collection member identity changed")
@@ -98,7 +99,7 @@ class _Transfers:
             if size > maximum or self.bytes + size > MAX_PREVIEW_BYTES:
                 raise _Unavailable("Galaxy preview exceeds its transfer budget")
             self.bytes += size
-        with self.service._result_download_slots:
+        with transfer_slot(self.service._result_download_slots):
             self.service._download_dataset(identifier, target, maximum_bytes=maximum, metadata=metadata)
         if target.stat().st_size != size:
             raise ValueError("Galaxy preview dataset size changed during transfer")
@@ -114,7 +115,7 @@ def _source(service: Any, record: Any) -> tuple[str, str, dict[str, str]] | None
     history = _identifier(record.history_id)
     if str(getattr(service, "history_id", "")) != history:
         raise ValueError("Galaxy preview belongs to a different History")
-    with service._result_download_slots:
+    with transfer_slot(service._result_download_slots):
         job = service._job_details(job_id)
     if job.get("id") != job_id or job.get("history_id") != history:
         raise ValueError("Galaxy preview job identity changed")
@@ -137,7 +138,7 @@ def _source(service: Any, record: Any) -> tuple[str, str, dict[str, str]] | None
     if not expected.issubset(authoritative):
         if not callable(getattr(service, "job_output_ids", None)):
             return None
-        with service._result_download_slots:
+        with transfer_slot(service._result_download_slots):
             resolved = service.job_output_ids(job_id)
         merge(resolved)
         authoritative.update(resolved)
@@ -149,7 +150,7 @@ def _source(service: Any, record: Any) -> tuple[str, str, dict[str, str]] | None
 
 
 def _plot_members(service: Any, identifier: str, history: str) -> dict[str, dict[str, Any]]:
-    with service._result_download_slots:
+    with transfer_slot(service._result_download_slots), measure("collection_metadata"):
         response = requests.get(f"{service.galaxy_url}/api/dataset_collections/{_identifier(identifier)}",
             headers=service._headers, params={"view": "element"}, timeout=30,
             allow_redirects=False, stream=True)
@@ -248,12 +249,16 @@ def collect_result_preview(service: Any, record: Any) -> ResultPreview | None:
         reads = [("summary", MAX_SUMMARY_BYTES)]
         if output_ids.get("pattern_observation"):
             reads.append(("pattern_observation", MAX_OBSERVATION_BYTES))
+        def download(name, maximum):
+            with subject(name):
+                transfers.download(output_ids[name], root / (name + ".json"), maximum)
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="radar-preview") as pool:
-            futures = [pool.submit(transfers.download, output_ids[name], root / (name + ".json"), maximum)
+            futures = [submit_context(pool, download, name, maximum)
                        for name, maximum in reads]
             for future in futures:
                 future.result()
-        summary = read_json((root / "summary.json").read_bytes())
+        with measure("preview_parse", "summary"):
+            summary = read_json((root / "summary.json").read_bytes())
         if not isinstance(summary, dict) or summary.get("$schema") != "radar-pd-result/v1":
             raise _Unavailable("This result has no supported preview summary")
         members = _plot_members(service, output_ids["plots"], history)
@@ -265,8 +270,11 @@ def collect_result_preview(service: Any, record: Any) -> ResultPreview | None:
             raise _Unavailable("Preview plot metadata exceeds its aggregate limit")
         plots = root / "plots"
         plots.mkdir()
+        def download_sidecar(name, metadata):
+            with subject("plot_metadata"):
+                transfers.download(metadata["id"], plots / name, MAX_SIDECAR_BYTES, metadata)
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="radar-preview-plots") as pool:
-            futures = [pool.submit(transfers.download, metadata["id"], plots / name, MAX_SIDECAR_BYTES, metadata)
+            futures = [submit_context(pool, download_sidecar, name, metadata)
                        for name, metadata in sidecars]
             for future in futures:
                 future.result()
@@ -275,7 +283,8 @@ def collect_result_preview(service: Any, record: Any) -> ResultPreview | None:
         for name, _ in sidecars:
             path = plots / name
             try:
-                payload = read_json(path.read_bytes())
+                with measure("preview_parse", "plot_metadata"):
+                    payload = read_json(path.read_bytes())
             except ValueError:
                 continue
             if not isinstance(payload, dict) or not payload:
@@ -310,21 +319,28 @@ def collect_result_preview(service: Any, record: Any) -> ResultPreview | None:
             if arrays in members:
                 target = plots / arrays
                 try:
-                    transfers.download(members[arrays]["id"], target, MAX_ARRAY_BYTES, members[arrays])
+                    with subject("selected_plot_arrays"):
+                        transfers.download(members[arrays]["id"], target, MAX_ARRAY_BYTES, members[arrays])
                 except _Unavailable:
                     target.unlink(missing_ok=True)
                 else:
                     try:
-                        _bounded_arrays(target)
+                        with measure("preview_parse", "selected_plot_arrays"):
+                            _bounded_arrays(target)
                     except (_Unavailable, OSError, ValueError, zipfile.BadZipFile):
                         target.unlink(missing_ok=True)
             # Let the existing renderer decide whether the arrays are useful.
-            if load_plot_with_fallback([candidate], candidate["path"]) is not None:
+            with measure("preview_plot"):
+                rendered = load_plot_with_fallback([candidate], candidate["path"])
+            if rendered is not None:
                 chosen = candidate
                 break
             if image in members and Path(image).suffix.lower() in {".png", ".jpg", ".jpeg", ".svg"}:
-                transfers.download(members[image]["id"], plots / image, MAX_IMAGE_BYTES, members[image])
-                if load_plot_with_fallback([candidate], candidate["path"]) is not None:
+                with subject("selected_plot_image"):
+                    transfers.download(members[image]["id"], plots / image, MAX_IMAGE_BYTES, members[image])
+                with measure("preview_plot"):
+                    rendered = load_plot_with_fallback([candidate], candidate["path"])
+                if rendered is not None:
                     chosen = candidate
                     break
         if chosen is None:
