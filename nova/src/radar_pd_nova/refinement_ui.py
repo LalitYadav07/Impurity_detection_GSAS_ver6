@@ -162,6 +162,9 @@ def refinement_dashboard(app):
                     v.VTextarea(label='Answer the questions above',v_model=('rf_question_answer',),rows=3,variant='outlined',disabled=('rf_busy',))
                     v.VBtn('Use answer and revise recipe',click=(app.answer_recipe_questions,'[rf_question_answer]'),disabled=('rf_busy || !rf_question_answer.trim()',),variant='outlined',size='small')
                 html.P('{{ rf_cards.length }} stages · expand each stage to review its complete free set before approval.',v_if='rf_cards.length',classes='rf-notice mt-3')
+                with html.Div(v_if='!!rf_plan_failure_notice',classes='rf-source mt-3',raw_attrs=['aria-label="Planned failure handling"']):
+                    html.Strong('Planned failure handling')
+                    html.P('{{ rf_plan_failure_notice }}',classes='rf-notice')
                 with html.Div(v_for='stage in rf_cards',key='stage.id',classes='rf-stage'):
                     html.H4('{{ stage.number }}. {{ stage.title }}')
                     html.P('{{ stage.iteration_caption }} · refine:',classes='rf-notice')

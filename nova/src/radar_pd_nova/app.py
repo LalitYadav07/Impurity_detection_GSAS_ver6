@@ -3718,9 +3718,13 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             with vuetify.VExpansionPanels(variant="accordion", classes="radar-technical-panel mt-4"):
                 with vuetify.VExpansionPanel(title="Technical tables and raw fields"):
                     with vuetify.VExpansionPanelText():
-                        vuetify.VSelect(label="Published result table", v_model=("selected_table",), items=("table_options",), item_title="name", item_value="path", density="compact", variant="outlined", update_modelValue=(self._table_changed, "[$event]"))
-                        vuetify.VAlert(v_show="!!table_preview_notice", text=("table_preview_notice",), type="info", variant="tonal", density="compact", classes="mb-2")
-                        vuetify.VDataTable(headers=("table_headers",), items=("table_rows",), density="compact", fixed_header=True, height=460, no_data_text="Select a result table.")
+                        vuetify.VAlert(v_if="!table_options.length && result_actions_pending", text="Published result tables are still loading.", type="info", variant="tonal", density="compact")
+                        vuetify.VAlert(v_if="!table_options.length && !result_actions_pending && viewed_output_profile === 'monitor'", text="No technical tables were published for this compact Live result. The phase summary, fit plots and saved GPX checkpoints remain available above. A standard Full single-pattern analysis publishes the complete table and export collections.", type="info", variant="tonal", density="compact")
+                        vuetify.VAlert(v_if="!table_options.length && !result_actions_pending && viewed_output_profile !== 'monitor'", text="No technical tables were published for this result.", type="info", variant="tonal", density="compact")
+                        with html.Div(v_if="table_options.length", classes="radar-published-tables"):
+                            vuetify.VSelect(label="Published result table", v_model=("selected_table",), items=("table_options",), item_title="name", item_value="path", density="compact", variant="outlined", update_modelValue=(self._table_changed, "[$event]"))
+                            vuetify.VAlert(v_show="!!table_preview_notice", text=("table_preview_notice",), type="info", variant="tonal", density="compact", classes="mb-2")
+                            vuetify.VDataTable(headers=("table_headers",), items=("table_rows",), density="compact", fixed_header=True, height=460, no_data_text="Select a result table.")
 
     def _interactive_plots_view(self) -> None:
         with html.Div(classes="radar-section-heading"):

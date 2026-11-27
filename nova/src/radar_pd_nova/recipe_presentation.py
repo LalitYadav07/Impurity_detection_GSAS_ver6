@@ -1,6 +1,21 @@
 """Plain-language display of the validated recipe's explicit edits."""
 
 
+def failure_policy_notice(plan):
+    """Describe the displayed plan, without changing its execution policy."""
+    if not isinstance(plan, dict) or not plan:
+        return ''
+    policy = plan.get('failure_policy', 'stop')
+    if policy == 'stop':
+        return ('If a stage fails scientific checks, stop this recipe and retain '
+                'the last verified checkpoint.')
+    if policy == 'continue_independent':
+        return ('If a stage fails scientific checks, restore the last verified '
+                'checkpoint and continue independent stages. Skip stages that '
+                'depend on the rejected stage. Technical errors still stop the recipe.')
+    return 'Failure handling is unavailable for this draft. Prepare and review the recipe again.'
+
+
 def explicit_edit_lines(stage, context, *, physical_banks=None):
     phases = {p['key']:p['name'] for p in context['phases']}
     banks = physical_banks or {}

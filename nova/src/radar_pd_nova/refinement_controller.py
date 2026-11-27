@@ -25,7 +25,7 @@ from .refinement_messages import convergence_notice, refinement_review_status, r
 from .results import experiment_axis_options
 from .guided_refinement_controller import GuidedRefinementMixin
 from .refinement_parameters import execution_parameters, parameter_table
-from .recipe_presentation import explicit_edit_lines
+from .recipe_presentation import explicit_edit_lines, failure_policy_notice
 
 
 REFINEMENT_PROGRESS_SECONDS = 1.0
@@ -462,7 +462,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_state_defaults():
         return dict(rf_mode='recipe',rf_busy=False,rf_loading=False,rf_catalog_message='',rf_message='',rf_preparation_progress='',rf_error='',rf_transport='',rf_source_qualification='',rf_can_load_baseline=False,rf_provider='Guided rules · no model call required',rf_illumine_configured=bool(os.environ.get('AZURE_ILLUMINE_API_KEY')),rf_bilbao_configured=bool(os.environ.get('BCS_API_KEY')),
             rf_experiment='',rf_experiments=[],rf_source='',rf_sources=[],rf_source_details=[],rf_context_atoms=[],rf_context_search='',rf_scope='all',rf_samples=[],rf_sample_options=[],rf_scans=[],rf_scan_options=[],rf_banks=[],rf_bank_options=[],
-            rf_failure_policy='stop',rf_failure_policy_explicit=False,rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_question_answer='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
+            rf_failure_policy='stop',rf_failure_policy_explicit=False,rf_plan_failure_notice='',rf_existing=True,rf_future=False,rf_scope_summary='No published GPXs available',rf_scope_token='',rf_question_answer='',rf_request='',rf_draft_status='',rf_cards=[],rf_questions=[],rf_assumptions=[],rf_plan_calls='',rf_model_tokens='',rf_model_cost='',rf_model_has_luna_price=False,rf_plan_ready=False,
             rf_approved=False,rf_recipe_id='',rf_recipe_summary='',rf_active_summary='',rf_saved_recipe='',rf_recipe_versions=[],rf_recipe_filter='all',rf_metrics=[],rf_source_warnings=[],rf_future_armed=False,
             rf_checkpoint_runs=[],rf_checkpoint_run='',rf_checkpoint_options=[],rf_checkpoint_key='',rf_checkpoint_busy=False,rf_checkpoint_message='',rf_checkpoint_error='',
             rf_compatibility_rows=[],rf_compatibility_summary='',rf_compatibility_blocked=False,
@@ -824,6 +824,7 @@ class RefinementMixin(GuidedRefinementMixin):
             physical_banks=w.state['sources'].get(s.rf_source,{}).get('metadata',{}).get('physical_banks')) if displayed.get('plan') else []
         s.rf_questions=(displayed.get('plan') or {}).get('questions',[])+(displayed.get('plan') or {}).get('unsupported',[])
         s.rf_assumptions=(displayed.get('plan') or {}).get('assumptions',[])
+        s.rf_plan_failure_notice=failure_policy_notice(displayed.get('plan'))
         s.rf_plan_calls=f"{displayed.get('planning_calls',0)} model call(s) · native preflight passed" if displayed.get('preview') else ''
         s.rf_model_tokens,s.rf_model_cost=usage_labels(displayed.get('model_usage'))
         s.rf_model_has_luna_price=bool((displayed.get('model_usage') or {}).get('price_basis'))
@@ -910,6 +911,7 @@ class RefinementMixin(GuidedRefinementMixin):
     def _refinement_sync(self):
         w=self._refinement_workspace;s=self.server.state
         if not w or not s.rf_experiment:
+            s.rf_plan_failure_notice=''
             self._sync_recipe_preparation_progress()
             self._clear_refinement_output(clear_trends=True)
             return
