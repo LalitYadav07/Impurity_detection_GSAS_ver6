@@ -48,6 +48,11 @@ class LibraryCliIntakeContract(unittest.TestCase):
                     "--output-root", str(root / "output"), "--manifest-output", str(output)]
             if mode == "augmented":
                 argv.extend(["--base-db-root", str(root / "builtin")])
+                from ndip_catalog_bundle import REQUIRED_RELATIVE_PATHS
+                for name in REQUIRED_RELATIVE_PATHS['database_neutron']:
+                    path = root / 'builtin' / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b'catalog readiness fixture; builder is mocked')
             args = ndip_runner.build_parser().parse_args(argv)
             with patch.dict(sys.modules, {"db_pack_builder": fake}):
                 self.assertEqual(args.handler(args), 0)

@@ -76,6 +76,15 @@ jobs:
           assert actual == digest(source_inventory(Path("/expected"))), "Installed scientific source differs from release"
           print("Verified release scientific implementation", actual)'
 
+      - name: Verify immutable built-in catalog package and runtime layout
+        run: |
+          docker run --rm --network none --entrypoint python \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" \
+            /opt/radar-pd/scripts/ndip_catalog_bundle.py verify-installed --source /opt/radar-pd/catalog
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/tests/check_packaged_catalog.py:/validation/check_packaged_catalog.py:ro" \
+            "${IMAGE_NAME}:ndip-${GITHUB_SHA}" /validation/check_packaged_catalog.py
+
       - name: Verify production image excludes development fixtures
         run: |
           docker run --rm --entrypoint python \
