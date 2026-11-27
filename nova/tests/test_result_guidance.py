@@ -71,7 +71,7 @@ def test_template_hides_empty_controls_and_shows_policy_outside_expert_only_form
             for i in range(len(self.stack)-1,-1,-1):
                 if self.stack[i][0]==tag:self.stack=self.stack[:i];break
     template=RadarPdNovaApp().layout.html;parsed=Elements();parsed.feed(template)
-    assert 'No technical tables were published for this compact Live result.' in template
+    assert 'No technical tables were published for this compact result.' in template
     assert 'Published result tables are still loading.' in template
     for key in ('table_selector','table_grid'):
         assert any(a.get('v-if')=='table_options.length' for _,a in parsed.found[key])

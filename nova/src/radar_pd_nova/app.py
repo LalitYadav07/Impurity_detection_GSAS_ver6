@@ -3571,9 +3571,9 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
         html.P("A GSAS-II desktop is already open with its original GPX. Save and close that desktop before opening a different checkpoint.",
                v_if="gsasii_session_status === 'ready'", classes="radar-section-help mb-3")
         with html.Details(v_if="viewed_output_profile === 'monitor'", classes="radar-science-notes mb-3"):
-            html.Summary("Live result · fast publication; some exports require a standard Full run")
+            html.Summary("Compact result · fast publication; some exports require a standard Full run")
             html.P(
-                "Live mode publishes the normalized dashboard, fit plots, and usable GPX checkpoints immediately. "
+                "Compact publication includes the normalized dashboard, fit plots, and usable GPX checkpoints. "
                 "Run a standard Full single-pattern analysis for the complete table, phase-CIF, configuration, "
                 "and results-archive collections."
             )
@@ -3719,7 +3719,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 with vuetify.VExpansionPanel(title="Technical tables and raw fields"):
                     with vuetify.VExpansionPanelText():
                         vuetify.VAlert(v_if="!table_options.length && result_actions_pending", text="Published result tables are still loading.", type="info", variant="tonal", density="compact")
-                        vuetify.VAlert(v_if="!table_options.length && !result_actions_pending && viewed_output_profile === 'monitor'", text="No technical tables were published for this compact Live result. The phase summary, fit plots and saved GPX checkpoints remain available above. A standard Full single-pattern analysis publishes the complete table and export collections.", type="info", variant="tonal", density="compact")
+                        vuetify.VAlert(v_if="!table_options.length && !result_actions_pending && viewed_output_profile === 'monitor'", text="No technical tables were published for this compact result. The phase summary, fit plots and saved GPX checkpoints remain available above. A standard Full single-pattern analysis publishes the complete table and export collections.", type="info", variant="tonal", density="compact")
                         vuetify.VAlert(v_if="!table_options.length && !result_actions_pending && viewed_output_profile !== 'monitor'", text="No technical tables were published for this result.", type="info", variant="tonal", density="compact")
                         with html.Div(v_if="table_options.length", classes="radar-published-tables"):
                             vuetify.VSelect(label="Published result table", v_model=("selected_table",), items=("table_options",), item_title="name", item_value="path", density="compact", variant="outlined", update_modelValue=(self._table_changed, "[$event]"))
