@@ -818,7 +818,8 @@ def _apply_params_from_vector(base: Lattice, cons: LatticeConstraints,
     if np.min(np.linalg.eigvalsh(gram)) <= 0:
         raise ValueError("Lattice angles define a singular or non-positive metric")
     lattice = Lattice.from_parameters(a, b, c, al, be, ga)
-    if not np.all(np.isfinite(lattice.matrix)) or not lattice.volume > 0:
+    if (not np.all(np.isfinite(lattice.matrix))
+            or not math.isfinite(float(lattice.volume)) or not lattice.volume > 0):
         raise ValueError("Lattice metric is not finite and positive")
     return lattice
 

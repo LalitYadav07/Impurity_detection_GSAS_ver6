@@ -127,7 +127,8 @@ class BoundedProposalTests(unittest.TestCase):
         constraints = N.infer_constraints(source, 2)
         names = N._free_param_names(constraints)
         for values in ([4, 5, 6, 80, 80, 170], [4, 5, 6, 90, 180, 90],
-                       [0, 5, 6, 90, 90, 90], [4, 5, 6, 90, float('nan'), 90]):
+                       [0, 5, 6, 90, 90, 90], [4, 5, 6, 90, float('nan'), 90],
+                       [1e200, 1e200, 1e200, 90, 90, 90]):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 N._apply_params_from_vector(source.lattice, constraints, names, values)
 
