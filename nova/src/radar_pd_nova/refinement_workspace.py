@@ -16,7 +16,7 @@ from gpx_recipe.execution import write_json
 from .refinement_planner import make_plan
 from gpx_recipe.providers import configure_provider, provider_info, make_client
 from gpx_recipe.usage import summarize_calls
-from .refinement_runtime import RuntimeUnavailable
+from .refinement_runtime import RuntimeUnavailable, workspace_checkpoint_fingerprint
 from .checkpoint_uploads import CheckpointUploadPending
 from .refinement_sources import RefinementScope, digest, retained_fallback_group
 from .refinement_messages import galaxy_refinement_activity
@@ -37,6 +37,7 @@ class RefinementWorkspace:
         self._planner=planner;self.lock=threading.RLock();self._checkpoint_lock=threading.Lock();self._inflight=set()
         self._submission_cancels={}
         self._checkpoint_hash=None;self._checkpoint_dataset=None
+        self._checkpoint_from_restore=False
         self._inspection_locks={}
         if self.manifest.exists():
             self.state=json.loads(self.manifest.read_text())
@@ -60,29 +61,42 @@ class RefinementWorkspace:
             self.state['updated_utc']=utc();write_json(self.manifest,self.state)
 
     def restore_remote(self):
-        if self.state['recipes'] or self.state['jobs']:return False
-        document=self.runtime.recover_workspace()
-        if not document:return False
-        if document.get('schema')!='radar-refinement-workspace/v1' or document.get('history_id')!=self.history_id:
-            raise ValueError('Saved refinement session belongs to another schema or Galaxy history')
-        self._validate_parallel_jobs(document.get('parallel_jobs',1))
-        with self.lock:
-            self.state=document
-            self._recover_interrupted()
-            self.save()
-        return True
+        with self._checkpoint_lock:
+            with self.lock:
+                if self.state['recipes'] or self.state['jobs']:return False
+                before=workspace_checkpoint_fingerprint(self.state);runtime=self.runtime
+            document=runtime.recover_workspace()
+            if not document:return False
+            if document.get('schema')!='radar-refinement-workspace/v1' or document.get('history_id')!=self.history_id:
+                raise ValueError('Saved refinement session belongs to another schema or Galaxy history')
+            self._validate_parallel_jobs(document.get('parallel_jobs',1))
+            with self.lock:
+                if self.runtime is not runtime or workspace_checkpoint_fingerprint(self.state)!=before:
+                    discard=getattr(runtime,'discard_recovered_workspace_checkpoint',None)
+                    if callable(discard):discard()
+                    raise RuntimeUnavailable('The refinement workspace changed during recovery; its current state was preserved.')
+                self.state=document
+                self._checkpoint_hash=None;self._checkpoint_dataset=None;self._checkpoint_from_restore=False
+                self._recover_interrupted()
+                self.save()
+            return True
 
     def checkpoint(self):
         # Capture after acquiring the upload lock: an older pending upload
         # cannot overwrite the recovery order of a newer scientific receipt.
         with self._checkpoint_lock:
             with self.lock:document=copy.deepcopy(self.state)
-            stable={k:v for k,v in document.items() if k!='updated_utc'}
-            fingerprint=digest(stable)
-            if fingerprint==self._checkpoint_hash:return self._checkpoint_dataset
+            fingerprint=workspace_checkpoint_fingerprint(document)
+            reuse=getattr(self.runtime,'reuse_workspace_checkpoint',None)
+            if fingerprint==self._checkpoint_hash and not self._checkpoint_from_restore:
+                return self._checkpoint_dataset
+            dataset=reuse(document) if callable(reuse) else None
+            if dataset is not None:
+                self._checkpoint_hash=fingerprint;self._checkpoint_dataset=dataset;self._checkpoint_from_restore=True
+                return dataset
             dataset=self.runtime.save_workspace(document)
             # Publish the cache only after Galaxy acknowledged the backup.
-            self._checkpoint_hash=fingerprint;self._checkpoint_dataset=dataset
+            self._checkpoint_hash=fingerprint;self._checkpoint_dataset=dataset;self._checkpoint_from_restore=False
             return dataset
 
     def canonical_source(self,source):

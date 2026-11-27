@@ -4,6 +4,7 @@ from .tool_ids import tool_id
 
 import json
 import hashlib
+from copy import deepcopy
 import os
 from pathlib import Path
 import shutil
@@ -14,11 +15,36 @@ from typing import Callable
 from gpx_recipe.jobs import scientific_environment
 from gpx_recipe.process import run_scientific
 from gpx_recipe.execution import write_json
-from .refinement_sources import file_sha
+from .refinement_sources import file_sha, digest
 from .refinement_messages import retain_review_evidence, final_stage_criterion
 
 REFINEMENT_TOOL_ID = tool_id('refine_recipe')
 WORKSPACE_LABEL = 'RADAR-PD Refinement workspace'
+
+
+def workspace_checkpoint_fingerprint(document):
+    """Existing exact checkpoint identity; only the top-level clock is omitted."""
+    return digest({key:value for key,value in document.items() if key!='updated_utc'})
+
+
+def _verify_checkpoint_hashes(path,metadata,downloaded_sha256):
+    """Check advertised whole-file hashes without inventing a provider hash."""
+    hashes=metadata.get('hashes') or []
+    if not isinstance(hashes,list):raise RuntimeUnavailable('Invalid saved checkpoint hash metadata.')
+    for row in hashes:
+        if not isinstance(row,dict):raise RuntimeUnavailable('Invalid saved checkpoint hash record.')
+        if row.get('extra_files_path'):continue
+        name=str(row.get('hash_function') or '').lower().replace('-','')
+        if name not in {'sha256','sha512','sha384','sha224','sha1','md5','blake2b','blake2s'}:
+            raise RuntimeUnavailable('The saved checkpoint has an unsupported whole-file hash; reuse was not authorized.')
+        if name=='sha256':actual=downloaded_sha256
+        else:
+            checksum=hashlib.new(name)
+            with path.open('rb') as stream:
+                for chunk in iter(lambda:stream.read(1024*1024),b''):checksum.update(chunk)
+            actual=checksum.hexdigest()
+        if not isinstance(row.get('hash_value'),str) or actual!=row['hash_value'].lower():
+            raise RuntimeUnavailable('The downloaded refinement checkpoint differs from its advertised hash.')
 
 
 def portable_refinement_workspace(manifest):
@@ -171,6 +197,49 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
         self.service=service;self.timeout=timeout;self.poll_seconds=poll_seconds
         self._collections={}
+        self._recovered_workspace_checkpoint=None
+
+    def _workspace_connection(self):
+        return (id(self.service),getattr(self.service,'galaxy_url',None),self.service.history_id)
+
+    def _checkpoint_metadata(self,identifier,connection):
+        if self._workspace_connection()!=connection:
+            raise RuntimeUnavailable('The Galaxy connection changed; restore the refinement workspace again before checkpointing.')
+        reader=getattr(self.service,'_dataset_metadata',None)
+        if not callable(reader):return None  # Older/local providers keep the ordinary upload path.
+        try:row=reader(identifier)
+        except Exception as error:
+            raise RuntimeUnavailable('The saved refinement checkpoint could not be rechecked; no replacement was uploaded.') from error
+        if self._workspace_connection()!=connection:
+            raise RuntimeUnavailable('The Galaxy connection changed while checking the saved refinement checkpoint.')
+        if (not isinstance(row,dict) or row.get('id')!=identifier
+                or row.get('history_id')!=connection[2] or not row.get('dataset_id')
+                or row.get('state')!='ok' or row.get('accessible') is not True
+                or row.get('deleted') or row.get('purged')
+                or type(row.get('file_size')) is not int or row['file_size']<=0):
+            raise RuntimeUnavailable('The exact saved refinement checkpoint is not a ready, accessible HDA in this History; no replacement was uploaded.')
+        return deepcopy({key:row.get(key) for key in ('id','dataset_id','history_id','uuid','file_size','hashes')})
+
+    def reuse_workspace_checkpoint(self,document):
+        """Reuse only the exact document just restored from this authorized HDA.
+
+        A changed document retires the candidate before the ordinary upload.
+        This is not a general upload cache or path-normalization rule.
+        """
+        saved=self._recovered_workspace_checkpoint
+        if saved is None:return None
+        if self._workspace_connection()!=saved['connection']:
+            raise RuntimeUnavailable('The restored refinement checkpoint belongs to another Galaxy connection; restore it again.')
+        current=self._checkpoint_metadata(saved['metadata']['id'],saved['connection'])
+        if current!=saved['metadata']:
+            raise RuntimeUnavailable('The saved refinement checkpoint identity changed; no replacement was uploaded.')
+        if workspace_checkpoint_fingerprint(document)!=saved['fingerprint']:
+            self._recovered_workspace_checkpoint=None
+            return None
+        return current['id']
+
+    def discard_recovered_workspace_checkpoint(self):
+        self._recovered_workspace_checkpoint=None
 
     def resolve(self,source):
         source=dict(source)
@@ -338,12 +407,15 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
         finally:path.unlink(missing_ok=True)
 
     def recover_workspace(self):
+        self._recovered_workspace_checkpoint=None
+        connection=self._workspace_connection()
         rows=self.service.search_history_datasets(query=self.workspace_label,limit=5,include_generated=True)
         for row in rows:
             if row.get('state')!='ok':continue
             # A real six-scan workspace already exceeds the generic service's
             # 1 MB text preview limit. Restore the owned dataset directly.
             import gzip,uuid
+            metadata=self._checkpoint_metadata(row['id'],connection)
             path=self.root/('recovery-'+uuid.uuid4().hex)
             self.service._download_dataset(row['id'],path)
             try:
@@ -352,8 +424,19 @@ class GalaxyRefinementRuntime(LocalRefinementRuntime):
                 with opener(path,'rb') as handle:payload=handle.read(128*1024*1024+1)
                 if len(payload)>128*1024*1024:raise RuntimeUnavailable('The saved workspace exceeds the 128 MB recovery bound; preserve it for an explicit scoped restore')
                 document=json.loads(payload)
+                downloaded_bytes=path.stat().st_size
+                downloaded_sha256=file_sha(path)
+                if metadata is not None:_verify_checkpoint_hashes(path,metadata,downloaded_sha256)
             finally:path.unlink(missing_ok=True)
+            if self._workspace_connection()!=connection:
+                raise RuntimeUnavailable('The Galaxy connection changed while restoring the refinement workspace.')
             if document.get('schema')==self.workspace_schema and document.get('history_id')==self.service.history_id:
+                if metadata is not None:
+                    if downloaded_bytes!=metadata['file_size']:
+                        raise RuntimeUnavailable('The downloaded refinement checkpoint size differs from its HDA identity.')
+                    self._recovered_workspace_checkpoint=dict(connection=connection,metadata=metadata,
+                        fingerprint=workspace_checkpoint_fingerprint(document),
+                        downloaded_sha256=downloaded_sha256,downloaded_bytes=downloaded_bytes)
                 return document
         return None
 
