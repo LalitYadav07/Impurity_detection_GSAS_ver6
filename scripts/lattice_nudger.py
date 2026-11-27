@@ -1405,8 +1405,33 @@ class LatticeNudger:
             proof = write_cell_derivative(source, path, structure.lattice.parameters,
                 data_name=(pid + '_nudged')[:5], neutral_elements=self.radiation == 'neutron',
                 expected_structure=check_structure)
+            # The source can live in an ephemeral database cache, outside the
+            # run archive. Retain its exact bytes so a later review can compare
+            # the original setting/operators with the fitted derivative.
+            original = Path(source).read_bytes()
+            source_hash = hashlib.sha256(original).hexdigest()
+            if source_hash != proof['source_sha256']:
+                raise ValueError('Source CIF changed while writing its lattice derivative')
+            retained = Path(out_dir) / 'source_cifs' / (source_hash + '.cif')
+            retained.parent.mkdir(parents=True, exist_ok=True)
+            if retained.exists() and retained.read_bytes() != original:
+                raise ValueError('Retained source CIF does not match its content hash')
+            if not retained.exists():
+                import tempfile
+                with tempfile.NamedTemporaryFile(dir=retained.parent, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(original)
+                try:
+                    temporary.replace(retained)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            review = authorized_review(source)
+            if review is not None:
+                from cif_occupancy import write_review
+                write_review(retained, review)
             Path(path + ".nudge.json").write_text(json.dumps({
                 "source_sha256": proof['source_sha256'],
+                "source_cif": retained.relative_to(Path(out_dir)).as_posix(),
                 "operation": "lattice only; source symmetry, fractional sites and occupancies retained",
                 "cell": list(structure.lattice.parameters),
             }, indent=2) + "\n")

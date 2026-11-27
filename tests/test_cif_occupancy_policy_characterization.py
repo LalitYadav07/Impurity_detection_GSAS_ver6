@@ -149,6 +149,9 @@ def test_nudge_export_keeps_raw_sites_and_tracks_original_hash(tmp_path,monkeypa
     assert [float(v) for v in block['_atom_site_occupancy']]==[0.6,0.40066]
     receipt=json.loads(Path(str(output)+'.nudge.json').read_text())
     assert receipt['source_sha256']==hashlib.sha256(raw).hexdigest()
+    retained=output.parent/receipt['source_cif']
+    assert retained.read_bytes()==raw
+    assert json.loads(Path(str(retained)+'.occupancy-review.json').read_text())['policy_sha256']==json.loads(Path(str(path)+'.occupancy-review.json').read_text())['policy_sha256']
     assert path.read_bytes()==raw
 
 

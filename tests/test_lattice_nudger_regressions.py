@@ -76,6 +76,13 @@ class Stage4WorkerPolicyTests(unittest.TestCase):
             self.assertAlmostEqual(float(after["_cell_length_a"]), 5.641)
             self.assertNotEqual(after["_cell_length_a"], after["_cell_length_b"])
             self.assertEqual(source.read_text(), str(CifWriter(structure, symprec=1e-5, angle_tolerance=-1)))
+            import json
+            receipt = json.loads(Path(path + '.nudge.json').read_text())
+            retained = Path(folder) / receipt['source_cif']
+            self.assertEqual(retained.read_bytes(), source.read_bytes())
+            # Removing an ephemeral input still leaves a reviewable source.
+            source.unlink()
+            self.assertEqual(retained.read_text(), str(CifWriter(structure, symprec=1e-5, angle_tolerance=-1)))
 
     def test_neutron_cif_export_preserves_elements_and_occupancies_without_ionic_labels(self):
         from pymatgen.io.cif import CifParser
