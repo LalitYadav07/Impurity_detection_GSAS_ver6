@@ -13,7 +13,7 @@ def test_live_tool_command_preserves_arguments_and_redirection(tmp_path,cache,wo
     root=ET.parse(Path(__file__).resolve().parents[2]/'galaxy/radar_pd_live_snapshot.xml.in').getroot()
     values={'result_bundle':'result bundle.zip','response_cache_output':'cache output.zip',
             'console_output':'console.txt','packet':'input packet.zip','response_cache':cache,
-            'preparation_provenance':'preparation evidence.json'}
+            'preparation_provenance':'preparation evidence.json','resource_probe':'allocation probe.py'}
     rendered=str(Template(root.find('command').text,searchList=[values]))
     # Galaxy's ToolEvaluator._build_command_line strips each rendered line,
     # then joins newlines with spaces. A shell continuation becomes a literal
@@ -22,7 +22,7 @@ def test_live_tool_command_preserves_arguments_and_redirection(tmp_path,cache,wo
     command=' '.join(line.strip() for line in rendered.split('\n')).replace('\r',' ').strip()
     binary=tmp_path/'bin';binary.mkdir()
     recorder=binary/'python'
-    recorder.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORDED_ARGS"\nprintf "worker-console\\n"\nexit "$WORKER_EXIT"\n')
+    recorder.write_text('#!/bin/sh\nif [ "$1" = "allocation probe.py" ]; then printf "allocation-probe\\n"; exit 0; fi\nprintf "%s\\n" "$@" > "$RECORDED_ARGS"\nprintf "worker-console\\n"\nexit "$WORKER_EXIT"\n')
     recorder.chmod(0o755)
     output=tmp_path/'argv.txt'
     completed=subprocess.run(['/bin/sh','-ec',command],cwd=tmp_path,capture_output=True,text=True,
@@ -32,6 +32,6 @@ def test_live_tool_command_preserves_arguments_and_redirection(tmp_path,cache,wo
     if cache:expected+=['--cache','prior cache.zip']
     assert output.read_text().splitlines()==expected
     assert completed.returncode==worker_exit
-    assert (tmp_path/'console.txt').read_text()=='worker-console\n'
+    assert (tmp_path/'console.txt').read_text()=='allocation-probe\nworker-console\n'
     assert not completed.stdout
     assert root.find("outputs/collection[@name='verified_projects']/discover_datasets").get('directory')=='worker/verified_projects'
