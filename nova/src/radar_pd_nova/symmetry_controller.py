@@ -58,7 +58,7 @@ class SymmetryMixin(KSearchMixin):
     def _init_symmetry(self):
         self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_restore_requests=set();self._model_following_active=False;self._model_stopping=False
         self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_preparations={};self._model_enrollment_task=None;self._model_tick_task=None;self._model_pause_task=None;self._model_start_cancel=None
-        self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None;self._symmetry_setup_details=None
+        self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved='';self._symmetry_task=None;self._symmetry_loading=False;self._symmetry_refresh_pending=False;self._symmetry_explicit_selection=False;self._symmetry_display_identity=None;self._symmetry_loading_identity=None;self._symmetry_setup_details=None;self._symmetry_campaign_notice=None
         s=self.server.state
         defaults=dict(sx_campaign='',sx_campaigns=[],sx_source='',sx_source_options=[],sx_busy=False,sx_error='',sx_message='',sx_progress='',sx_execution_detail='',sx_groups=[],sx_group='',sx_members=[],sx_selected='',sx_search='',sx_status='all',
             sx_overview=plots.empty('Open a campaign to inspect its coverage'),sx_fit=plots.empty('Select an audited checkpoint'),sx_fit_title='',sx_expanded_title='',sx_source_notices=[],sx_source_display_notices=[],sx_source_notice_context='',sx_axis='d',sx_reset=0,sx_pins=[],sx_pin_options=[],sx_parameters=[],sx_parameter_note='',sx_parent_moments=[],sx_parent_moment_note='',sx_details=[],sx_fit_diagnostics=[],sx_moment_note='',sx_embedding_evidence=[],sx_embedding_summary='',sx_gsas_model='',sx_intensity_scale='linear',
@@ -236,6 +236,25 @@ class SymmetryMixin(KSearchMixin):
         s.sx_setup=True;s.sx_plan_token='';s.sx_plan_summary='';s.sx_plan_candidates=[]
         s.sx_candidates=[];s.sx_candidate_options=[];s.sx_modes=[];s.sx_mode_options=[]
         s.sx_message='Select a starting GPX and inspect its exact parent to prepare a new search.'
+
+    def _symmetry_notice_identity(self):
+        s=self.server.state;service=getattr(self,'service',None)
+        return (id(service),getattr(service,'history_id',None),
+                s.sx_campaign,s.rf_experiment,s.sx_result_scope)
+
+    def return_to_symmetry_campaign(self):
+        """Restore the selected campaign's notice without clearing fit warnings."""
+        s=self.server.state
+        if (not s.sx_setup or not s.sx_campaign or s.sx_busy
+                or getattr(s,'sx_pause_pending',False) or self._symmetry_loading):return
+        s.sx_setup=False
+        notice=getattr(self,'_symmetry_campaign_notice',None)
+        if notice is not None and notice[0]==self._symmetry_notice_identity():
+            s.sx_message=notice[1]
+        else:
+            s.sx_message=''
+            self.refresh_symmetry()
+        s.flush()
 
     def symmetry_adjacent_scan(self,step):
         if type(step) is not int or step not in (-1,1):return
@@ -490,6 +509,7 @@ class SymmetryMixin(KSearchMixin):
                         else 'No native starts are available yet. Open the acquisition queue to inspect compatibility or review reasons.')
                 elif not visible:s.sx_message='This campaign belongs to another experiment. Choose that experiment or view the whole campaign.'
                 else:s.sx_message='No native trials have been declared yet. Check the acquisition queue and reviewed campaign scope.'
+                campaign_notice=s.sx_message
                 options=indexed_options if indexed_options is not None else scan_options(rows)
                 source_order={entry['id']:index for index,entry in enumerate(s.sx_enrollments)}
                 options=dict(sorted(options.items(),key=lambda item:source_order.get(item[0],len(source_order))))
@@ -511,6 +531,7 @@ class SymmetryMixin(KSearchMixin):
                 s.sx_source=selected
                 self._symmetry_publish_source()
                 self._symmetry_display_identity=identity;s.sx_results_current=True
+                self._symmetry_campaign_notice=(self._symmetry_notice_identity(),campaign_notice)
             except ReviewSelectionChanged:self._symmetry_refresh_pending=True
             except Exception as exc:s.sx_error=str(exc)
             finally:
@@ -1661,7 +1682,7 @@ class SymmetryMixin(KSearchMixin):
         from copy import deepcopy
         for name,value in self._symmetry_defaults.items():setattr(self.server.state,name,deepcopy(value))
         self._symmetry_rows=[];self._symmetry_all_rows=[];self._symmetry_groups=[];self._symmetry_draft=None;self._symmetry_approved=''
-        self._symmetry_ranking_evidence={}
+        self._symmetry_ranking_evidence={};self._symmetry_campaign_notice=None
         self._model_runtime_cache=None;self._models_restored=False;self._model_restored_scopes=set();self._model_restore_requests=set();self._model_active_campaigns={};self._model_owned_campaigns={};self._model_review_campaigns=OrderedDict();self._model_checkpoint_errors={};self._model_pause_task=None;self._model_start_cancel=None
         self._k_result=None;self._k_result_identity=None
         s=self.server.state;s.sx_k_rows=[];s.sx_k_choices=[];s.sx_k_notes=[];s.sx_k_has_result=False;s.sx_k_busy=False

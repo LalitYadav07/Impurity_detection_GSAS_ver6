@@ -237,3 +237,78 @@ def test_unapproving_only_fit_options_keeps_valid_discovery_caption():
     assert state.sx_discovered and state.sx_candidates==['candidate']
     assert state.sx_preparation_notice=='Native context checks passed'
     assert not state.sx_approved and not state.sx_plan_ready
+
+
+def return_app():
+    app=controller.SymmetryMixin()
+    app.service=SimpleNamespace(history_id='history-one')
+    state=State(sx_setup=True,sx_campaign='old-campaign',rf_experiment='IPTS-1',
+        sx_result_scope='experiment',sx_busy=False,sx_pause_pending=False,
+        sx_message='New library: 6/6 candidates admitted. Review the finite plan.',
+        sx_error='Independent fit warning',sx_queue_notice='Old campaign optimization unresolved',
+        sx_fit_diagnostics=[{'warning':'Rwp exceeds reviewed adequacy'}])
+    app.server=SimpleNamespace(state=state);app._symmetry_loading=False
+    app._symmetry_campaign_notice=(app._symmetry_notice_identity(),'Audited fits remain hypotheses.')
+    return app,state
+
+
+def test_return_from_new_library_draft_restores_campaign_notice_and_keeps_warnings():
+    app,state=return_app();warnings=state.sx_fit_diagnostics
+    app.refresh_symmetry=lambda:pytest.fail('Verified campaign view should not be reread on Return')
+    app.return_to_symmetry_campaign()
+    assert not state.sx_setup and state.sx_message=='Audited fits remain hypotheses.'
+    assert state.sx_error=='Independent fit warning'
+    assert state.sx_queue_notice=='Old campaign optimization unresolved'
+    assert state.sx_fit_diagnostics is warnings
+
+
+@pytest.mark.parametrize('changed',['history','service','campaign','experiment','scope'])
+def test_return_does_not_restore_a_notice_owned_by_another_view(changed):
+    app,state=return_app()
+    if changed=='history':app.service.history_id='history-two'
+    elif changed=='service':app.service=SimpleNamespace(history_id='history-one')
+    elif changed=='campaign':state.sx_campaign='another-campaign'
+    elif changed=='experiment':state.rf_experiment='IPTS-2'
+    else:state.sx_result_scope='campaign'
+    refresh=[];app.refresh_symmetry=lambda:refresh.append(True)
+    app.return_to_symmetry_campaign()
+    assert not state.sx_setup and state.sx_message=='' and refresh==[True]
+    assert state.sx_fit_diagnostics==[{'warning':'Rwp exceeds reviewed adequacy'}]
+
+
+@pytest.mark.parametrize('busy',['operation','loading','pause'])
+def test_return_during_owned_preparation_cannot_expose_a_late_draft_reply(busy):
+    app,state=return_app()
+    if busy=='operation':state.sx_busy=True
+    elif busy=='loading':app._symmetry_loading=True
+    else:state.sx_pause_pending=True
+    app.refresh_symmetry=lambda:pytest.fail('Return must wait for owned operation')
+    app.return_to_symmetry_campaign()
+    assert state.sx_setup and state.sx_message.startswith('New library:')
+
+
+def test_campaign_refresh_retains_its_notice_for_return_after_draft_discovery(tmp_path, monkeypatch):
+    app,state=setup_app(tmp_path,monkeypatch)
+    from gpx_recipe.symmetry.campaign import Campaign
+    root=tmp_path/'campaign-kept'
+    template=dict(scope=dict(experiment='IPTS-1'),protocol={},existing_ids=[])
+    campaign=Campaign(root);campaign.set_setting('template',template)
+    monkeypatch.setattr(controller,'Campaign',lambda *_:campaign)
+    monkeypatch.setattr(controller,'campaign_recency',lambda *_:0)
+    monkeypatch.setattr(controller,'campaign_rows',lambda *a,**k:([],[]))
+    monkeypatch.setattr(controller,'campaign_can_resume',lambda *a,**k:False)
+    app._symmetry_campaign=lambda *_:campaign
+    app._symmetry_transport=lambda *_:SimpleNamespace(state={})
+    app._symmetry_scan_choices=lambda *_:None
+    app._symmetry_source_snapshot=lambda *_:([],[])
+    state.sx_retry_acquisition=''
+    asyncio.run(run_action(app,app.refresh_symmetry))
+    assert not getattr(state,'sx_error',''), getattr(state,'sx_error','')
+    campaign_notice=state.sx_message
+    assert 'No native trials' in campaign_notice
+    state.sx_setup=True;state.sx_message='6/6 new-library candidates. Review the finite plan.'
+    state.sx_error='Keep independently verified fit warning'
+    app.refresh_symmetry=lambda:pytest.fail('Returning to the cached campaign must not repeat recovery')
+    app.return_to_symmetry_campaign()
+    assert not state.sx_setup and state.sx_message==campaign_notice
+    assert state.sx_error=='Keep independently verified fit warning'

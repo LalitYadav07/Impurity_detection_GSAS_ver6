@@ -64,7 +64,7 @@ def model_exploration(app):
             v.VBtn('Continue saved campaign',click=app.continue_symmetry_campaign,disabled=('!sx_resumable || sx_busy || sx_campaign_running || sx_pause_pending',),variant='text',prepend_icon='mdi-play')
             v.VBtn('Pause all active campaigns',click=app.pause_model_campaign,disabled=('!sx_campaign_running || sx_pause_pending',),loading=('sx_pause_pending',),variant='text',prepend_icon='mdi-pause')
             v.VBtn('New model search',v_if='!!sx_campaign',click=app.new_symmetry_search,disabled=('sx_busy || sx_pause_pending',),variant='outlined',prepend_icon='mdi-molecule')
-            v.VBtn('Return to campaign',v_if='sx_setup && !!sx_campaign',click='sx_setup = false',variant='text',prepend_icon='mdi-arrow-left')
+            v.VBtn('Return to campaign',v_if='sx_setup && !!sx_campaign',click=app.return_to_symmetry_campaign,disabled=('sx_busy || sx_pause_pending',),variant='text',prepend_icon='mdi-arrow-left')
         html.P('Start a new search from a published GPX below. To inspect or continue an earlier model search, load its saved campaigns; this recovers prior work without submitting new refinements.',classes='rf-notice',v_if='!sx_campaign')
         v.VAlert(v_if='!!sx_error',text=('sx_error',),type='error',variant='tonal',density='compact',classes='mb-3')
         html.P('{{ sx_backend }}',classes='rf-notice')
