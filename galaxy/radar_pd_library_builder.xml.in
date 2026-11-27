@@ -1,4 +1,4 @@
-<tool id="neutrons_radar_pd_library_builder_prototype" name="RADAR-PD Utility: Build CIF Library" profile="22.05" version="0.3.21">
+<tool id="neutrons_radar_pd_library_builder_prototype" name="RADAR-PD Utility: Build CIF Library" profile="22.05" version="0.3.25">
     <description>build a reusable mini or augmented candidate library</description>
     <creator>
         <person name="Lalit Yadav"/>
