@@ -8396,7 +8396,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
             if (self.service is not service or getattr(self, "_result_context", None) is not context
                     or (selected_uid and state.selected_run_uid != selected_uid)
                     or (state.selected_run_uid and state.selected_run_uid != record.uid)
-                    or self._result_source_identity(record) != source):
+                    or not self._result_sources_compatible(source, self._result_source_identity(record))):
                 return False
             live = self.records.get(record.uid)
             return (not registered if live is None else

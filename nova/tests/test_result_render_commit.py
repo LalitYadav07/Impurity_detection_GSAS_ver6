@@ -178,3 +178,38 @@ def test_complete_fit_renders_without_a_preview_and_on_forced_reload(tmp_path, m
             assert {'Observed','Calculated','Difference'} <= {trace.name for trace in figure.data}
         assert calls == [row.uid]
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('change', ['additive', 'replacement'])
+def test_promotion_accepts_added_associations_but_rejects_replaced_hda(tmp_path, monkeypatch, change):
+    app, row, preview, entered, release, calls = ready_preview(tmp_path, monkeypatch)
+    app._opening_run_uid = row.uid
+    app._result_open_owner = object()
+    app._select_record(row)
+    assert app._display_result_preview(row, preview, app.service,
+        app._result_source_identity(row), app._result_context)
+    final = row.model_copy(deep=True, update={'output_dir':str(tmp_path/'canonical'),
+                                            'result_status':ResultStatus.READY})
+    final = app._cache_result_record(row, final, app.service,
+        app._result_source_identity(row), app._result_context)
+    app._select_record(final)
+    reader = app._table_display_data
+    changed = []
+    def change_association(path):
+        value = reader(path)
+        if path and not changed:
+            changed.append(True)
+            if change == 'additive':
+                final.output_dataset_ids['tables'] = 'same-job-table-collection'
+            else:
+                final.output_dataset_ids['summary'] = 'replacement-summary'
+        return value
+    monkeypatch.setattr(app, '_table_display_data', change_association)
+    app._load_results(final, local_only=True)
+    assert changed and app.server.state.result_owner_uid == row.uid
+    assert app.server.state.result_preview is (change == 'replacement')
+    if change == 'additive':
+        assert app._rendered_result_current(final) and app.server.state.table_rows
+        assert app._result_actions_ready(row.uid)
+    else:
+        assert not app._result_actions_ready(row.uid)

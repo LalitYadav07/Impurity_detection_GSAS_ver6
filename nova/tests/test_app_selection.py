@@ -416,9 +416,11 @@ def test_valid_configuration_save_clears_previous_validation_error() -> None:
 
 
 def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_path: Path) -> None:
-    app = RadarPdNovaApp.__new__(RadarPdNovaApp)
-    state = _State(workspace_view="monitor", file_search="summary", show_technical_files=True)
-    app.server = SimpleNamespace(state=state)
+    app = RadarPdNovaApp()
+    state = app.server.state
+    state.workspace_view = "monitor"
+    state.file_search = "summary"
+    state.show_technical_files = True
     app.service = SimpleNamespace(result_payload=lambda _record: {"summary": {}})
     app._powgen_controller = None
 
@@ -473,6 +475,7 @@ def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_p
         status=RunStatus.OK,
         output_dir=str(tmp_path),
     )
+    app.records = {record.uid: record}
 
     app._load_results(record)
 
@@ -483,6 +486,11 @@ def test_loading_results_publishes_only_the_final_plot_figure(monkeypatch, tmp_p
 
 
 class _State(SimpleNamespace):
+    def __init__(self, **values):
+        defaults = {"result_owner_uid": "", "result_preview": False}
+        defaults.update(values)
+        super().__init__(**defaults)
+
     def flush(self) -> None:
         self.flush_count = getattr(self, "flush_count", 0) + 1
 
@@ -1497,6 +1505,7 @@ def test_phantom_checkpoint_is_not_exposed_as_gsasii_action(tmp_path: Path) -> N
         history_id="history-1",
         status=RunStatus.OK,
     )
+    app.records = {record.uid: record}
     rows = [
         {
             "id": "checkpoint-0",
@@ -1520,6 +1529,7 @@ def test_real_galaxy_checkpoint_collection_enables_gsasii_action() -> None:
         status=RunStatus.OK,
         output_dataset_ids={"gpx_projects": "gpx-collection"},
     )
+    app.records = {record.uid: record}
     rows = [{"id": "checkpoint-0", "path": "", "local_available": False}]
 
     launchable = app._launchable_checkpoint_rows(record, rows)
@@ -1540,6 +1550,7 @@ def test_archived_local_gpx_enables_action_without_collection(tmp_path: Path) ->
         history_id="history-1",
         status=RunStatus.OK,
     )
+    app.records = {record.uid: record}
 
     launchable = app._launchable_checkpoint_rows(
         record,
