@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .phase_model_labels import lattice_display_rows
+
 import ast
 import asyncio
 import json
@@ -4952,7 +4954,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
                 ),
                 "warning_count": int(summary.get("warning_count") or 0),
                 "error_count": int(summary.get("error_count") or 0),
-                "lattice_parameters": list(summary.get("lattice_parameters") or []),
+                "lattice_parameters": lattice_display_rows(summary.get("lattice_parameters") or []),
                 "observables": dict(summary.get("observables") or {}),
                 "pattern_observation": dict(summary.get("pattern_observation") or {}),
                 "pattern_path": (summary.get("pattern_observation") or {}).get("local_path"),
@@ -5182,7 +5184,7 @@ class RadarPdNovaApp(WorkspaceNavigationMixin, PlanningHandoffMixin, Preparation
     @staticmethod
     def _powgen_lattice_rows(scan):
         rows = []
-        for source in scan.get("lattice_parameters") or []:
+        for source in lattice_display_rows(scan.get("lattice_parameters") or []):
             row = dict(source)
             for key in ("a", "b", "c", "alpha", "beta", "gamma", "volume"):
                 value, error = row.get(key), row.get(key + "_esd")

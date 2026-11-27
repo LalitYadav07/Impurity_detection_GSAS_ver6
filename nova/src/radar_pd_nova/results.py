@@ -19,6 +19,7 @@ from dateutil.tz import tzstr
 from plotly.subplots import make_subplots
 from gpx_recipe.fit_domain import NATIVE_FIT_CONVENTION, native_powder_fit_mask
 from .scan_conditions import qualified_metadata, condition_display
+from .phase_model_labels import lattice_display_rows
 
 
 _EASTERN_TIME = tzstr("EST5EDT,M3.2.0/2,M11.1.0/2")
@@ -1761,7 +1762,7 @@ def experiment_scan_summary(result: dict[str, Any]) -> dict[str, Any]:
         "final_rwp": None if isinstance(result.get("final_rwp"),bool) else _as_float(result.get("final_rwp")),
         "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
         "phases": phases,
-        "lattice_parameters": [dict(row) for row in result.get("lattice_parameters", []) if isinstance(row, dict)],
+        "lattice_parameters": lattice_display_rows(result.get("lattice_parameters", [])),
         "observables": dict(result.get("observables") or {}),
         "runtime": dict(result.get("runtime") or {}),
         "pattern_observation": dict(result.get("pattern_observation") or {}),

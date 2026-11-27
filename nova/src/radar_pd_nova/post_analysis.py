@@ -6,6 +6,8 @@ Presentation changes can therefore be replayed against saved observations.
 
 from __future__ import annotations
 
+from .phase_model_labels import lattice_display_rows
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -573,13 +575,13 @@ def _metric(row, metric, hkl, include_fixed):
 def _phase_rows(scan):
     packet = scan.get("observables")
     if isinstance(packet, dict) and packet.get("$schema") == "radar-pd-observables/v1":
-        return packet.get("phases") or [], packet.get("context") or {}, packet
+        return lattice_display_rows(packet.get("phases") or []), packet.get("context") or {}, packet
     if packet:
         return [], {}, {}  # An unsupported new artifact must not become legacy data.
     # Legacy fractions stay inspectable; legacy cell refinement state is unknown.
     cells = scan.get("lattice_parameters") or []
     if cells:
-        return cells, {}, {}
+        return lattice_display_rows(cells), {}, {}
     return (
         [
             dict(row, phase=row.get("phase") or row.get("label"), fraction_state="unknown")

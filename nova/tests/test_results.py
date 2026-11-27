@@ -1765,3 +1765,38 @@ def test_invalid_scored_count_cannot_claim_sampling_coverage(scored):
                     unique_including_source=796, selected=10, only_original_scored=False)
     row = curate_rapid_rows("lattice_nudge", [dict(sampling_json=json.dumps(sampling), scored_count=scored)])[0]
     assert row["lattice_coverage"] == row["scored_cells"] == "Unavailable"
+
+
+def test_native_catalog_labels_keep_matching_groups_and_distinguish_mismatch():
+    from radar_pd_nova.phase_model_labels import native_phase_label,lattice_display_rows
+    label='CrCl3 (SG C2/m, 12)'
+    assert native_phase_label(label,'C 2/m')==(label,None)
+    assert native_phase_label('A (SG P1, 1)','P 1')==('A (SG P1, 1)',None)
+    assert native_phase_label(label,'P -1')[0]=='CrCl3 · P -1 (catalog C2/m)'
+    assert native_phase_label(label,None)==(label,None)
+    row={'phase_id':'mp-27630','phase':label,'space_group':'P -1','source_gpx':'final.gpx',
+         'a':4.1,'phase_key':'exact-native-key'}
+    original=deepcopy(row);rendered=lattice_display_rows([row])[0]
+    assert rendered['phase_id']==row['phase_id'] and rendered['a']==4.1
+    assert rendered['phase_key']==row['phase_key'] and row==original
+    assert lattice_display_rows([rendered])==[rendered]
+
+
+def test_legacy_native_catalog_name_is_corrected_in_luna_post_analysis_context():
+    from radar_pd_nova.post_analysis import _phase_rows
+    from radar_pd_nova.scan_interpretation import _candidates
+    raw={'phase_id':'mp-27630','phase':'mp-27630 (SG C2/m, 12)','space_group':'P -1',
+         'source_gpx':'final.gpx','phase_key':'same','a':4.1}
+    for scan in [{'lattice_parameters':[raw]},
+                 {'observables':{'$schema':'radar-pd-observables/v1','phases':[raw],'context':{'bank':1}}}]:
+        original=deepcopy(scan);rows,context,packet=_phase_rows(scan)
+        assert rows[0]['phase']=='mp-27630 · P -1 (catalog C2/m)'
+        assert rows[0]['space_group']=='P -1' and rows[0]['phase_id']=='mp-27630'
+        assert _candidates(scan)['mp-27630']['phase']=='mp-27630 · P -1 (catalog C2/m)'
+        assert scan==original
+    summary={'phases':[{'phase_id':'mp-27630','compound_name':'CrCl3','space_group':'C2/m',
+                       'weight_fraction_pct':100}], 'lattice_parameters':[raw], 'analysis_mode':'full'}
+    before=deepcopy(summary);projected=experiment_scan_summary(summary)
+    assert projected['phases'][0]['space_group']=='P-1'
+    assert projected['lattice_parameters'][0]['phase']=='mp-27630 · P -1 (catalog C2/m)'
+    assert summary==before

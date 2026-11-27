@@ -7,6 +7,8 @@ models have separate compatibility checks. No GPX pickle or LLM is consumed.
 
 from __future__ import annotations
 
+from .phase_model_labels import lattice_display_rows
+
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -591,7 +593,7 @@ def _group(scan, pattern):
 
 
 def _candidates(scan):
-    rows = (scan.get("observables") or {}).get("phases") or scan.get("lattice_parameters") or []
+    rows = lattice_display_rows((scan.get("observables") or {}).get("phases") or scan.get("lattice_parameters") or [])
     return {
         str(row.get("phase_id") or row.get("phase_key")): row
         for row in rows

@@ -262,7 +262,14 @@ def _rewrite_gpx_phase_names(path: Path, labels: Mapping[str, str]) -> bool:
     if not labels:
         return False
     records = _read_gpx_records(path)
-    name_map = _unique_phase_name_map(_gpx_phase_names(records), labels)
+    from radar_pd_nova.phase_model_labels import native_phase_label
+    native_labels = dict(labels)
+    for record in records:
+        if record and record[0][0] == "Phases":
+            for name, phase in record[1:]:
+                native = ((phase.get("General") or {}).get("SGData") or {}).get("SpGrp")
+                native_labels[str(name)] = native_phase_label(labels.get(str(name), str(name)), native)[0]
+    name_map = _unique_phase_name_map(_gpx_phase_names(records), native_labels)
     if not any(old != new for old, new in name_map.items()):
         return False
 

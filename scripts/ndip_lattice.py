@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import sys
+
+from radar_pd_nova.phase_model_labels import lattice_display_rows
 from typing import Any
 
 try:
@@ -99,7 +101,7 @@ def lattice_from_records(records, *, source: str, labels=None):
             100 * max(0, weight) / total if total > 0 and weight is not None else None
         )
     rwp = (covariance.get("Rvals") or {}).get("Rwp")
-    return rows, float(rwp) if rwp is not None and math.isfinite(float(rwp)) else None
+    return lattice_display_rows(rows), float(rwp) if rwp is not None and math.isfinite(float(rwp)) else None
 
 
 def extract_lattice(path: Path, records, *, source: str, labels=None):
@@ -185,7 +187,7 @@ def extract_lattice(path: Path, records, *, source: str, labels=None):
                 rwp = float(value)
     except (ImportError, KeyError, ValueError, TypeError, RuntimeError, AttributeError) as exc:
         print(f"[WARN] Lattice ESDs unavailable for {path.name}: {exc}")
-    return rows, rwp
+    return lattice_display_rows(rows), rwp
 
 
 def add_cross_phase_covariance(rows,covariance):
